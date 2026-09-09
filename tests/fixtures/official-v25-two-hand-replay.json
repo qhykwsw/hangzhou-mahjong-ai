@@ -1,0 +1,7262 @@
+{
+  "batch": 0,
+  "blocks": [
+    {
+      "dealer": 0,
+      "events": [
+        {
+          "seq": 1,
+          "type": "tile_discarded",
+          "seat": 0,
+          "tile": "2t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876413
+        },
+        {
+          "seq": 2,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876413
+        },
+        {
+          "seq": 3,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876414
+        },
+        {
+          "seq": 4,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876414
+        },
+        {
+          "seq": 5,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876414
+        },
+        {
+          "seq": 6,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876415
+        },
+        {
+          "seq": 7,
+          "type": "tile_drawn",
+          "seat": 1,
+          "tile": "1w",
+          "data": null,
+          "ts": 1788876415
+        },
+        {
+          "seq": 8,
+          "type": "tile_discarded",
+          "seat": 1,
+          "tile": "1w",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876418
+        },
+        {
+          "seq": 9,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876418
+        },
+        {
+          "seq": 10,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876419
+        },
+        {
+          "seq": 11,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876419
+        },
+        {
+          "seq": 12,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876419
+        },
+        {
+          "seq": 13,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876420
+        },
+        {
+          "seq": 14,
+          "type": "tile_drawn",
+          "seat": 2,
+          "tile": "2b",
+          "data": null,
+          "ts": 1788876420
+        },
+        {
+          "seq": 15,
+          "type": "tile_discarded",
+          "seat": 2,
+          "tile": "2b",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876423
+        },
+        {
+          "seq": 16,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876423
+        },
+        {
+          "seq": 17,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876424
+        },
+        {
+          "seq": 18,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876424
+        },
+        {
+          "seq": 19,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876424
+        },
+        {
+          "seq": 20,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876425
+        },
+        {
+          "seq": 21,
+          "type": "tile_drawn",
+          "seat": 3,
+          "tile": "3w",
+          "data": null,
+          "ts": 1788876425
+        },
+        {
+          "seq": 22,
+          "type": "tile_discarded",
+          "seat": 3,
+          "tile": "3w",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876428
+        },
+        {
+          "seq": 23,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876428
+        },
+        {
+          "seq": 24,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876429
+        },
+        {
+          "seq": 25,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876429
+        },
+        {
+          "seq": 26,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876429
+        },
+        {
+          "seq": 27,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876430
+        },
+        {
+          "seq": 28,
+          "type": "tile_drawn",
+          "seat": 0,
+          "tile": "8t",
+          "data": null,
+          "ts": 1788876430
+        },
+        {
+          "seq": 29,
+          "type": "tile_discarded",
+          "seat": 0,
+          "tile": "8t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876433
+        },
+        {
+          "seq": 30,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876433
+        },
+        {
+          "seq": 31,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876434
+        },
+        {
+          "seq": 32,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876434
+        },
+        {
+          "seq": 33,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876434
+        },
+        {
+          "seq": 34,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876435
+        },
+        {
+          "seq": 35,
+          "type": "tile_drawn",
+          "seat": 1,
+          "tile": "4w",
+          "data": null,
+          "ts": 1788876435
+        },
+        {
+          "seq": 36,
+          "type": "tile_discarded",
+          "seat": 1,
+          "tile": "4w",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876438
+        },
+        {
+          "seq": 37,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876438
+        },
+        {
+          "seq": 38,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876439
+        },
+        {
+          "seq": 39,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876439
+        },
+        {
+          "seq": 40,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876439
+        },
+        {
+          "seq": 41,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876440
+        },
+        {
+          "seq": 42,
+          "type": "tile_drawn",
+          "seat": 2,
+          "tile": "9t",
+          "data": null,
+          "ts": 1788876440
+        },
+        {
+          "seq": 43,
+          "type": "tile_discarded",
+          "seat": 2,
+          "tile": "9t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876443
+        },
+        {
+          "seq": 44,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876443
+        },
+        {
+          "seq": 45,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876444
+        },
+        {
+          "seq": 46,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876444
+        },
+        {
+          "seq": 47,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876444
+        },
+        {
+          "seq": 48,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876445
+        },
+        {
+          "seq": 49,
+          "type": "tile_drawn",
+          "seat": 3,
+          "tile": "2t",
+          "data": null,
+          "ts": 1788876445
+        },
+        {
+          "seq": 50,
+          "type": "tile_discarded",
+          "seat": 3,
+          "tile": "2t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876448
+        },
+        {
+          "seq": 51,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876448
+        },
+        {
+          "seq": 52,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876449
+        },
+        {
+          "seq": 53,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876449
+        },
+        {
+          "seq": 54,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876449
+        },
+        {
+          "seq": 55,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876450
+        },
+        {
+          "seq": 56,
+          "type": "tile_drawn",
+          "seat": 0,
+          "tile": "2w",
+          "data": null,
+          "ts": 1788876450
+        },
+        {
+          "seq": 57,
+          "type": "tile_discarded",
+          "seat": 0,
+          "tile": "2w",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876453
+        },
+        {
+          "seq": 58,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876453
+        },
+        {
+          "seq": 59,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876454
+        },
+        {
+          "seq": 60,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876454
+        },
+        {
+          "seq": 61,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876454
+        },
+        {
+          "seq": 62,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876455
+        },
+        {
+          "seq": 63,
+          "type": "tile_drawn",
+          "seat": 1,
+          "tile": "6t",
+          "data": null,
+          "ts": 1788876455
+        },
+        {
+          "seq": 64,
+          "type": "tile_discarded",
+          "seat": 1,
+          "tile": "6t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876458
+        },
+        {
+          "seq": 65,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876458
+        },
+        {
+          "seq": 66,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876459
+        },
+        {
+          "seq": 67,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876459
+        },
+        {
+          "seq": 68,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876459
+        },
+        {
+          "seq": 69,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876460
+        },
+        {
+          "seq": 70,
+          "type": "tile_drawn",
+          "seat": 2,
+          "tile": "南",
+          "data": null,
+          "ts": 1788876460
+        },
+        {
+          "seq": 71,
+          "type": "tile_discarded",
+          "seat": 2,
+          "tile": "南",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876463
+        },
+        {
+          "seq": 72,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876463
+        },
+        {
+          "seq": 73,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876464
+        },
+        {
+          "seq": 74,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876464
+        },
+        {
+          "seq": 75,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876464
+        },
+        {
+          "seq": 76,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876465
+        },
+        {
+          "seq": 77,
+          "type": "tile_drawn",
+          "seat": 3,
+          "tile": "5t",
+          "data": null,
+          "ts": 1788876465
+        },
+        {
+          "seq": 78,
+          "type": "tile_discarded",
+          "seat": 3,
+          "tile": "5t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876468
+        },
+        {
+          "seq": 79,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876468
+        },
+        {
+          "seq": 80,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876469
+        },
+        {
+          "seq": 81,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876469
+        },
+        {
+          "seq": 82,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876469
+        },
+        {
+          "seq": 83,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876470
+        },
+        {
+          "seq": 84,
+          "type": "tile_drawn",
+          "seat": 0,
+          "tile": "7t",
+          "data": null,
+          "ts": 1788876470
+        },
+        {
+          "seq": 85,
+          "type": "tile_discarded",
+          "seat": 0,
+          "tile": "7t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876473
+        },
+        {
+          "seq": 86,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876473
+        },
+        {
+          "seq": 87,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876474
+        },
+        {
+          "seq": 88,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876474
+        },
+        {
+          "seq": 89,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876474
+        },
+        {
+          "seq": 90,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876475
+        },
+        {
+          "seq": 91,
+          "type": "tile_drawn",
+          "seat": 1,
+          "tile": "8t",
+          "data": null,
+          "ts": 1788876475
+        },
+        {
+          "seq": 92,
+          "type": "tile_discarded",
+          "seat": 1,
+          "tile": "8t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876478
+        },
+        {
+          "seq": 93,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876478
+        },
+        {
+          "seq": 94,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876479
+        },
+        {
+          "seq": 95,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876479
+        },
+        {
+          "seq": 96,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876479
+        },
+        {
+          "seq": 97,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876480
+        },
+        {
+          "seq": 98,
+          "type": "tile_drawn",
+          "seat": 2,
+          "tile": "7b",
+          "data": null,
+          "ts": 1788876480
+        },
+        {
+          "seq": 99,
+          "type": "tile_discarded",
+          "seat": 2,
+          "tile": "7b",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876483
+        },
+        {
+          "seq": 100,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876483
+        },
+        {
+          "seq": 101,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876484
+        },
+        {
+          "seq": 102,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876484
+        },
+        {
+          "seq": 103,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876484
+        },
+        {
+          "seq": 104,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876485
+        },
+        {
+          "seq": 105,
+          "type": "tile_drawn",
+          "seat": 3,
+          "tile": "7b",
+          "data": null,
+          "ts": 1788876485
+        },
+        {
+          "seq": 106,
+          "type": "tile_discarded",
+          "seat": 3,
+          "tile": "7b",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876488
+        },
+        {
+          "seq": 107,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876488
+        },
+        {
+          "seq": 108,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876489
+        },
+        {
+          "seq": 109,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876489
+        },
+        {
+          "seq": 110,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876489
+        },
+        {
+          "seq": 111,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876490
+        },
+        {
+          "seq": 112,
+          "type": "tile_drawn",
+          "seat": 0,
+          "tile": "南",
+          "data": null,
+          "ts": 1788876490
+        },
+        {
+          "seq": 113,
+          "type": "tile_discarded",
+          "seat": 0,
+          "tile": "南",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876493
+        },
+        {
+          "seq": 114,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876493
+        },
+        {
+          "seq": 115,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876494
+        },
+        {
+          "seq": 116,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876494
+        },
+        {
+          "seq": 117,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876494
+        },
+        {
+          "seq": 118,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876495
+        },
+        {
+          "seq": 119,
+          "type": "tile_drawn",
+          "seat": 1,
+          "tile": "3t",
+          "data": null,
+          "ts": 1788876495
+        },
+        {
+          "seq": 120,
+          "type": "tile_discarded",
+          "seat": 1,
+          "tile": "3t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876498
+        },
+        {
+          "seq": 121,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876498
+        },
+        {
+          "seq": 122,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876499
+        },
+        {
+          "seq": 123,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876499
+        },
+        {
+          "seq": 124,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876499
+        },
+        {
+          "seq": 125,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876500
+        },
+        {
+          "seq": 126,
+          "type": "tile_drawn",
+          "seat": 2,
+          "tile": "9b",
+          "data": null,
+          "ts": 1788876500
+        },
+        {
+          "seq": 127,
+          "type": "tile_discarded",
+          "seat": 2,
+          "tile": "9b",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876503
+        },
+        {
+          "seq": 128,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876503
+        }
+      ],
+      "round_no": 1,
+      "seq_end": 128,
+      "seq_start": 1,
+      "start_hands": [
+        [
+          "1b",
+          "8w",
+          "2w",
+          "7t",
+          "4t",
+          "南",
+          "2t",
+          "6w",
+          "东",
+          "9t",
+          "9t",
+          "5b",
+          "西",
+          "2t"
+        ],
+        [
+          "3w",
+          "4b",
+          "5w",
+          "2w",
+          "北",
+          "8w",
+          "8t",
+          "4b",
+          "5t",
+          "9w",
+          "2t",
+          "8w",
+          "6b"
+        ],
+        [
+          "3t",
+          "东",
+          "9b",
+          "7w",
+          "6b",
+          "4b",
+          "中",
+          "6w",
+          "1b",
+          "7t",
+          "3b",
+          "2b",
+          "白"
+        ],
+        [
+          "8b",
+          "8w",
+          "3t",
+          "1t",
+          "中",
+          "北",
+          "3b",
+          "7w",
+          "西",
+          "白",
+          "东",
+          "2w",
+          "4t"
+        ]
+      ],
+      "truncated": false
+    },
+    {
+      "dealer": 0,
+      "events": [
+        {
+          "seq": 129,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876504
+        },
+        {
+          "seq": 130,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876504
+        },
+        {
+          "seq": 131,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876504
+        },
+        {
+          "seq": 132,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876505
+        },
+        {
+          "seq": 133,
+          "type": "tile_drawn",
+          "seat": 3,
+          "tile": "7t",
+          "data": null,
+          "ts": 1788876505
+        },
+        {
+          "seq": 134,
+          "type": "tile_discarded",
+          "seat": 3,
+          "tile": "7t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876508
+        },
+        {
+          "seq": 135,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876508
+        },
+        {
+          "seq": 136,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876509
+        },
+        {
+          "seq": 137,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876509
+        },
+        {
+          "seq": 138,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876509
+        },
+        {
+          "seq": 139,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876510
+        },
+        {
+          "seq": 140,
+          "type": "tile_drawn",
+          "seat": 0,
+          "tile": "8b",
+          "data": null,
+          "ts": 1788876510
+        },
+        {
+          "seq": 141,
+          "type": "tile_discarded",
+          "seat": 0,
+          "tile": "8b",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876513
+        },
+        {
+          "seq": 142,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876513
+        },
+        {
+          "seq": 143,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876514
+        },
+        {
+          "seq": 144,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876514
+        },
+        {
+          "seq": 145,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876514
+        },
+        {
+          "seq": 146,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876515
+        },
+        {
+          "seq": 147,
+          "type": "tile_drawn",
+          "seat": 1,
+          "tile": "6w",
+          "data": null,
+          "ts": 1788876515
+        },
+        {
+          "seq": 148,
+          "type": "tile_discarded",
+          "seat": 1,
+          "tile": "6w",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876518
+        },
+        {
+          "seq": 149,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876518
+        },
+        {
+          "seq": 150,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876519
+        },
+        {
+          "seq": 151,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876519
+        },
+        {
+          "seq": 152,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876519
+        },
+        {
+          "seq": 153,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876520
+        },
+        {
+          "seq": 154,
+          "type": "tile_drawn",
+          "seat": 2,
+          "tile": "1b",
+          "data": null,
+          "ts": 1788876520
+        },
+        {
+          "seq": 155,
+          "type": "tile_discarded",
+          "seat": 2,
+          "tile": "1b",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876523
+        },
+        {
+          "seq": 156,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876523
+        },
+        {
+          "seq": 157,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876524
+        },
+        {
+          "seq": 158,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876524
+        },
+        {
+          "seq": 159,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876524
+        },
+        {
+          "seq": 160,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876525
+        },
+        {
+          "seq": 161,
+          "type": "tile_drawn",
+          "seat": 3,
+          "tile": "5t",
+          "data": null,
+          "ts": 1788876525
+        },
+        {
+          "seq": 162,
+          "type": "tile_discarded",
+          "seat": 3,
+          "tile": "5t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876528
+        },
+        {
+          "seq": 163,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876528
+        },
+        {
+          "seq": 164,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876529
+        },
+        {
+          "seq": 165,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876529
+        },
+        {
+          "seq": 166,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876529
+        },
+        {
+          "seq": 167,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876530
+        },
+        {
+          "seq": 168,
+          "type": "tile_drawn",
+          "seat": 0,
+          "tile": "北",
+          "data": null,
+          "ts": 1788876530
+        },
+        {
+          "seq": 169,
+          "type": "tile_discarded",
+          "seat": 0,
+          "tile": "北",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876533
+        },
+        {
+          "seq": 170,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876533
+        },
+        {
+          "seq": 171,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876534
+        },
+        {
+          "seq": 172,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876534
+        },
+        {
+          "seq": 173,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876534
+        },
+        {
+          "seq": 174,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876535
+        },
+        {
+          "seq": 175,
+          "type": "tile_drawn",
+          "seat": 1,
+          "tile": "1w",
+          "data": null,
+          "ts": 1788876535
+        },
+        {
+          "seq": 176,
+          "type": "tile_discarded",
+          "seat": 1,
+          "tile": "1w",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876538
+        },
+        {
+          "seq": 177,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876538
+        },
+        {
+          "seq": 178,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876539
+        },
+        {
+          "seq": 179,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876539
+        },
+        {
+          "seq": 180,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876539
+        },
+        {
+          "seq": 181,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876540
+        },
+        {
+          "seq": 182,
+          "type": "tile_drawn",
+          "seat": 2,
+          "tile": "5w",
+          "data": null,
+          "ts": 1788876540
+        },
+        {
+          "seq": 183,
+          "type": "tile_discarded",
+          "seat": 2,
+          "tile": "5w",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876543
+        },
+        {
+          "seq": 184,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876543
+        },
+        {
+          "seq": 185,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876544
+        },
+        {
+          "seq": 186,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876544
+        },
+        {
+          "seq": 187,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876544
+        },
+        {
+          "seq": 188,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876545
+        },
+        {
+          "seq": 189,
+          "type": "tile_drawn",
+          "seat": 3,
+          "tile": "4w",
+          "data": null,
+          "ts": 1788876545
+        },
+        {
+          "seq": 190,
+          "type": "tile_discarded",
+          "seat": 3,
+          "tile": "4w",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876548
+        },
+        {
+          "seq": 191,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876548
+        },
+        {
+          "seq": 192,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876549
+        },
+        {
+          "seq": 193,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876549
+        },
+        {
+          "seq": 194,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876549
+        },
+        {
+          "seq": 195,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876550
+        },
+        {
+          "seq": 196,
+          "type": "tile_drawn",
+          "seat": 0,
+          "tile": "东",
+          "data": null,
+          "ts": 1788876550
+        },
+        {
+          "seq": 197,
+          "type": "tile_discarded",
+          "seat": 0,
+          "tile": "东",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876553
+        },
+        {
+          "seq": 198,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876553
+        },
+        {
+          "seq": 199,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876554
+        },
+        {
+          "seq": 200,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876554
+        },
+        {
+          "seq": 201,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876554
+        },
+        {
+          "seq": 202,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876555
+        },
+        {
+          "seq": 203,
+          "type": "tile_drawn",
+          "seat": 1,
+          "tile": "白",
+          "data": null,
+          "ts": 1788876555
+        },
+        {
+          "seq": 204,
+          "type": "tile_discarded",
+          "seat": 1,
+          "tile": "白",
+          "data": {
+            "catch_play": true
+          },
+          "ts": 1788876558
+        },
+        {
+          "seq": 205,
+          "type": "tile_drawn",
+          "seat": 2,
+          "tile": "西",
+          "data": null,
+          "ts": 1788876558
+        },
+        {
+          "seq": 206,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876558
+        },
+        {
+          "seq": 207,
+          "type": "tile_discarded",
+          "seat": 2,
+          "tile": "西",
+          "data": {
+            "catch_play": true
+          },
+          "ts": 1788876561
+        },
+        {
+          "seq": 208,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876561
+        },
+        {
+          "seq": 209,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876562
+        },
+        {
+          "seq": 210,
+          "type": "tile_drawn",
+          "seat": 3,
+          "tile": "9w",
+          "data": null,
+          "ts": 1788876562
+        },
+        {
+          "seq": 211,
+          "type": "tile_discarded",
+          "seat": 3,
+          "tile": "9w",
+          "data": {
+            "catch_play": true
+          },
+          "ts": 1788876565
+        },
+        {
+          "seq": 212,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876565
+        },
+        {
+          "seq": 213,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876566
+        },
+        {
+          "seq": 214,
+          "type": "tile_drawn",
+          "seat": 0,
+          "tile": "9b",
+          "data": null,
+          "ts": 1788876566
+        },
+        {
+          "seq": 215,
+          "type": "tile_discarded",
+          "seat": 0,
+          "tile": "9b",
+          "data": {
+            "catch_play": true
+          },
+          "ts": 1788876569
+        },
+        {
+          "seq": 216,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876569
+        },
+        {
+          "seq": 217,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876570
+        },
+        {
+          "seq": 218,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876571
+        },
+        {
+          "seq": 219,
+          "type": "tile_drawn",
+          "seat": 1,
+          "tile": "8b",
+          "data": null,
+          "ts": 1788876571
+        },
+        {
+          "seq": 220,
+          "type": "tile_discarded",
+          "seat": 1,
+          "tile": "8b",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876574
+        },
+        {
+          "seq": 221,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876574
+        },
+        {
+          "seq": 222,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876575
+        },
+        {
+          "seq": 223,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876575
+        },
+        {
+          "seq": 224,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876575
+        },
+        {
+          "seq": 225,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876576
+        },
+        {
+          "seq": 226,
+          "type": "tile_drawn",
+          "seat": 2,
+          "tile": "4t",
+          "data": null,
+          "ts": 1788876576
+        },
+        {
+          "seq": 227,
+          "type": "tile_discarded",
+          "seat": 2,
+          "tile": "4t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876579
+        },
+        {
+          "seq": 228,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876579
+        },
+        {
+          "seq": 229,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876580
+        },
+        {
+          "seq": 230,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876580
+        },
+        {
+          "seq": 231,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876580
+        },
+        {
+          "seq": 232,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876581
+        },
+        {
+          "seq": 233,
+          "type": "tile_drawn",
+          "seat": 3,
+          "tile": "北",
+          "data": null,
+          "ts": 1788876581
+        },
+        {
+          "seq": 234,
+          "type": "tile_discarded",
+          "seat": 3,
+          "tile": "北",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876584
+        },
+        {
+          "seq": 235,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876584
+        },
+        {
+          "seq": 236,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876585
+        },
+        {
+          "seq": 237,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876585
+        },
+        {
+          "seq": 238,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876585
+        },
+        {
+          "seq": 239,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876586
+        },
+        {
+          "seq": 240,
+          "type": "tile_drawn",
+          "seat": 0,
+          "tile": "6t",
+          "data": null,
+          "ts": 1788876586
+        },
+        {
+          "seq": 241,
+          "type": "tile_discarded",
+          "seat": 0,
+          "tile": "6t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876589
+        },
+        {
+          "seq": 242,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876589
+        },
+        {
+          "seq": 243,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876590
+        },
+        {
+          "seq": 244,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876590
+        },
+        {
+          "seq": 245,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876590
+        },
+        {
+          "seq": 246,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876591
+        },
+        {
+          "seq": 247,
+          "type": "tile_drawn",
+          "seat": 1,
+          "tile": "2b",
+          "data": null,
+          "ts": 1788876591
+        },
+        {
+          "seq": 248,
+          "type": "tile_discarded",
+          "seat": 1,
+          "tile": "2b",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876594
+        },
+        {
+          "seq": 249,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876594
+        },
+        {
+          "seq": 250,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876595
+        },
+        {
+          "seq": 251,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876595
+        },
+        {
+          "seq": 252,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876595
+        },
+        {
+          "seq": 253,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876596
+        },
+        {
+          "seq": 254,
+          "type": "tile_drawn",
+          "seat": 2,
+          "tile": "1w",
+          "data": null,
+          "ts": 1788876596
+        },
+        {
+          "seq": 255,
+          "type": "tile_discarded",
+          "seat": 2,
+          "tile": "1w",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876599
+        },
+        {
+          "seq": 256,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876599
+        }
+      ],
+      "round_no": 1,
+      "seq_end": 256,
+      "seq_start": 129,
+      "start_hands": [
+        null,
+        null,
+        null,
+        null
+      ],
+      "truncated": false
+    },
+    {
+      "dealer": 0,
+      "events": [
+        {
+          "seq": 257,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876600
+        },
+        {
+          "seq": 258,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876600
+        },
+        {
+          "seq": 259,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876600
+        },
+        {
+          "seq": 260,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876601
+        },
+        {
+          "seq": 261,
+          "type": "tile_drawn",
+          "seat": 3,
+          "tile": "3w",
+          "data": null,
+          "ts": 1788876601
+        },
+        {
+          "seq": 262,
+          "type": "tile_discarded",
+          "seat": 3,
+          "tile": "3w",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876604
+        },
+        {
+          "seq": 263,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876604
+        },
+        {
+          "seq": 264,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876605
+        },
+        {
+          "seq": 265,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876605
+        },
+        {
+          "seq": 266,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876605
+        },
+        {
+          "seq": 267,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876606
+        },
+        {
+          "seq": 268,
+          "type": "tile_drawn",
+          "seat": 0,
+          "tile": "6t",
+          "data": null,
+          "ts": 1788876606
+        },
+        {
+          "seq": 269,
+          "type": "tile_discarded",
+          "seat": 0,
+          "tile": "6t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876609
+        },
+        {
+          "seq": 270,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876609
+        },
+        {
+          "seq": 271,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876610
+        },
+        {
+          "seq": 272,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876610
+        },
+        {
+          "seq": 273,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876610
+        },
+        {
+          "seq": 274,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876611
+        },
+        {
+          "seq": 275,
+          "type": "tile_drawn",
+          "seat": 1,
+          "tile": "4w",
+          "data": null,
+          "ts": 1788876611
+        },
+        {
+          "seq": 276,
+          "type": "tile_discarded",
+          "seat": 1,
+          "tile": "4w",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876614
+        },
+        {
+          "seq": 277,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876614
+        },
+        {
+          "seq": 278,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876615
+        },
+        {
+          "seq": 279,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876615
+        },
+        {
+          "seq": 280,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876615
+        },
+        {
+          "seq": 281,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876616
+        },
+        {
+          "seq": 282,
+          "type": "tile_drawn",
+          "seat": 2,
+          "tile": "发",
+          "data": null,
+          "ts": 1788876616
+        },
+        {
+          "seq": 283,
+          "type": "tile_discarded",
+          "seat": 2,
+          "tile": "发",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876619
+        },
+        {
+          "seq": 284,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876619
+        },
+        {
+          "seq": 285,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876620
+        },
+        {
+          "seq": 286,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876620
+        },
+        {
+          "seq": 287,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876620
+        },
+        {
+          "seq": 288,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876621
+        },
+        {
+          "seq": 289,
+          "type": "tile_drawn",
+          "seat": 3,
+          "tile": "6b",
+          "data": null,
+          "ts": 1788876621
+        },
+        {
+          "seq": 290,
+          "type": "tile_discarded",
+          "seat": 3,
+          "tile": "6b",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876624
+        },
+        {
+          "seq": 291,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876624
+        },
+        {
+          "seq": 292,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876625
+        },
+        {
+          "seq": 293,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876625
+        },
+        {
+          "seq": 294,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876625
+        },
+        {
+          "seq": 295,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876626
+        },
+        {
+          "seq": 296,
+          "type": "tile_drawn",
+          "seat": 0,
+          "tile": "南",
+          "data": null,
+          "ts": 1788876626
+        },
+        {
+          "seq": 297,
+          "type": "tile_discarded",
+          "seat": 0,
+          "tile": "南",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876629
+        },
+        {
+          "seq": 298,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876629
+        },
+        {
+          "seq": 299,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876630
+        },
+        {
+          "seq": 300,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876630
+        },
+        {
+          "seq": 301,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876630
+        },
+        {
+          "seq": 302,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876631
+        },
+        {
+          "seq": 303,
+          "type": "tile_drawn",
+          "seat": 1,
+          "tile": "5w",
+          "data": null,
+          "ts": 1788876631
+        },
+        {
+          "seq": 304,
+          "type": "tile_discarded",
+          "seat": 1,
+          "tile": "5w",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876634
+        },
+        {
+          "seq": 305,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "discard"
+          },
+          "ts": 1788876634
+        },
+        {
+          "seq": 306,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876635
+        },
+        {
+          "seq": 307,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876635
+        },
+        {
+          "seq": 308,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "peng"
+          },
+          "ts": 1788876635
+        },
+        {
+          "seq": 309,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876636
+        },
+        {
+          "seq": 310,
+          "type": "tile_drawn",
+          "seat": 2,
+          "tile": "1t",
+          "data": null,
+          "ts": 1788876636
+        },
+        {
+          "seq": 311,
+          "type": "tile_discarded",
+          "seat": 2,
+          "tile": "9b",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876636
+        },
+        {
+          "seq": 312,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876637
+        },
+        {
+          "seq": 313,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876637
+        },
+        {
+          "seq": 314,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876637
+        },
+        {
+          "seq": 315,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876638
+        },
+        {
+          "seq": 316,
+          "type": "tile_drawn",
+          "seat": 3,
+          "tile": "发",
+          "data": null,
+          "ts": 1788876638
+        },
+        {
+          "seq": 317,
+          "type": "tile_discarded",
+          "seat": 3,
+          "tile": "2w",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876638
+        },
+        {
+          "seq": 318,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876639
+        },
+        {
+          "seq": 319,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876639
+        },
+        {
+          "seq": 320,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876639
+        },
+        {
+          "seq": 321,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876640
+        },
+        {
+          "seq": 322,
+          "type": "tile_drawn",
+          "seat": 0,
+          "tile": "4w",
+          "data": null,
+          "ts": 1788876640
+        },
+        {
+          "seq": 323,
+          "type": "tile_discarded",
+          "seat": 0,
+          "tile": "1b",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876640
+        },
+        {
+          "seq": 324,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876641
+        },
+        {
+          "seq": 325,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876641
+        },
+        {
+          "seq": 326,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876641
+        },
+        {
+          "seq": 327,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876642
+        },
+        {
+          "seq": 328,
+          "type": "tile_drawn",
+          "seat": 1,
+          "tile": "7b",
+          "data": null,
+          "ts": 1788876642
+        },
+        {
+          "seq": 329,
+          "type": "tile_discarded",
+          "seat": 1,
+          "tile": "2t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876643
+        },
+        {
+          "seq": 330,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876643
+        },
+        {
+          "seq": 331,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876643
+        },
+        {
+          "seq": 332,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876643
+        },
+        {
+          "seq": 333,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876645
+        },
+        {
+          "seq": 334,
+          "type": "tile_drawn",
+          "seat": 2,
+          "tile": "7w",
+          "data": null,
+          "ts": 1788876645
+        },
+        {
+          "seq": 335,
+          "type": "tile_discarded",
+          "seat": 2,
+          "tile": "7t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876645
+        },
+        {
+          "seq": 336,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876645
+        },
+        {
+          "seq": 337,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876645
+        },
+        {
+          "seq": 338,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876645
+        },
+        {
+          "seq": 339,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876647
+        },
+        {
+          "seq": 340,
+          "type": "tile_drawn",
+          "seat": 3,
+          "tile": "白",
+          "data": null,
+          "ts": 1788876647
+        },
+        {
+          "seq": 341,
+          "type": "tile_discarded",
+          "seat": 3,
+          "tile": "3b",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876647
+        },
+        {
+          "seq": 342,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876647
+        },
+        {
+          "seq": 343,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876647
+        },
+        {
+          "seq": 344,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876647
+        },
+        {
+          "seq": 345,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876649
+        },
+        {
+          "seq": 346,
+          "type": "tile_drawn",
+          "seat": 0,
+          "tile": "3t",
+          "data": null,
+          "ts": 1788876649
+        },
+        {
+          "seq": 347,
+          "type": "tile_discarded",
+          "seat": 0,
+          "tile": "5b",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876649
+        },
+        {
+          "seq": 348,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876649
+        },
+        {
+          "seq": 349,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876649
+        },
+        {
+          "seq": 350,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876649
+        },
+        {
+          "seq": 351,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876651
+        },
+        {
+          "seq": 352,
+          "type": "tile_drawn",
+          "seat": 1,
+          "tile": "中",
+          "data": null,
+          "ts": 1788876651
+        },
+        {
+          "seq": 353,
+          "type": "tile_discarded",
+          "seat": 1,
+          "tile": "5t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876651
+        },
+        {
+          "seq": 354,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876651
+        },
+        {
+          "seq": 355,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876651
+        },
+        {
+          "seq": 356,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876651
+        },
+        {
+          "seq": 357,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876653
+        },
+        {
+          "seq": 358,
+          "type": "tile_drawn",
+          "seat": 2,
+          "tile": "4t",
+          "data": null,
+          "ts": 1788876653
+        },
+        {
+          "seq": 359,
+          "type": "tile_discarded",
+          "seat": 2,
+          "tile": "东",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876653
+        },
+        {
+          "seq": 360,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876653
+        },
+        {
+          "seq": 361,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876653
+        },
+        {
+          "seq": 362,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876653
+        },
+        {
+          "seq": 363,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876655
+        },
+        {
+          "seq": 364,
+          "type": "tile_drawn",
+          "seat": 3,
+          "tile": "9w",
+          "data": null,
+          "ts": 1788876655
+        },
+        {
+          "seq": 365,
+          "type": "tile_discarded",
+          "seat": 3,
+          "tile": "8b",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876655
+        },
+        {
+          "seq": 366,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876655
+        },
+        {
+          "seq": 367,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876655
+        },
+        {
+          "seq": 368,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876655
+        },
+        {
+          "seq": 369,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876657
+        },
+        {
+          "seq": 370,
+          "type": "tile_drawn",
+          "seat": 0,
+          "tile": "3w",
+          "data": null,
+          "ts": 1788876657
+        },
+        {
+          "seq": 371,
+          "type": "tile_discarded",
+          "seat": 0,
+          "tile": "东",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876657
+        },
+        {
+          "seq": 372,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876657
+        },
+        {
+          "seq": 373,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876657
+        },
+        {
+          "seq": 374,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876657
+        },
+        {
+          "seq": 375,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876659
+        },
+        {
+          "seq": 376,
+          "type": "tile_drawn",
+          "seat": 1,
+          "tile": "5b",
+          "data": null,
+          "ts": 1788876659
+        },
+        {
+          "seq": 377,
+          "type": "tile_discarded",
+          "seat": 1,
+          "tile": "8t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876659
+        },
+        {
+          "seq": 378,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876659
+        },
+        {
+          "seq": 379,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876659
+        },
+        {
+          "seq": 380,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876659
+        },
+        {
+          "seq": 381,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876661
+        },
+        {
+          "seq": 382,
+          "type": "tile_drawn",
+          "seat": 2,
+          "tile": "8b",
+          "data": null,
+          "ts": 1788876661
+        },
+        {
+          "seq": 383,
+          "type": "tile_discarded",
+          "seat": 2,
+          "tile": "中",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876661
+        },
+        {
+          "seq": 384,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876661
+        }
+      ],
+      "round_no": 1,
+      "seq_end": 384,
+      "seq_start": 257,
+      "start_hands": [
+        null,
+        null,
+        null,
+        null
+      ],
+      "truncated": false
+    },
+    {
+      "dealer": 0,
+      "events": [
+        {
+          "seq": 385,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876661
+        },
+        {
+          "seq": 386,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876661
+        },
+        {
+          "seq": 387,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876663
+        },
+        {
+          "seq": 388,
+          "type": "tile_drawn",
+          "seat": 3,
+          "tile": "4b",
+          "data": null,
+          "ts": 1788876663
+        },
+        {
+          "seq": 389,
+          "type": "tile_discarded",
+          "seat": 3,
+          "tile": "4b",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876663
+        },
+        {
+          "seq": 390,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876663
+        },
+        {
+          "seq": 391,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876663
+        },
+        {
+          "seq": 392,
+          "type": "peng",
+          "seat": 1,
+          "tile": "4b",
+          "data": null,
+          "ts": 1788876663
+        },
+        {
+          "seq": 393,
+          "type": "tile_discarded",
+          "seat": 1,
+          "tile": "北",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876663
+        },
+        {
+          "seq": 394,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876663
+        },
+        {
+          "seq": 395,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876663
+        },
+        {
+          "seq": 396,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876663
+        },
+        {
+          "seq": 397,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876665
+        },
+        {
+          "seq": 398,
+          "type": "tile_drawn",
+          "seat": 2,
+          "tile": "8t",
+          "data": null,
+          "ts": 1788876665
+        },
+        {
+          "seq": 399,
+          "type": "tile_discarded",
+          "seat": 2,
+          "tile": "8t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876665
+        },
+        {
+          "seq": 400,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876666
+        },
+        {
+          "seq": 401,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876666
+        },
+        {
+          "seq": 402,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876666
+        },
+        {
+          "seq": 403,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876667
+        },
+        {
+          "seq": 404,
+          "type": "tile_drawn",
+          "seat": 3,
+          "tile": "发",
+          "data": null,
+          "ts": 1788876667
+        },
+        {
+          "seq": 405,
+          "type": "tile_discarded",
+          "seat": 3,
+          "tile": "东",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876667
+        },
+        {
+          "seq": 406,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876668
+        },
+        {
+          "seq": 407,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876668
+        },
+        {
+          "seq": 408,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876668
+        },
+        {
+          "seq": 409,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876669
+        },
+        {
+          "seq": 410,
+          "type": "tile_drawn",
+          "seat": 0,
+          "tile": "9b",
+          "data": null,
+          "ts": 1788876669
+        },
+        {
+          "seq": 411,
+          "type": "tile_discarded",
+          "seat": 0,
+          "tile": "9b",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876670
+        },
+        {
+          "seq": 412,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876670
+        },
+        {
+          "seq": 413,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876670
+        },
+        {
+          "seq": 414,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876670
+        },
+        {
+          "seq": 415,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876672
+        },
+        {
+          "seq": 416,
+          "type": "tile_drawn",
+          "seat": 1,
+          "tile": "9t",
+          "data": null,
+          "ts": 1788876672
+        },
+        {
+          "seq": 417,
+          "type": "tile_discarded",
+          "seat": 1,
+          "tile": "9t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876672
+        },
+        {
+          "seq": 418,
+          "type": "peng",
+          "seat": 0,
+          "tile": "9t",
+          "data": null,
+          "ts": 1788876672
+        },
+        {
+          "seq": 419,
+          "type": "tile_discarded",
+          "seat": 0,
+          "tile": "7t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876672
+        },
+        {
+          "seq": 420,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876672
+        },
+        {
+          "seq": 421,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876672
+        },
+        {
+          "seq": 422,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876672
+        },
+        {
+          "seq": 423,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876674
+        },
+        {
+          "seq": 424,
+          "type": "round_ended",
+          "seat": -1,
+          "tile": "",
+          "data": {
+            "dealer": 0,
+            "draw": true,
+            "round_no": 1,
+            "scores": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "ts": 1788876674
+        }
+      ],
+      "round_no": 1,
+      "seq_end": 424,
+      "seq_start": 385,
+      "start_hands": [
+        null,
+        null,
+        null,
+        null
+      ],
+      "truncated": false
+    },
+    {
+      "dealer": 0,
+      "events": [
+        {
+          "seq": 425,
+          "type": "tile_discarded",
+          "seat": 0,
+          "tile": "8t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876674
+        },
+        {
+          "seq": 426,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876674
+        },
+        {
+          "seq": 427,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876674
+        },
+        {
+          "seq": 428,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876674
+        },
+        {
+          "seq": 429,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876676
+        },
+        {
+          "seq": 430,
+          "type": "tile_drawn",
+          "seat": 1,
+          "tile": "2t",
+          "data": null,
+          "ts": 1788876676
+        },
+        {
+          "seq": 431,
+          "type": "tile_discarded",
+          "seat": 1,
+          "tile": "4b",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876676
+        },
+        {
+          "seq": 432,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876676
+        },
+        {
+          "seq": 433,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876676
+        },
+        {
+          "seq": 434,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876676
+        },
+        {
+          "seq": 435,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876678
+        },
+        {
+          "seq": 436,
+          "type": "tile_drawn",
+          "seat": 2,
+          "tile": "8t",
+          "data": null,
+          "ts": 1788876678
+        },
+        {
+          "seq": 437,
+          "type": "tile_discarded",
+          "seat": 2,
+          "tile": "1w",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876678
+        },
+        {
+          "seq": 438,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876678
+        },
+        {
+          "seq": 439,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876678
+        },
+        {
+          "seq": 440,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876678
+        },
+        {
+          "seq": 441,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876680
+        },
+        {
+          "seq": 442,
+          "type": "tile_drawn",
+          "seat": 3,
+          "tile": "1w",
+          "data": null,
+          "ts": 1788876680
+        },
+        {
+          "seq": 443,
+          "type": "tile_discarded",
+          "seat": 3,
+          "tile": "3b",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876680
+        },
+        {
+          "seq": 444,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876680
+        },
+        {
+          "seq": 445,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876680
+        },
+        {
+          "seq": 446,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876680
+        },
+        {
+          "seq": 447,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876682
+        },
+        {
+          "seq": 448,
+          "type": "tile_drawn",
+          "seat": 0,
+          "tile": "北",
+          "data": null,
+          "ts": 1788876682
+        },
+        {
+          "seq": 449,
+          "type": "tile_discarded",
+          "seat": 0,
+          "tile": "北",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876682
+        },
+        {
+          "seq": 450,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876682
+        },
+        {
+          "seq": 451,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876682
+        },
+        {
+          "seq": 452,
+          "type": "peng",
+          "seat": 1,
+          "tile": "北",
+          "data": null,
+          "ts": 1788876682
+        },
+        {
+          "seq": 453,
+          "type": "tile_discarded",
+          "seat": 1,
+          "tile": "东",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876682
+        },
+        {
+          "seq": 454,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876683
+        },
+        {
+          "seq": 455,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876683
+        },
+        {
+          "seq": 456,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876683
+        },
+        {
+          "seq": 457,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876684
+        },
+        {
+          "seq": 458,
+          "type": "tile_drawn",
+          "seat": 2,
+          "tile": "6t",
+          "data": null,
+          "ts": 1788876684
+        },
+        {
+          "seq": 459,
+          "type": "tile_discarded",
+          "seat": 2,
+          "tile": "2b",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876684
+        },
+        {
+          "seq": 460,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876685
+        },
+        {
+          "seq": 461,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876685
+        },
+        {
+          "seq": 462,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876685
+        },
+        {
+          "seq": 463,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876686
+        },
+        {
+          "seq": 464,
+          "type": "tile_drawn",
+          "seat": 3,
+          "tile": "1t",
+          "data": null,
+          "ts": 1788876686
+        },
+        {
+          "seq": 465,
+          "type": "tile_discarded",
+          "seat": 3,
+          "tile": "7b",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876686
+        },
+        {
+          "seq": 466,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876687
+        },
+        {
+          "seq": 467,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876687
+        },
+        {
+          "seq": 468,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876687
+        },
+        {
+          "seq": 469,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876688
+        },
+        {
+          "seq": 470,
+          "type": "tile_drawn",
+          "seat": 0,
+          "tile": "发",
+          "data": null,
+          "ts": 1788876688
+        },
+        {
+          "seq": 471,
+          "type": "tile_discarded",
+          "seat": 0,
+          "tile": "发",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876689
+        },
+        {
+          "seq": 472,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876689
+        },
+        {
+          "seq": 473,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876689
+        },
+        {
+          "seq": 474,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876689
+        },
+        {
+          "seq": 475,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876691
+        },
+        {
+          "seq": 476,
+          "type": "tile_drawn",
+          "seat": 1,
+          "tile": "8w",
+          "data": null,
+          "ts": 1788876691
+        },
+        {
+          "seq": 477,
+          "type": "tile_discarded",
+          "seat": 1,
+          "tile": "南",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876691
+        },
+        {
+          "seq": 478,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876691
+        },
+        {
+          "seq": 479,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876691
+        },
+        {
+          "seq": 480,
+          "type": "peng",
+          "seat": 0,
+          "tile": "南",
+          "data": null,
+          "ts": 1788876691
+        },
+        {
+          "seq": 481,
+          "type": "tile_discarded",
+          "seat": 0,
+          "tile": "5w",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876691
+        },
+        {
+          "seq": 482,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876691
+        },
+        {
+          "seq": 483,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876691
+        },
+        {
+          "seq": 484,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876691
+        },
+        {
+          "seq": 485,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876693
+        },
+        {
+          "seq": 486,
+          "type": "tile_drawn",
+          "seat": 1,
+          "tile": "6t",
+          "data": null,
+          "ts": 1788876693
+        },
+        {
+          "seq": 487,
+          "type": "tile_discarded",
+          "seat": 1,
+          "tile": "9t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876693
+        },
+        {
+          "seq": 488,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876693
+        },
+        {
+          "seq": 489,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876693
+        },
+        {
+          "seq": 490,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876693
+        },
+        {
+          "seq": 491,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876695
+        },
+        {
+          "seq": 492,
+          "type": "tile_drawn",
+          "seat": 2,
+          "tile": "5b",
+          "data": null,
+          "ts": 1788876695
+        },
+        {
+          "seq": 493,
+          "type": "tile_discarded",
+          "seat": 2,
+          "tile": "5b",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876695
+        },
+        {
+          "seq": 494,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876695
+        },
+        {
+          "seq": 495,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876695
+        },
+        {
+          "seq": 496,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876695
+        },
+        {
+          "seq": 497,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876697
+        },
+        {
+          "seq": 498,
+          "type": "tile_drawn",
+          "seat": 3,
+          "tile": "西",
+          "data": null,
+          "ts": 1788876697
+        },
+        {
+          "seq": 499,
+          "type": "tile_discarded",
+          "seat": 3,
+          "tile": "8t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876697
+        },
+        {
+          "seq": 500,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876697
+        },
+        {
+          "seq": 501,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876697
+        },
+        {
+          "seq": 502,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876697
+        },
+        {
+          "seq": 503,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876699
+        },
+        {
+          "seq": 504,
+          "type": "tile_drawn",
+          "seat": 0,
+          "tile": "7t",
+          "data": null,
+          "ts": 1788876699
+        },
+        {
+          "seq": 505,
+          "type": "tile_discarded",
+          "seat": 0,
+          "tile": "7t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876699
+        },
+        {
+          "seq": 506,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876699
+        },
+        {
+          "seq": 507,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876699
+        },
+        {
+          "seq": 508,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876699
+        },
+        {
+          "seq": 509,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876701
+        },
+        {
+          "seq": 510,
+          "type": "tile_drawn",
+          "seat": 1,
+          "tile": "东",
+          "data": null,
+          "ts": 1788876701
+        },
+        {
+          "seq": 511,
+          "type": "tile_discarded",
+          "seat": 1,
+          "tile": "东",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876701
+        },
+        {
+          "seq": 512,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876701
+        },
+        {
+          "seq": 513,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876701
+        },
+        {
+          "seq": 514,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876701
+        },
+        {
+          "seq": 515,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876703
+        },
+        {
+          "seq": 516,
+          "type": "tile_drawn",
+          "seat": 2,
+          "tile": "8b",
+          "data": null,
+          "ts": 1788876703
+        },
+        {
+          "seq": 517,
+          "type": "tile_discarded",
+          "seat": 2,
+          "tile": "西",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876703
+        },
+        {
+          "seq": 518,
+          "type": "peng",
+          "seat": 3,
+          "tile": "西",
+          "data": null,
+          "ts": 1788876703
+        },
+        {
+          "seq": 519,
+          "type": "tile_discarded",
+          "seat": 3,
+          "tile": "南",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876703
+        },
+        {
+          "seq": 520,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876704
+        },
+        {
+          "seq": 521,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876704
+        },
+        {
+          "seq": 522,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876704
+        },
+        {
+          "seq": 523,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876706
+        },
+        {
+          "seq": 524,
+          "type": "tile_drawn",
+          "seat": 0,
+          "tile": "9t",
+          "data": null,
+          "ts": 1788876706
+        },
+        {
+          "seq": 525,
+          "type": "tile_discarded",
+          "seat": 0,
+          "tile": "9t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876706
+        },
+        {
+          "seq": 526,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876706
+        },
+        {
+          "seq": 527,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876706
+        },
+        {
+          "seq": 528,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876706
+        },
+        {
+          "seq": 529,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876708
+        },
+        {
+          "seq": 530,
+          "type": "tile_drawn",
+          "seat": 1,
+          "tile": "1b",
+          "data": null,
+          "ts": 1788876708
+        },
+        {
+          "seq": 531,
+          "type": "tile_discarded",
+          "seat": 1,
+          "tile": "1b",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876708
+        },
+        {
+          "seq": 532,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876708
+        },
+        {
+          "seq": 533,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876708
+        },
+        {
+          "seq": 534,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876708
+        },
+        {
+          "seq": 535,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876710
+        },
+        {
+          "seq": 536,
+          "type": "tile_drawn",
+          "seat": 2,
+          "tile": "7b",
+          "data": null,
+          "ts": 1788876710
+        },
+        {
+          "seq": 537,
+          "type": "tile_discarded",
+          "seat": 2,
+          "tile": "发",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876710
+        },
+        {
+          "seq": 538,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876710
+        },
+        {
+          "seq": 539,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876710
+        },
+        {
+          "seq": 540,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876710
+        },
+        {
+          "seq": 541,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876712
+        },
+        {
+          "seq": 542,
+          "type": "tile_drawn",
+          "seat": 3,
+          "tile": "中",
+          "data": null,
+          "ts": 1788876712
+        },
+        {
+          "seq": 543,
+          "type": "tile_discarded",
+          "seat": 3,
+          "tile": "北",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876712
+        },
+        {
+          "seq": 544,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876712
+        },
+        {
+          "seq": 545,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876712
+        },
+        {
+          "seq": 546,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876712
+        },
+        {
+          "seq": 547,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876714
+        },
+        {
+          "seq": 548,
+          "type": "tile_drawn",
+          "seat": 0,
+          "tile": "东",
+          "data": null,
+          "ts": 1788876714
+        },
+        {
+          "seq": 549,
+          "type": "tile_discarded",
+          "seat": 0,
+          "tile": "东",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876714
+        },
+        {
+          "seq": 550,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876714
+        },
+        {
+          "seq": 551,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876714
+        },
+        {
+          "seq": 552,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876714
+        }
+      ],
+      "round_no": 2,
+      "seq_end": 552,
+      "seq_start": 425,
+      "start_hands": [
+        [
+          "1b",
+          "6b",
+          "8b",
+          "5b",
+          "7w",
+          "8t",
+          "5w",
+          "4b",
+          "2w",
+          "2w",
+          "3b",
+          "南",
+          "9w",
+          "南"
+        ],
+        [
+          "北",
+          "7t",
+          "9t",
+          "3w",
+          "2t",
+          "北",
+          "8w",
+          "5w",
+          "东",
+          "9w",
+          "南",
+          "4b",
+          "4w"
+        ],
+        [
+          "2b",
+          "2t",
+          "西",
+          "7w",
+          "7w",
+          "9b",
+          "3t",
+          "1w",
+          "5w",
+          "发",
+          "9t",
+          "9w",
+          "4w"
+        ],
+        [
+          "1t",
+          "4t",
+          "7b",
+          "8t",
+          "中",
+          "4t",
+          "3b",
+          "北",
+          "西",
+          "南",
+          "6w",
+          "3w",
+          "7w"
+        ]
+      ],
+      "truncated": false
+    },
+    {
+      "dealer": 0,
+      "events": [
+        {
+          "seq": 553,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876716
+        },
+        {
+          "seq": 554,
+          "type": "tile_drawn",
+          "seat": 1,
+          "tile": "7b",
+          "data": null,
+          "ts": 1788876716
+        },
+        {
+          "seq": 555,
+          "type": "tile_discarded",
+          "seat": 1,
+          "tile": "7b",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876716
+        },
+        {
+          "seq": 556,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876716
+        },
+        {
+          "seq": 557,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876716
+        },
+        {
+          "seq": 558,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876716
+        },
+        {
+          "seq": 559,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876718
+        },
+        {
+          "seq": 560,
+          "type": "tile_drawn",
+          "seat": 2,
+          "tile": "6t",
+          "data": null,
+          "ts": 1788876718
+        },
+        {
+          "seq": 561,
+          "type": "tile_discarded",
+          "seat": 2,
+          "tile": "9w",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876718
+        },
+        {
+          "seq": 562,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876718
+        },
+        {
+          "seq": 563,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876718
+        },
+        {
+          "seq": 564,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876718
+        },
+        {
+          "seq": 565,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876720
+        },
+        {
+          "seq": 566,
+          "type": "tile_drawn",
+          "seat": 3,
+          "tile": "4t",
+          "data": null,
+          "ts": 1788876720
+        },
+        {
+          "seq": 567,
+          "type": "tile_discarded",
+          "seat": 3,
+          "tile": "1w",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876720
+        },
+        {
+          "seq": 568,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876720
+        },
+        {
+          "seq": 569,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876720
+        },
+        {
+          "seq": 570,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876720
+        },
+        {
+          "seq": 571,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876722
+        },
+        {
+          "seq": 572,
+          "type": "tile_drawn",
+          "seat": 0,
+          "tile": "9t",
+          "data": null,
+          "ts": 1788876722
+        },
+        {
+          "seq": 573,
+          "type": "tile_discarded",
+          "seat": 0,
+          "tile": "9t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876722
+        },
+        {
+          "seq": 574,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876722
+        },
+        {
+          "seq": 575,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876722
+        },
+        {
+          "seq": 576,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876722
+        },
+        {
+          "seq": 577,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876724
+        },
+        {
+          "seq": 578,
+          "type": "tile_drawn",
+          "seat": 1,
+          "tile": "3t",
+          "data": null,
+          "ts": 1788876724
+        },
+        {
+          "seq": 579,
+          "type": "tile_discarded",
+          "seat": 1,
+          "tile": "9w",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876724
+        },
+        {
+          "seq": 580,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876724
+        },
+        {
+          "seq": 581,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876724
+        },
+        {
+          "seq": 582,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876724
+        },
+        {
+          "seq": 583,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876726
+        },
+        {
+          "seq": 584,
+          "type": "tile_drawn",
+          "seat": 2,
+          "tile": "6w",
+          "data": null,
+          "ts": 1788876726
+        },
+        {
+          "seq": 585,
+          "type": "tile_discarded",
+          "seat": 2,
+          "tile": "2t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876726
+        },
+        {
+          "seq": 586,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876726
+        },
+        {
+          "seq": 587,
+          "type": "peng",
+          "seat": 1,
+          "tile": "2t",
+          "data": null,
+          "ts": 1788876726
+        },
+        {
+          "seq": 588,
+          "type": "tile_discarded",
+          "seat": 1,
+          "tile": "3t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876726
+        },
+        {
+          "seq": 589,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876727
+        },
+        {
+          "seq": 590,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876727
+        },
+        {
+          "seq": 591,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876727
+        },
+        {
+          "seq": 592,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876728
+        },
+        {
+          "seq": 593,
+          "type": "tile_drawn",
+          "seat": 2,
+          "tile": "4b",
+          "data": null,
+          "ts": 1788876728
+        },
+        {
+          "seq": 594,
+          "type": "tile_discarded",
+          "seat": 2,
+          "tile": "4b",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876728
+        },
+        {
+          "seq": 595,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876729
+        },
+        {
+          "seq": 596,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876729
+        },
+        {
+          "seq": 597,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876729
+        },
+        {
+          "seq": 598,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876730
+        },
+        {
+          "seq": 599,
+          "type": "tile_drawn",
+          "seat": 3,
+          "tile": "2w",
+          "data": null,
+          "ts": 1788876730
+        },
+        {
+          "seq": 600,
+          "type": "tile_discarded",
+          "seat": 3,
+          "tile": "2w",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876730
+        },
+        {
+          "seq": 601,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876731
+        },
+        {
+          "seq": 602,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876731
+        },
+        {
+          "seq": 603,
+          "type": "peng",
+          "seat": 0,
+          "tile": "2w",
+          "data": null,
+          "ts": 1788876731
+        },
+        {
+          "seq": 604,
+          "type": "tile_discarded",
+          "seat": 0,
+          "tile": "7w",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876731
+        },
+        {
+          "seq": 605,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876731
+        },
+        {
+          "seq": 606,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876731
+        },
+        {
+          "seq": 607,
+          "type": "peng",
+          "seat": 2,
+          "tile": "7w",
+          "data": null,
+          "ts": 1788876731
+        },
+        {
+          "seq": 608,
+          "type": "tile_discarded",
+          "seat": 2,
+          "tile": "3t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876731
+        },
+        {
+          "seq": 609,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876731
+        },
+        {
+          "seq": 610,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876731
+        },
+        {
+          "seq": 611,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876731
+        },
+        {
+          "seq": 612,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876733
+        },
+        {
+          "seq": 613,
+          "type": "tile_drawn",
+          "seat": 3,
+          "tile": "5t",
+          "data": null,
+          "ts": 1788876733
+        },
+        {
+          "seq": 614,
+          "type": "tile_discarded",
+          "seat": 3,
+          "tile": "3w",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876733
+        },
+        {
+          "seq": 615,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876733
+        },
+        {
+          "seq": 616,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876733
+        },
+        {
+          "seq": 617,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876733
+        },
+        {
+          "seq": 618,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876735
+        },
+        {
+          "seq": 619,
+          "type": "tile_drawn",
+          "seat": 0,
+          "tile": "1t",
+          "data": null,
+          "ts": 1788876735
+        },
+        {
+          "seq": 620,
+          "type": "tile_discarded",
+          "seat": 0,
+          "tile": "9w",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876735
+        },
+        {
+          "seq": 621,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876735
+        },
+        {
+          "seq": 622,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876735
+        },
+        {
+          "seq": 623,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876735
+        },
+        {
+          "seq": 624,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876737
+        },
+        {
+          "seq": 625,
+          "type": "tile_drawn",
+          "seat": 1,
+          "tile": "2t",
+          "data": null,
+          "ts": 1788876737
+        },
+        {
+          "seq": 626,
+          "type": "gang",
+          "seat": 1,
+          "tile": "2t",
+          "data": {
+            "kind": "bu"
+          },
+          "ts": 1788876737
+        },
+        {
+          "seq": 627,
+          "type": "tile_drawn",
+          "seat": 1,
+          "tile": "6w",
+          "data": {
+            "gang_replenish": true
+          },
+          "ts": 1788876737
+        },
+        {
+          "seq": 628,
+          "type": "tile_discarded",
+          "seat": 1,
+          "tile": "6t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876737
+        },
+        {
+          "seq": 629,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876738
+        },
+        {
+          "seq": 630,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876738
+        },
+        {
+          "seq": 631,
+          "type": "peng",
+          "seat": 2,
+          "tile": "6t",
+          "data": null,
+          "ts": 1788876738
+        },
+        {
+          "seq": 632,
+          "type": "tile_discarded",
+          "seat": 2,
+          "tile": "8t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876738
+        },
+        {
+          "seq": 633,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876738
+        },
+        {
+          "seq": 634,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876738
+        },
+        {
+          "seq": 635,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876738
+        },
+        {
+          "seq": 636,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876740
+        },
+        {
+          "seq": 637,
+          "type": "tile_drawn",
+          "seat": 3,
+          "tile": "5w",
+          "data": null,
+          "ts": 1788876740
+        },
+        {
+          "seq": 638,
+          "type": "tile_discarded",
+          "seat": 3,
+          "tile": "5t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876740
+        },
+        {
+          "seq": 639,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876740
+        },
+        {
+          "seq": 640,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876740
+        },
+        {
+          "seq": 641,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876740
+        },
+        {
+          "seq": 642,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876742
+        },
+        {
+          "seq": 643,
+          "type": "tile_drawn",
+          "seat": 0,
+          "tile": "8w",
+          "data": null,
+          "ts": 1788876742
+        },
+        {
+          "seq": 644,
+          "type": "tile_discarded",
+          "seat": 0,
+          "tile": "8w",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876742
+        },
+        {
+          "seq": 645,
+          "type": "peng",
+          "seat": 1,
+          "tile": "8w",
+          "data": null,
+          "ts": 1788876742
+        },
+        {
+          "seq": 646,
+          "type": "tile_discarded",
+          "seat": 1,
+          "tile": "7t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876742
+        },
+        {
+          "seq": 647,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876742
+        },
+        {
+          "seq": 648,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876742
+        },
+        {
+          "seq": 649,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876742
+        },
+        {
+          "seq": 650,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876744
+        },
+        {
+          "seq": 651,
+          "type": "tile_drawn",
+          "seat": 2,
+          "tile": "8t",
+          "data": null,
+          "ts": 1788876744
+        },
+        {
+          "seq": 652,
+          "type": "tile_discarded",
+          "seat": 2,
+          "tile": "8t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876744
+        },
+        {
+          "seq": 653,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876744
+        },
+        {
+          "seq": 654,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876744
+        },
+        {
+          "seq": 655,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876744
+        },
+        {
+          "seq": 656,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876746
+        },
+        {
+          "seq": 657,
+          "type": "tile_drawn",
+          "seat": 3,
+          "tile": "3t",
+          "data": null,
+          "ts": 1788876746
+        },
+        {
+          "seq": 658,
+          "type": "tile_discarded",
+          "seat": 3,
+          "tile": "5w",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876746
+        },
+        {
+          "seq": 659,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876746
+        },
+        {
+          "seq": 660,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876746
+        },
+        {
+          "seq": 661,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876746
+        },
+        {
+          "seq": 662,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876748
+        },
+        {
+          "seq": 663,
+          "type": "tile_drawn",
+          "seat": 0,
+          "tile": "西",
+          "data": null,
+          "ts": 1788876748
+        },
+        {
+          "seq": 664,
+          "type": "tile_discarded",
+          "seat": 0,
+          "tile": "1t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876748
+        },
+        {
+          "seq": 665,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876748
+        },
+        {
+          "seq": 666,
+          "type": "peng",
+          "seat": 3,
+          "tile": "1t",
+          "data": null,
+          "ts": 1788876748
+        },
+        {
+          "seq": 667,
+          "type": "tile_discarded",
+          "seat": 3,
+          "tile": "6w",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876749
+        },
+        {
+          "seq": 668,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876749
+        },
+        {
+          "seq": 669,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876749
+        },
+        {
+          "seq": 670,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876749
+        },
+        {
+          "seq": 671,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876751
+        },
+        {
+          "seq": 672,
+          "type": "tile_drawn",
+          "seat": 0,
+          "tile": "7t",
+          "data": null,
+          "ts": 1788876751
+        },
+        {
+          "seq": 673,
+          "type": "tile_discarded",
+          "seat": 0,
+          "tile": "7t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876751
+        },
+        {
+          "seq": 674,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876751
+        },
+        {
+          "seq": 675,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876751
+        },
+        {
+          "seq": 676,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876751
+        },
+        {
+          "seq": 677,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876753
+        },
+        {
+          "seq": 678,
+          "type": "tile_drawn",
+          "seat": 1,
+          "tile": "2b",
+          "data": null,
+          "ts": 1788876753
+        },
+        {
+          "seq": 679,
+          "type": "tile_discarded",
+          "seat": 1,
+          "tile": "2b",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876753
+        },
+        {
+          "seq": 680,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876753
+        }
+      ],
+      "round_no": 2,
+      "seq_end": 680,
+      "seq_start": 553,
+      "start_hands": [
+        null,
+        null,
+        null,
+        null
+      ],
+      "truncated": false
+    },
+    {
+      "dealer": 0,
+      "events": [
+        {
+          "seq": 681,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876753
+        },
+        {
+          "seq": 682,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876753
+        },
+        {
+          "seq": 683,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876755
+        },
+        {
+          "seq": 684,
+          "type": "tile_drawn",
+          "seat": 2,
+          "tile": "2b",
+          "data": null,
+          "ts": 1788876755
+        },
+        {
+          "seq": 685,
+          "type": "tile_discarded",
+          "seat": 2,
+          "tile": "2b",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876755
+        },
+        {
+          "seq": 686,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876755
+        },
+        {
+          "seq": 687,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876755
+        },
+        {
+          "seq": 688,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876755
+        },
+        {
+          "seq": 689,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876757
+        },
+        {
+          "seq": 690,
+          "type": "tile_drawn",
+          "seat": 3,
+          "tile": "8b",
+          "data": null,
+          "ts": 1788876757
+        },
+        {
+          "seq": 691,
+          "type": "tile_discarded",
+          "seat": 3,
+          "tile": "7w",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876757
+        },
+        {
+          "seq": 692,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876757
+        },
+        {
+          "seq": 693,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876757
+        },
+        {
+          "seq": 694,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876757
+        },
+        {
+          "seq": 695,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876759
+        },
+        {
+          "seq": 696,
+          "type": "tile_drawn",
+          "seat": 0,
+          "tile": "4b",
+          "data": null,
+          "ts": 1788876759
+        },
+        {
+          "seq": 697,
+          "type": "tile_discarded",
+          "seat": 0,
+          "tile": "西",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876759
+        },
+        {
+          "seq": 698,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876759
+        },
+        {
+          "seq": 699,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876759
+        },
+        {
+          "seq": 700,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876759
+        },
+        {
+          "seq": 701,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876761
+        },
+        {
+          "seq": 702,
+          "type": "tile_drawn",
+          "seat": 1,
+          "tile": "6b",
+          "data": null,
+          "ts": 1788876761
+        },
+        {
+          "seq": 703,
+          "type": "tile_discarded",
+          "seat": 1,
+          "tile": "6b",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876761
+        },
+        {
+          "seq": 704,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876761
+        },
+        {
+          "seq": 705,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876761
+        },
+        {
+          "seq": 706,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876761
+        },
+        {
+          "seq": 707,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876763
+        },
+        {
+          "seq": 708,
+          "type": "tile_drawn",
+          "seat": 2,
+          "tile": "5t",
+          "data": null,
+          "ts": 1788876763
+        },
+        {
+          "seq": 709,
+          "type": "tile_discarded",
+          "seat": 2,
+          "tile": "5t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876763
+        },
+        {
+          "seq": 710,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876763
+        },
+        {
+          "seq": 711,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876763
+        },
+        {
+          "seq": 712,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876763
+        },
+        {
+          "seq": 713,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876765
+        },
+        {
+          "seq": 714,
+          "type": "tile_drawn",
+          "seat": 3,
+          "tile": "3t",
+          "data": null,
+          "ts": 1788876765
+        },
+        {
+          "seq": 715,
+          "type": "tile_discarded",
+          "seat": 3,
+          "tile": "8b",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876765
+        },
+        {
+          "seq": 716,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876765
+        },
+        {
+          "seq": 717,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876765
+        },
+        {
+          "seq": 718,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876765
+        },
+        {
+          "seq": 719,
+          "type": "timeout",
+          "seat": 0,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876767
+        },
+        {
+          "seq": 720,
+          "type": "tile_drawn",
+          "seat": 0,
+          "tile": "白",
+          "data": null,
+          "ts": 1788876767
+        },
+        {
+          "seq": 721,
+          "type": "tile_discarded",
+          "seat": 0,
+          "tile": "1b",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876767
+        },
+        {
+          "seq": 722,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876767
+        },
+        {
+          "seq": 723,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876767
+        },
+        {
+          "seq": 724,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876767
+        },
+        {
+          "seq": 725,
+          "type": "timeout",
+          "seat": 1,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876769
+        },
+        {
+          "seq": 726,
+          "type": "tile_drawn",
+          "seat": 1,
+          "tile": "1b",
+          "data": null,
+          "ts": 1788876769
+        },
+        {
+          "seq": 727,
+          "type": "tile_discarded",
+          "seat": 1,
+          "tile": "1b",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876769
+        },
+        {
+          "seq": 728,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876769
+        },
+        {
+          "seq": 729,
+          "type": "pass",
+          "seat": 2,
+          "tile": "",
+          "data": null,
+          "ts": 1788876769
+        },
+        {
+          "seq": 730,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876769
+        },
+        {
+          "seq": 731,
+          "type": "timeout",
+          "seat": 2,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876771
+        },
+        {
+          "seq": 732,
+          "type": "tile_drawn",
+          "seat": 2,
+          "tile": "8b",
+          "data": null,
+          "ts": 1788876771
+        },
+        {
+          "seq": 733,
+          "type": "tile_discarded",
+          "seat": 2,
+          "tile": "9t",
+          "data": {
+            "catch_play": false
+          },
+          "ts": 1788876771
+        },
+        {
+          "seq": 734,
+          "type": "pass",
+          "seat": 3,
+          "tile": "",
+          "data": null,
+          "ts": 1788876771
+        },
+        {
+          "seq": 735,
+          "type": "pass",
+          "seat": 1,
+          "tile": "",
+          "data": null,
+          "ts": 1788876771
+        },
+        {
+          "seq": 736,
+          "type": "pass",
+          "seat": 0,
+          "tile": "",
+          "data": null,
+          "ts": 1788876771
+        },
+        {
+          "seq": 737,
+          "type": "timeout",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "kind": "response",
+            "window": "chi"
+          },
+          "ts": 1788876773
+        },
+        {
+          "seq": 738,
+          "type": "tile_drawn",
+          "seat": 3,
+          "tile": "白",
+          "data": null,
+          "ts": 1788876773
+        },
+        {
+          "seq": 739,
+          "type": "round_ended",
+          "seat": 3,
+          "tile": "",
+          "data": {
+            "dealer": 0,
+            "detail": [
+              "平胡"
+            ],
+            "draw": false,
+            "fan": 1,
+            "round_no": 2,
+            "scores": [
+              -8,
+              -1,
+              -1,
+              10
+            ]
+          },
+          "ts": 1788876773
+        },
+        {
+          "seq": 740,
+          "type": "game_ended",
+          "seat": -1,
+          "tile": "",
+          "data": {
+            "final_scores": [
+              -8,
+              -1,
+              -1,
+              10
+            ]
+          },
+          "ts": 1788876773
+        }
+      ],
+      "round_no": 2,
+      "seq_end": 740,
+      "seq_start": 681,
+      "start_hands": [
+        null,
+        null,
+        null,
+        null
+      ],
+      "truncated": false
+    }
+  ],
+  "game_id": "fixture-game",
+  "room_id": "fixture-room",
+  "rounds": [
+    {
+      "dealer": 0,
+      "is_draw": 0,
+      "multiplier": 1,
+      "round_no": 2,
+      "scores": [
+        -8,
+        -1,
+        -1,
+        10
+      ],
+      "winner": 3
+    }
+  ],
+  "seats": [
+    {
+      "seat": 0,
+      "name": "player-0"
+    },
+    {
+      "seat": 1,
+      "name": "player-1"
+    },
+    {
+      "seat": 2,
+      "name": "player-2"
+    },
+    {
+      "seat": 3,
+      "name": "player-3"
+    }
+  ],
+  "status": "finished"
+}

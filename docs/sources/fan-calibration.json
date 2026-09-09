@@ -1,0 +1,1812 @@
+{
+  "runtime": "b780595b6a5ea5efe0e71a036099cf587a3e5048d381fc9d854da7371338fc1c",
+  "environment": {
+    "python": "3.12.13 | packaged by Anaconda, Inc. | (main, Mar 19 2026, 20:12:32) [Clang 20.1.8 ]",
+    "numpy": "2.5.1",
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "machine": "arm64"
+  },
+  "guide_version": 27,
+  "updated_at": "2026-09-08",
+  "source": "https://10.240.169.190:18080/portal/api/tools/fan-calc",
+  "samples": 32,
+  "matched": 32,
+  "scope": "closed-hand hu/baotou/fan/dealer payment only; NOT full engine certification",
+  "records": [
+    {
+      "request": {
+        "hand": [
+          "1w",
+          "1w",
+          "2w",
+          "2w",
+          "3w",
+          "3w",
+          "4w",
+          "5w",
+          "6w",
+          "白",
+          "白",
+          "白",
+          "白"
+        ],
+        "draw": "9t",
+        "chain": {
+          "count": 0,
+          "piao": 0
+        },
+        "base": 1
+      },
+      "local": {
+        "hu": true,
+        "baotou": true,
+        "fan": 8
+      },
+      "official": {
+        "hu": true,
+        "baotou": true,
+        "fan": 8,
+        "detail": [
+          "七对",
+          "4个白板",
+          "爆头"
+        ],
+        "scores": {
+          "dealer_hu": {
+            "win": 192,
+            "lose": [
+              64,
+              64,
+              64
+            ]
+          },
+          "nondealer_hu": {
+            "win": 80,
+            "lose": [
+              64,
+              8,
+              8
+            ]
+          }
+        }
+      },
+      "matched": true
+    },
+    {
+      "request": {
+        "hand": [
+          "1w",
+          "1w",
+          "1w",
+          "2w",
+          "3w",
+          "4w",
+          "5w",
+          "6w",
+          "7w",
+          "8w",
+          "9w",
+          "东",
+          "东"
+        ],
+        "draw": "东",
+        "chain": {
+          "count": 0,
+          "piao": 0
+        },
+        "base": 1
+      },
+      "local": {
+        "hu": true,
+        "baotou": false,
+        "fan": 1
+      },
+      "official": {
+        "hu": true,
+        "baotou": false,
+        "fan": 1,
+        "detail": [
+          "平胡"
+        ],
+        "scores": {
+          "dealer_hu": {
+            "win": 24,
+            "lose": [
+              8,
+              8,
+              8
+            ]
+          },
+          "nondealer_hu": {
+            "win": 10,
+            "lose": [
+              8,
+              1,
+              1
+            ]
+          }
+        }
+      },
+      "matched": true
+    },
+    {
+      "request": {
+        "hand": [
+          "2w",
+          "6w",
+          "7w",
+          "7w",
+          "7w",
+          "4b",
+          "8w",
+          "6b",
+          "6b",
+          "4b",
+          "4w",
+          "6b",
+          "3w"
+        ],
+        "draw": "白",
+        "chain": {
+          "count": 3,
+          "piao": 0
+        },
+        "base": 1
+      },
+      "local": {
+        "hu": true,
+        "baotou": false,
+        "fan": 8
+      },
+      "official": {
+        "hu": true,
+        "baotou": false,
+        "fan": 8,
+        "detail": [
+          "平胡",
+          "连杠×3"
+        ],
+        "scores": {
+          "dealer_hu": {
+            "win": 192,
+            "lose": [
+              64,
+              64,
+              64
+            ]
+          },
+          "nondealer_hu": {
+            "win": 80,
+            "lose": [
+              64,
+              8,
+              8
+            ]
+          }
+        }
+      },
+      "matched": true
+    },
+    {
+      "request": {
+        "hand": [
+          "南",
+          "9w",
+          "9b",
+          "6w",
+          "8w",
+          "1t",
+          "6w",
+          "8w",
+          "9b",
+          "南",
+          "1t",
+          "9w",
+          "西"
+        ],
+        "draw": "西",
+        "chain": {
+          "count": 3,
+          "piao": 0
+        },
+        "base": 5
+      },
+      "local": {
+        "hu": true,
+        "baotou": false,
+        "fan": 16
+      },
+      "official": {
+        "hu": true,
+        "baotou": false,
+        "fan": 16,
+        "detail": [
+          "七对",
+          "连杠×3"
+        ],
+        "scores": {
+          "dealer_hu": {
+            "win": 1920,
+            "lose": [
+              640,
+              640,
+              640
+            ]
+          },
+          "nondealer_hu": {
+            "win": 800,
+            "lose": [
+              640,
+              80,
+              80
+            ]
+          }
+        }
+      },
+      "matched": true
+    },
+    {
+      "request": {
+        "hand": [
+          "南",
+          "8w",
+          "8b",
+          "中",
+          "4w",
+          "4b",
+          "3b",
+          "白",
+          "9w",
+          "3t",
+          "5w",
+          "白",
+          "白"
+        ],
+        "draw": "白",
+        "chain": {
+          "count": 3,
+          "piao": 0
+        },
+        "base": 2
+      },
+      "local": {
+        "hu": false,
+        "baotou": false,
+        "fan": 0
+      },
+      "official": {
+        "hu": false,
+        "baotou": false,
+        "fan": 0,
+        "detail": null,
+        "scores": {
+          "dealer_hu": {
+            "win": 0,
+            "lose": null
+          },
+          "nondealer_hu": {
+            "win": 0,
+            "lose": null
+          }
+        }
+      },
+      "matched": true
+    },
+    {
+      "request": {
+        "hand": [
+          "2w",
+          "中",
+          "3t",
+          "1t",
+          "6t",
+          "8t",
+          "中",
+          "8b",
+          "2w",
+          "2t",
+          "2w",
+          "7t",
+          "8b"
+        ],
+        "draw": "中",
+        "chain": {
+          "count": 0,
+          "piao": 0
+        },
+        "base": 5
+      },
+      "local": {
+        "hu": true,
+        "baotou": false,
+        "fan": 1
+      },
+      "official": {
+        "hu": true,
+        "baotou": false,
+        "fan": 1,
+        "detail": [
+          "平胡"
+        ],
+        "scores": {
+          "dealer_hu": {
+            "win": 120,
+            "lose": [
+              40,
+              40,
+              40
+            ]
+          },
+          "nondealer_hu": {
+            "win": 50,
+            "lose": [
+              40,
+              5,
+              5
+            ]
+          }
+        }
+      },
+      "matched": true
+    },
+    {
+      "request": {
+        "hand": [
+          "东",
+          "1w",
+          "3t",
+          "2b",
+          "5t",
+          "5t",
+          "5b",
+          "5b",
+          "2b",
+          "5w",
+          "白",
+          "1w",
+          "东"
+        ],
+        "draw": "3t",
+        "chain": {
+          "count": 0,
+          "piao": 0
+        },
+        "base": 2
+      },
+      "local": {
+        "hu": true,
+        "baotou": false,
+        "fan": 2
+      },
+      "official": {
+        "hu": true,
+        "baotou": false,
+        "fan": 2,
+        "detail": [
+          "七对"
+        ],
+        "scores": {
+          "dealer_hu": {
+            "win": 96,
+            "lose": [
+              32,
+              32,
+              32
+            ]
+          },
+          "nondealer_hu": {
+            "win": 40,
+            "lose": [
+              32,
+              4,
+              4
+            ]
+          }
+        }
+      },
+      "matched": true
+    },
+    {
+      "request": {
+        "hand": [
+          "6w",
+          "5b",
+          "白",
+          "白",
+          "5w",
+          "7b",
+          "7w",
+          "6w",
+          "6b",
+          "白",
+          "1b",
+          "6w",
+          "2b"
+        ],
+        "draw": "5w",
+        "chain": {
+          "count": 0,
+          "piao": 0
+        },
+        "base": 5
+      },
+      "local": {
+        "hu": true,
+        "baotou": true,
+        "fan": 2
+      },
+      "official": {
+        "hu": true,
+        "baotou": true,
+        "fan": 2,
+        "detail": [
+          "平胡",
+          "爆头"
+        ],
+        "scores": {
+          "dealer_hu": {
+            "win": 240,
+            "lose": [
+              80,
+              80,
+              80
+            ]
+          },
+          "nondealer_hu": {
+            "win": 100,
+            "lose": [
+              80,
+              10,
+              10
+            ]
+          }
+        }
+      },
+      "matched": true
+    },
+    {
+      "request": {
+        "hand": [
+          "4t",
+          "9w",
+          "8w",
+          "8w",
+          "3w",
+          "2b",
+          "白",
+          "白",
+          "1b",
+          "7w",
+          "6b",
+          "2w",
+          "7b"
+        ],
+        "draw": "3b",
+        "chain": {
+          "count": 0,
+          "piao": 0
+        },
+        "base": 2
+      },
+      "local": {
+        "hu": false,
+        "baotou": false,
+        "fan": 0
+      },
+      "official": {
+        "hu": false,
+        "baotou": false,
+        "fan": 0,
+        "detail": null,
+        "scores": {
+          "dealer_hu": {
+            "win": 0,
+            "lose": null
+          },
+          "nondealer_hu": {
+            "win": 0,
+            "lose": null
+          }
+        }
+      },
+      "matched": true
+    },
+    {
+      "request": {
+        "hand": [
+          "8t",
+          "白",
+          "9w",
+          "7b",
+          "7b",
+          "白",
+          "9w",
+          "5w",
+          "7t",
+          "5w",
+          "2b",
+          "7t",
+          "2b"
+        ],
+        "draw": "4w",
+        "chain": {
+          "count": 1,
+          "piao": 0
+        },
+        "base": 5
+      },
+      "local": {
+        "hu": true,
+        "baotou": true,
+        "fan": 8
+      },
+      "official": {
+        "hu": true,
+        "baotou": true,
+        "fan": 8,
+        "detail": [
+          "七对",
+          "杠开",
+          "爆头"
+        ],
+        "scores": {
+          "dealer_hu": {
+            "win": 960,
+            "lose": [
+              320,
+              320,
+              320
+            ]
+          },
+          "nondealer_hu": {
+            "win": 400,
+            "lose": [
+              320,
+              40,
+              40
+            ]
+          }
+        }
+      },
+      "matched": true
+    },
+    {
+      "request": {
+        "hand": [
+          "7w",
+          "6t",
+          "9w",
+          "2t",
+          "6t",
+          "8w",
+          "1b",
+          "8w",
+          "1b",
+          "白",
+          "2t",
+          "9w",
+          "2t"
+        ],
+        "draw": "6t",
+        "chain": {
+          "count": 2,
+          "piao": 0
+        },
+        "base": 1
+      },
+      "local": {
+        "hu": true,
+        "baotou": false,
+        "fan": 4
+      },
+      "official": {
+        "hu": true,
+        "baotou": false,
+        "fan": 4,
+        "detail": [
+          "平胡",
+          "连杠×2"
+        ],
+        "scores": {
+          "dealer_hu": {
+            "win": 96,
+            "lose": [
+              32,
+              32,
+              32
+            ]
+          },
+          "nondealer_hu": {
+            "win": 40,
+            "lose": [
+              32,
+              4,
+              4
+            ]
+          }
+        }
+      },
+      "matched": true
+    },
+    {
+      "request": {
+        "hand": [
+          "3t",
+          "4w",
+          "3w",
+          "6w",
+          "6t",
+          "6t",
+          "5w",
+          "3w",
+          "6w",
+          "4t",
+          "3w",
+          "7w",
+          "5t"
+        ],
+        "draw": "白",
+        "chain": {
+          "count": 3,
+          "piao": 0
+        },
+        "base": 5
+      },
+      "local": {
+        "hu": true,
+        "baotou": false,
+        "fan": 8
+      },
+      "official": {
+        "hu": true,
+        "baotou": false,
+        "fan": 8,
+        "detail": [
+          "平胡",
+          "连杠×3"
+        ],
+        "scores": {
+          "dealer_hu": {
+            "win": 960,
+            "lose": [
+              320,
+              320,
+              320
+            ]
+          },
+          "nondealer_hu": {
+            "win": 400,
+            "lose": [
+              320,
+              40,
+              40
+            ]
+          }
+        }
+      },
+      "matched": true
+    },
+    {
+      "request": {
+        "hand": [
+          "9t",
+          "中",
+          "东",
+          "5b",
+          "8b",
+          "白",
+          "2w",
+          "1b",
+          "5b",
+          "白",
+          "4b",
+          "白",
+          "中"
+        ],
+        "draw": "白",
+        "chain": {
+          "count": 3,
+          "piao": 0
+        },
+        "base": 5
+      },
+      "local": {
+        "hu": false,
+        "baotou": false,
+        "fan": 0
+      },
+      "official": {
+        "hu": false,
+        "baotou": false,
+        "fan": 0,
+        "detail": null,
+        "scores": {
+          "dealer_hu": {
+            "win": 0,
+            "lose": null
+          },
+          "nondealer_hu": {
+            "win": 0,
+            "lose": null
+          }
+        }
+      },
+      "matched": true
+    },
+    {
+      "request": {
+        "hand": [
+          "5w",
+          "4w",
+          "6w",
+          "1w",
+          "1w",
+          "5w",
+          "6w",
+          "3w",
+          "1w",
+          "5w",
+          "3w",
+          "4w",
+          "3w"
+        ],
+        "draw": "4w",
+        "chain": {
+          "count": 0,
+          "piao": 0
+        },
+        "base": 1
+      },
+      "local": {
+        "hu": true,
+        "baotou": false,
+        "fan": 1
+      },
+      "official": {
+        "hu": true,
+        "baotou": false,
+        "fan": 1,
+        "detail": [
+          "平胡"
+        ],
+        "scores": {
+          "dealer_hu": {
+            "win": 24,
+            "lose": [
+              8,
+              8,
+              8
+            ]
+          },
+          "nondealer_hu": {
+            "win": 10,
+            "lose": [
+              8,
+              1,
+              1
+            ]
+          }
+        }
+      },
+      "matched": true
+    },
+    {
+      "request": {
+        "hand": [
+          "6w",
+          "3t",
+          "白",
+          "6b",
+          "5w",
+          "5t",
+          "2w",
+          "白",
+          "8w",
+          "4t",
+          "8w",
+          "6b",
+          "6b"
+        ],
+        "draw": "4w",
+        "chain": {
+          "count": 3,
+          "piao": 0
+        },
+        "base": 5
+      },
+      "local": {
+        "hu": true,
+        "baotou": false,
+        "fan": 8
+      },
+      "official": {
+        "hu": true,
+        "baotou": false,
+        "fan": 8,
+        "detail": [
+          "平胡",
+          "连杠×3"
+        ],
+        "scores": {
+          "dealer_hu": {
+            "win": 960,
+            "lose": [
+              320,
+              320,
+              320
+            ]
+          },
+          "nondealer_hu": {
+            "win": 400,
+            "lose": [
+              320,
+              40,
+              40
+            ]
+          }
+        }
+      },
+      "matched": true
+    },
+    {
+      "request": {
+        "hand": [
+          "白",
+          "4b",
+          "6t",
+          "6t",
+          "8w",
+          "8b",
+          "4b",
+          "8w",
+          "9w",
+          "3w",
+          "8b",
+          "1t",
+          "1t"
+        ],
+        "draw": "3w",
+        "chain": {
+          "count": 3,
+          "piao": 0
+        },
+        "base": 1
+      },
+      "local": {
+        "hu": true,
+        "baotou": false,
+        "fan": 16
+      },
+      "official": {
+        "hu": true,
+        "baotou": false,
+        "fan": 16,
+        "detail": [
+          "七对",
+          "连杠×3"
+        ],
+        "scores": {
+          "dealer_hu": {
+            "win": 384,
+            "lose": [
+              128,
+              128,
+              128
+            ]
+          },
+          "nondealer_hu": {
+            "win": 160,
+            "lose": [
+              128,
+              16,
+              16
+            ]
+          }
+        }
+      },
+      "matched": true
+    },
+    {
+      "request": {
+        "hand": [
+          "8t",
+          "4t",
+          "2b",
+          "8t",
+          "1w",
+          "8b",
+          "2w",
+          "白",
+          "4t",
+          "3b",
+          "白",
+          "3b",
+          "中"
+        ],
+        "draw": "8b",
+        "chain": {
+          "count": 2,
+          "piao": 0
+        },
+        "base": 2
+      },
+      "local": {
+        "hu": false,
+        "baotou": false,
+        "fan": 0
+      },
+      "official": {
+        "hu": false,
+        "baotou": false,
+        "fan": 0,
+        "detail": null,
+        "scores": {
+          "dealer_hu": {
+            "win": 0,
+            "lose": null
+          },
+          "nondealer_hu": {
+            "win": 0,
+            "lose": null
+          }
+        }
+      },
+      "matched": true
+    },
+    {
+      "request": {
+        "hand": [
+          "9b",
+          "5b",
+          "5b",
+          "4b",
+          "9b",
+          "白",
+          "3b",
+          "3w",
+          "4b",
+          "9b",
+          "6b",
+          "5w",
+          "7w"
+        ],
+        "draw": "6w",
+        "chain": {
+          "count": 1,
+          "piao": 0
+        },
+        "base": 1
+      },
+      "local": {
+        "hu": true,
+        "baotou": false,
+        "fan": 2
+      },
+      "official": {
+        "hu": true,
+        "baotou": false,
+        "fan": 2,
+        "detail": [
+          "平胡",
+          "杠开"
+        ],
+        "scores": {
+          "dealer_hu": {
+            "win": 48,
+            "lose": [
+              16,
+              16,
+              16
+            ]
+          },
+          "nondealer_hu": {
+            "win": 20,
+            "lose": [
+              16,
+              2,
+              2
+            ]
+          }
+        }
+      },
+      "matched": true
+    },
+    {
+      "request": {
+        "hand": [
+          "9w",
+          "中",
+          "2t",
+          "9b",
+          "西",
+          "发",
+          "西",
+          "发",
+          "7b",
+          "9w",
+          "2t",
+          "中",
+          "9b"
+        ],
+        "draw": "7b",
+        "chain": {
+          "count": 3,
+          "piao": 0
+        },
+        "base": 5
+      },
+      "local": {
+        "hu": true,
+        "baotou": false,
+        "fan": 16
+      },
+      "official": {
+        "hu": true,
+        "baotou": false,
+        "fan": 16,
+        "detail": [
+          "七对",
+          "连杠×3"
+        ],
+        "scores": {
+          "dealer_hu": {
+            "win": 1920,
+            "lose": [
+              640,
+              640,
+              640
+            ]
+          },
+          "nondealer_hu": {
+            "win": 800,
+            "lose": [
+              640,
+              80,
+              80
+            ]
+          }
+        }
+      },
+      "matched": true
+    },
+    {
+      "request": {
+        "hand": [
+          "5w",
+          "白",
+          "7t",
+          "2b",
+          "4b",
+          "北",
+          "6t",
+          "8t",
+          "白",
+          "5w",
+          "3b",
+          "白",
+          "北"
+        ],
+        "draw": "5w",
+        "chain": {
+          "count": 0,
+          "piao": 0
+        },
+        "base": 5
+      },
+      "local": {
+        "hu": true,
+        "baotou": true,
+        "fan": 2
+      },
+      "official": {
+        "hu": true,
+        "baotou": true,
+        "fan": 2,
+        "detail": [
+          "平胡",
+          "爆头"
+        ],
+        "scores": {
+          "dealer_hu": {
+            "win": 240,
+            "lose": [
+              80,
+              80,
+              80
+            ]
+          },
+          "nondealer_hu": {
+            "win": 100,
+            "lose": [
+              80,
+              10,
+              10
+            ]
+          }
+        }
+      },
+      "matched": true
+    },
+    {
+      "request": {
+        "hand": [
+          "4t",
+          "2w",
+          "3b",
+          "白",
+          "西",
+          "1t",
+          "南",
+          "3w",
+          "白",
+          "5t",
+          "6t",
+          "2t",
+          "8t"
+        ],
+        "draw": "9b",
+        "chain": {
+          "count": 3,
+          "piao": 0
+        },
+        "base": 5
+      },
+      "local": {
+        "hu": false,
+        "baotou": false,
+        "fan": 0
+      },
+      "official": {
+        "hu": false,
+        "baotou": false,
+        "fan": 0,
+        "detail": null,
+        "scores": {
+          "dealer_hu": {
+            "win": 0,
+            "lose": null
+          },
+          "nondealer_hu": {
+            "win": 0,
+            "lose": null
+          }
+        }
+      },
+      "matched": true
+    },
+    {
+      "request": {
+        "hand": [
+          "1t",
+          "4b",
+          "2b",
+          "白",
+          "4w",
+          "6t",
+          "1t",
+          "4b",
+          "7b",
+          "4w",
+          "白",
+          "6t",
+          "7b"
+        ],
+        "draw": "2b",
+        "chain": {
+          "count": 0,
+          "piao": 0
+        },
+        "base": 2
+      },
+      "local": {
+        "hu": true,
+        "baotou": true,
+        "fan": 4
+      },
+      "official": {
+        "hu": true,
+        "baotou": true,
+        "fan": 4,
+        "detail": [
+          "七对",
+          "爆头"
+        ],
+        "scores": {
+          "dealer_hu": {
+            "win": 192,
+            "lose": [
+              64,
+              64,
+              64
+            ]
+          },
+          "nondealer_hu": {
+            "win": 80,
+            "lose": [
+              64,
+              8,
+              8
+            ]
+          }
+        }
+      },
+      "matched": true
+    },
+    {
+      "request": {
+        "hand": [
+          "2b",
+          "6t",
+          "白",
+          "8w",
+          "北",
+          "白",
+          "白",
+          "2b",
+          "发",
+          "7w",
+          "发",
+          "8t",
+          "7t"
+        ],
+        "draw": "白",
+        "chain": {
+          "count": 3,
+          "piao": 0
+        },
+        "base": 1
+      },
+      "local": {
+        "hu": true,
+        "baotou": false,
+        "fan": 16
+      },
+      "official": {
+        "hu": true,
+        "baotou": false,
+        "fan": 16,
+        "detail": [
+          "平胡",
+          "连杠×3",
+          "4个白板"
+        ],
+        "scores": {
+          "dealer_hu": {
+            "win": 384,
+            "lose": [
+              128,
+              128,
+              128
+            ]
+          },
+          "nondealer_hu": {
+            "win": 160,
+            "lose": [
+              128,
+              16,
+              16
+            ]
+          }
+        }
+      },
+      "matched": true
+    },
+    {
+      "request": {
+        "hand": [
+          "3t",
+          "4t",
+          "白",
+          "6b",
+          "白",
+          "7w",
+          "白",
+          "3b",
+          "白",
+          "2b",
+          "8w",
+          "发",
+          "6w"
+        ],
+        "draw": "5b",
+        "chain": {
+          "count": 1,
+          "piao": 0
+        },
+        "base": 5
+      },
+      "local": {
+        "hu": true,
+        "baotou": false,
+        "fan": 4
+      },
+      "official": {
+        "hu": true,
+        "baotou": false,
+        "fan": 4,
+        "detail": [
+          "平胡",
+          "杠开",
+          "4个白板"
+        ],
+        "scores": {
+          "dealer_hu": {
+            "win": 480,
+            "lose": [
+              160,
+              160,
+              160
+            ]
+          },
+          "nondealer_hu": {
+            "win": 200,
+            "lose": [
+              160,
+              20,
+              20
+            ]
+          }
+        }
+      },
+      "matched": true
+    },
+    {
+      "request": {
+        "hand": [
+          "1b",
+          "白",
+          "4t",
+          "3t",
+          "3b",
+          "9w",
+          "5b",
+          "8w",
+          "4b",
+          "白",
+          "白",
+          "9w",
+          "6b"
+        ],
+        "draw": "白",
+        "chain": {
+          "count": 3,
+          "piao": 0
+        },
+        "base": 5
+      },
+      "local": {
+        "hu": true,
+        "baotou": false,
+        "fan": 16
+      },
+      "official": {
+        "hu": true,
+        "baotou": false,
+        "fan": 16,
+        "detail": [
+          "平胡",
+          "连杠×3",
+          "4个白板"
+        ],
+        "scores": {
+          "dealer_hu": {
+            "win": 1920,
+            "lose": [
+              640,
+              640,
+              640
+            ]
+          },
+          "nondealer_hu": {
+            "win": 800,
+            "lose": [
+              640,
+              80,
+              80
+            ]
+          }
+        }
+      },
+      "matched": true
+    },
+    {
+      "request": {
+        "hand": [
+          "白",
+          "6b",
+          "4t",
+          "4b",
+          "6b",
+          "2t",
+          "6t",
+          "白",
+          "5b",
+          "白",
+          "6b",
+          "6b",
+          "白"
+        ],
+        "draw": "5t",
+        "chain": {
+          "count": 2,
+          "piao": 0
+        },
+        "base": 5
+      },
+      "local": {
+        "hu": true,
+        "baotou": true,
+        "fan": 16
+      },
+      "official": {
+        "hu": true,
+        "baotou": true,
+        "fan": 16,
+        "detail": [
+          "平胡",
+          "连杠×2",
+          "4个白板",
+          "爆头"
+        ],
+        "scores": {
+          "dealer_hu": {
+            "win": 1920,
+            "lose": [
+              640,
+              640,
+              640
+            ]
+          },
+          "nondealer_hu": {
+            "win": 800,
+            "lose": [
+              640,
+              80,
+              80
+            ]
+          }
+        }
+      },
+      "matched": true
+    },
+    {
+      "request": {
+        "hand": [
+          "6b",
+          "白",
+          "8b",
+          "1b",
+          "2b",
+          "9w",
+          "7b",
+          "白",
+          "7w",
+          "3b",
+          "白",
+          "9t",
+          "8w"
+        ],
+        "draw": "7w",
+        "chain": {
+          "count": 1,
+          "piao": 0
+        },
+        "base": 5
+      },
+      "local": {
+        "hu": true,
+        "baotou": true,
+        "fan": 4
+      },
+      "official": {
+        "hu": true,
+        "baotou": true,
+        "fan": 4,
+        "detail": [
+          "平胡",
+          "杠开",
+          "爆头"
+        ],
+        "scores": {
+          "dealer_hu": {
+            "win": 480,
+            "lose": [
+              160,
+              160,
+              160
+            ]
+          },
+          "nondealer_hu": {
+            "win": 200,
+            "lose": [
+              160,
+              20,
+              20
+            ]
+          }
+        }
+      },
+      "matched": true
+    },
+    {
+      "request": {
+        "hand": [
+          "6b",
+          "西",
+          "7t",
+          "6b",
+          "白",
+          "4w",
+          "3w",
+          "白",
+          "5w",
+          "5w",
+          "3w",
+          "7t",
+          "白"
+        ],
+        "draw": "白",
+        "chain": {
+          "count": 0,
+          "piao": 0
+        },
+        "base": 5
+      },
+      "local": {
+        "hu": true,
+        "baotou": true,
+        "fan": 8
+      },
+      "official": {
+        "hu": true,
+        "baotou": true,
+        "fan": 8,
+        "detail": [
+          "七对",
+          "4个白板",
+          "爆头"
+        ],
+        "scores": {
+          "dealer_hu": {
+            "win": 960,
+            "lose": [
+              320,
+              320,
+              320
+            ]
+          },
+          "nondealer_hu": {
+            "win": 400,
+            "lose": [
+              320,
+              40,
+              40
+            ]
+          }
+        }
+      },
+      "matched": true
+    },
+    {
+      "request": {
+        "hand": [
+          "1t",
+          "白",
+          "白",
+          "8b",
+          "5w",
+          "白",
+          "白",
+          "9w",
+          "6w",
+          "6b",
+          "5b",
+          "6t",
+          "7t"
+        ],
+        "draw": "8w",
+        "chain": {
+          "count": 3,
+          "piao": 0
+        },
+        "base": 5
+      },
+      "local": {
+        "hu": false,
+        "baotou": false,
+        "fan": 0
+      },
+      "official": {
+        "hu": false,
+        "baotou": false,
+        "fan": 0,
+        "detail": null,
+        "scores": {
+          "dealer_hu": {
+            "win": 0,
+            "lose": null
+          },
+          "nondealer_hu": {
+            "win": 0,
+            "lose": null
+          }
+        }
+      },
+      "matched": true
+    },
+    {
+      "request": {
+        "hand": [
+          "3w",
+          "2w",
+          "5b",
+          "5w",
+          "4w",
+          "4b",
+          "5t",
+          "3w",
+          "3b",
+          "7w",
+          "7w",
+          "5t",
+          "4w"
+        ],
+        "draw": "7w",
+        "chain": {
+          "count": 0,
+          "piao": 0
+        },
+        "base": 2
+      },
+      "local": {
+        "hu": true,
+        "baotou": false,
+        "fan": 1
+      },
+      "official": {
+        "hu": true,
+        "baotou": false,
+        "fan": 1,
+        "detail": [
+          "平胡"
+        ],
+        "scores": {
+          "dealer_hu": {
+            "win": 48,
+            "lose": [
+              16,
+              16,
+              16
+            ]
+          },
+          "nondealer_hu": {
+            "win": 20,
+            "lose": [
+              16,
+              2,
+              2
+            ]
+          }
+        }
+      },
+      "matched": true
+    },
+    {
+      "request": {
+        "hand": [
+          "6t",
+          "中",
+          "4b",
+          "4b",
+          "8t",
+          "3b",
+          "8t",
+          "2b",
+          "3b",
+          "北",
+          "6t",
+          "2b",
+          "中"
+        ],
+        "draw": "北",
+        "chain": {
+          "count": 2,
+          "piao": 0
+        },
+        "base": 5
+      },
+      "local": {
+        "hu": true,
+        "baotou": false,
+        "fan": 8
+      },
+      "official": {
+        "hu": true,
+        "baotou": false,
+        "fan": 8,
+        "detail": [
+          "七对",
+          "连杠×2"
+        ],
+        "scores": {
+          "dealer_hu": {
+            "win": 960,
+            "lose": [
+              320,
+              320,
+              320
+            ]
+          },
+          "nondealer_hu": {
+            "win": 400,
+            "lose": [
+              320,
+              40,
+              40
+            ]
+          }
+        }
+      },
+      "matched": true
+    },
+    {
+      "request": {
+        "hand": [
+          "1t",
+          "9w",
+          "南",
+          "9w",
+          "9w",
+          "8b",
+          "8b",
+          "2t",
+          "白",
+          "2t",
+          "白",
+          "1t",
+          "南"
+        ],
+        "draw": "8b",
+        "chain": {
+          "count": 0,
+          "piao": 0
+        },
+        "base": 2
+      },
+      "local": {
+        "hu": true,
+        "baotou": true,
+        "fan": 4
+      },
+      "official": {
+        "hu": true,
+        "baotou": true,
+        "fan": 4,
+        "detail": [
+          "七对",
+          "爆头"
+        ],
+        "scores": {
+          "dealer_hu": {
+            "win": 192,
+            "lose": [
+              64,
+              64,
+              64
+            ]
+          },
+          "nondealer_hu": {
+            "win": 80,
+            "lose": [
+              64,
+              8,
+              8
+            ]
+          }
+        }
+      },
+      "matched": true
+    }
+  ],
+  "retrieved_at": "2026-09-09T03:29:29.210857+00:00"
+}

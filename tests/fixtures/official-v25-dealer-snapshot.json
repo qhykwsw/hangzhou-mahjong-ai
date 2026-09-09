@@ -1,0 +1,65 @@
+{
+  "seq": 0,
+  "gap": false,
+  "snapshot": {
+    "game_id": "fixture-game",
+    "phase": "draw",
+    "round_no": 1,
+    "dealer": 0,
+    "turn": 0,
+    "waited_seat": 0,
+    "wall_remaining": 83,
+    "discards": [
+      [],
+      [],
+      [],
+      []
+    ],
+    "melds": [
+      [],
+      [],
+      [],
+      []
+    ],
+    "hand_counts": [
+      14,
+      13,
+      13,
+      13
+    ],
+    "my_hand": [
+      "1b",
+      "8w",
+      "2w",
+      "7t",
+      "4t",
+      "南",
+      "2t",
+      "6w",
+      "东",
+      "9t",
+      "9t",
+      "5b",
+      "西",
+      "2t"
+    ],
+    "seat": 0,
+    "last_discard": "0w",
+    "drawn_tile": "2t",
+    "god": {
+      "baotou": false,
+      "chain_count": 0,
+      "catch_play": false,
+      "god_discarder_seat": -1
+    },
+    "scores": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  "events": null,
+  "pending": false,
+  "finished": false
+}

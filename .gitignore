@@ -1,0 +1,16 @@
+.playwright-mcp/
+.DS_Store
+._*
+.venv/
+.superpowers/
+.worktrees/
+.pytest_cache/
+.testmondata
+.local/
+__pycache__/
+*.pyc
+image/
+revision_record.txt
+.claude
+.codex
+*.egg-info/

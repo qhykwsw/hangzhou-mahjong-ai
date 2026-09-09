@@ -1,0 +1,516 @@
+<!-- 接入指南正文单一数据源（2026-09-05 起）：本文件经 go:embed 进服务端，
+     门户页「接入指南」Tab 与 GET /portal/api/guide（免认证全文 API）共用。
+     ⚠ 维护注意：
+     1. 修改只改本文件——不要再去 web/portal/index.html 抄副本（页面是 fetch 注入）。
+     2. 本文件经 innerHTML 注入渲染：只允许受控静态内容，禁止任何运行时数据/外部输入拼接。
+     3. 文件内含番型计算工具 DOM（§1.5 fc-*）——其初始化绑定在 index.html 的 fcInitTool()，
+        新增依赖正文 DOM 的顶层脚本会 null 崩溃（历史 C1 教训），绑定须收敛进 fcInitTool。
+     4. docs/胡牌规则与番数计算.md 为权威细则文档，改规则须人工同步。 -->
+<div class="guide-block" id="guide-rules">
+      <h2>一、对战规则</h2>
+
+      <h3>1.1 平台固有规则（所有锦标赛一致）</h3>
+      <ul>
+        <li><b>牌具</b>：136 张（万/筒/条 1-9 各 4 张 + 东南西北中发白各 4 张），无花牌；<b>白板 = 财神（百搭）</b>，可替代任意牌。</li>
+        <li><b>财神限制</b>：财神本身不能被吃、碰、杠、胡，可主动打出；<b>打出财神那一圈（抓打圈）</b>：其余玩家不能吃、碰、明杠（仅暗杠与自摸胡），出牌只能打刚摸到的牌。<b>打财神者本人不受此限</b>（可吃碰明杠、可任意出牌）——圈内吃碰后再打财神 = 财飘链 +1（圈以本人为新打财神者重启），打其他牌 = 链断且圈解除（2026-09-08 裁定）。</li>
+        <li><b>胡牌</b>：只能自摸，不允许点炮；禁止抢杠胡。</li>
+        <li><b>连庄</b>：直上三连庄——首局即按 ×8 计（不从平庄 ×2、二连庄 ×4 递增）；流局庄家连庄。</li>
+        <li><b>牌墙</b>：最后 10 墩（20 张）保留不摸；最后 10 墩之内禁止杠牌；摸完无人胡则流局。</li>
+        <li><b>吃碰</b>：吃最多 2 摊（<b>服务端强制</b>：本局已有 2 组吃副露后再吃被拒，409）；碰、杠不限次数；碰（含明杠）窗口先于吃窗口。</li>
+      </ul>
+
+      <h3>1.2 胡牌判定</h3>
+      <ul>
+        <li><b>普通胡</b>：4 组面子 + 1 对将（面子 = 顺子 / 刻子 / 杠）；吃碰杠折算（吃最多 2 摊）。</li>
+        <li><b>七对子</b>：7 个对子，<b>禁止吃碰明杠暗杠</b>；财神可补对；<b>可财飘</b>（2026-09-02 修订：七对与飘/杠链叠加计番；杠因副露与七对互斥）。</li>
+        <li><b>爆头</b>：听牌态摸<b>任意 1 张牌</b>上来即胡（财神数不限，支持副露；<b>正好 4 张白板亦按此判定</b>——4 白听任意即胡时计爆头并与「4 个白板 ×2」叠加，2026-09-07 修订）。</li>
+        <li><b>弃胡</b>：摸牌后不强制自动胡——客户端自行判胡（快照无 allowed_actions），可提交 <code>hu</code>，<b>也可弃胡打牌</b>（飘/杠链前提）；可胡但超时未响应 → 服务端自动胡兜底。</li>
+      </ul>
+
+      <h3>1.3 番型倍率（在自摸基础上连乘）</h3>
+      <p>总番 = 1 × 分支因子 × 2^动作链次数 ×（4 白板 ×2）×（爆头 ×2）；计算顺序：<b>分支 → 动作链 → 4 白板 → 爆头（最后统一加）</b>。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>番型</th><th>说明</th><th>倍率</th></tr></thead>
+          <tbody>
+            <tr><td>平胡</td><td>普通自摸胡，无财神特殊状态</td><td>×1</td></tr>
+            <tr><td>七对子</td><td>7 对胡牌</td><td>×2</td></tr>
+            <tr><td>豪华七对</td><td>七对含 1 组四张（4 张真白板在其余牌全为自然对、未用于补落单时也算 1 组；白板已作百搭补配其他牌成对时不重复计豪华）</td><td>×4</td></tr>
+            <tr><td>双豪华七对</td><td>七对含 2 组四张</td><td>×8</td></tr>
+            <tr><td>三豪华七对</td><td>七对含 3 组四张</td><td>×16</td></tr>
+            <tr><td>杠开</td><td>杠后补的那张牌直接自摸胡（杠上花）= 链 1 动作</td><td>×2</td></tr>
+            <tr><td>杠爆</td><td>爆头状态下杠，杠补牌胡 = 爆头 × 杠开</td><td>×4</td></tr>
+            <tr><td>财飘</td><td>爆头状态打出财神继续听任意牌胡 = 爆头 × 飘 1 动作</td><td>×4</td></tr>
+            <tr><td>双财飘</td><td>连续两次打出财神再爆头胡</td><td>×8</td></tr>
+            <tr><td>三财飘</td><td>连续三次打出财神再爆头胡</td><td>×16</td></tr>
+            <tr><td>4 个白板</td><td>胡牌时手牌留存 + 链内飘出的白板 = 4（正好 4 张；普通打出的、杠出的不算）</td><td>×2</td></tr>
+            <tr><td>爆头</td><td>见 1.2 判定（最后统一加；正好 4 白板除外）</td><td>×2</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <ul>
+        <li><b>动作链</b>：飘与杠可连续、可组合，<b>每个飘/杠动作 ×2</b>（杠飘组合叠加计算）；打出非飘非杠的牌（含非爆头态打白板）→ 链断重新计数。</li>
+        <li>爆头摸到白板：可提交 <code>hu</code>（爆头 ×2）或弃胡打白飘（博财飘 ×4 起）——策略权衡由 AI 决定。</li>
+        <li>七对也可以爆头（七客 / 豪华七客）：如 6 对 + 1 财神单吊 = 七对 ×2 × 爆头 ×2 = ×4。</li>
+        <li>平胡分支最大牌型：3 连杠 + 三财飘 + 爆头 + 4 白板 = 2⁶ × 2 × 2 = ×256。</li>
+        <li><b>全局最大（2026-09-02 修订）</b>：三豪华七对 + 三财飘 + 4 白板 + 爆头 = ×16 × 2³ × 2 × 2 = <b>×512</b>——七对形爆头听牌（3 组四张 + 1 白）弃胡飘可达。</li>
+      </ul>
+
+      <h3>1.4 计分公式</h3>
+      <p><b>得分 = 底分 × 胡牌番型倍率 ×（庄家 ×8 / 闲家 ×1）</b>，三家分别结算：</p>
+      <ul>
+        <li>庄家胡：三家闲家各付 底分 × 倍率 × 8</li>
+        <li>闲家胡：庄家付 底分 × 倍率 × 8；另外两个闲家各付 底分 × 倍率 × 1</li>
+      </ul>
+
+      <h3>1.5 番型计算工具（实时试算）</h3>
+      <p>输入 13 张手牌 + 1 张摸牌，实时计算胡牌判定、爆头、番型倍率与庄/闲得分（计算口径与对局一致：普通胡 4 面子+将 或 七对）。</p>
+
+      <div class="fc-card">
+        <div class="fc-row-label">
+          手牌 <b id="fcHandCount">13</b>/13 · 摸牌 <b id="fcDrawCount">1</b>/1
+          <span class="fc-hint">点牌或 ＋ 选牌 · 自动理牌 · 实时计算</span>
+        </div>
+        <div class="fc-tiles">
+          <div id="fcHandSlots" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+          <div class="fc-draw-sep"></div>
+          <div class="fc-draw-cell">
+            <div id="fcDrawSlot"></div>
+            <span class="fc-draw-tag">摸</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="fc-card">
+        <div class="fc-ctl-row">
+          <div class="fc-ctl">
+            <label>动作链（每个动作 ×2）</label>
+            <div class="fc-chain-btns" id="fcChainBtns"></div>
+          </div>
+          <div class="fc-ctl">
+            <label>底分</label>
+            <input type="number" id="fcBase" value="1" min="1" max="10000" step="1">
+          </div>
+          <div class="fc-spacer"></div>
+          <button class="fc-btn-ghost" id="fcResetBtn">重置默认牌型</button>
+          <button class="fc-btn-ghost danger" id="fcClearBtn">清空</button>
+        </div>
+      </div>
+
+      <div class="fc-card">
+        <div class="fc-card-title">计算结果</div>
+        <div id="fcResult"></div>
+      </div>
+
+      <div class="fc-modal-mask" id="fcMask">
+        <div class="fc-modal">
+          <h3 id="fcPickerTitle">选择牌</h3>
+          <p class="fc-picker-sub" id="fcPickerSub"></p>
+          <div id="fcPickerGroups"></div>
+          <div class="fc-modal-foot"><button class="fc-btn-ghost" id="fcPickerCancel">取消</button></div>
+        </div>
+      </div>
+
+      <div class="guide-note">
+        <b>AI 程序化调用（免认证）</b>：同一工具的后端端点为
+        <code>POST /portal/api/tools/fan-calc</code> —— 免登录、每 IP 限速 10/s、纯计算无状态变更，
+        胡牌判定/爆头/番型口径与对局一致（普通胡 4 面子+将 或 无副露七对；4 白板 = 手留 + 链内飘出）。
+        可作 AI 离线试算与结算校验。
+      </div>
+      <pre class="guide-code"><code>POST /portal/api/tools/fan-calc
+{
+  "hand": ["1w","1w","1w","2w","3w","4w","5w","6w","7w","8w","9w","东","东"],  // 恰 13 张
+  "draw": "东",                    // 恰 1 张
+  "chain": { "count": 0, "piao": 0 },  // 动作链：count 0-6（每动作 ×2），piao ≤ count；手留白 + piao ≤ 4
+  "base": 1                        // 底分 1-10000（缺省 1）
+}</code></pre>
+      <pre class="guide-code"><code>{
+  "hu": true, "baotou": false, "fan": 1,
+  "detail": ["平胡"],
+  "scores": {
+    "dealer_hu":    { "win": 24, "lose": [8, 8, 8] },   // 庄家胡：三家各付 底分×番×8
+    "nondealer_hu": { "win": 10, "lose": [8, 1, 1] }    // 闲家胡：庄家 ×8，闲家 ×1
+  }
+}</code></pre>
+      <p class="guide-note">牌码与对局 API 一致：<code>1w-9w / 1b-9b / 1t-9t / 东南西北中发白</code>（白板 = 财神）。
+      请求字段校验失败返回 <code>400 INVALID_INPUT</code>（附中文原因）；超限返回 <code>429 RATE_LIMITED</code>。</p>
+
+      <h3>1.6 锦标赛可变参数（以 API 返回为准，不可写死）</h3>
+      <div class="guide-note">
+        <b>注意</b>：底分、局数、同时场数 M、有财必拷响、碰/吃/出牌窗口等由创建者配置，<b>每场锦标赛可能不同</b>——机器人必须以 <code>GET /api/tournaments/me/rules</code>（或 <code>GET /api/tournaments/{id}</code>）返回的 config 为准。
+      </div>
+      <p>参赛令牌（报名令牌）作用域直达，无需知道锦标赛 id：</p>
+      <pre class="guide-code"><code>GET /api/tournaments/me/rules
+Authorization: Bearer &lt;参赛令牌&gt;</code></pre>
+      <p>响应示例：</p>
+      <pre class="guide-code"><code>{
+  "tournament_id": "t_xxx_b0",
+  "name": "测试房间 #1",
+  "status": "registering",
+  "config": {
+    "M": 10, "Rounds": 1, "BaseScore": 1,
+    "YouCaiBiKao": false,
+    "PengTimeoutSec": 1, "ChiTimeoutSec": 1, "DiscardTimeoutSec": 3,
+    "StartAt": 1756656000, "RegisterDeadlineAt": 0
+  }
+}</code></pre>
+      <p>config 字段含义：</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>字段</th><th>含义</th></tr></thead>
+          <tbody>
+            <tr><td><code>M</code></td><td>每人同时参赛场数上限（该锦标赛内）</td></tr>
+            <tr><td><code>Rounds</code></td><td>每场比赛的局数</td></tr>
+            <tr><td><code>BaseScore</code></td><td>底分（计分公式的底分）</td></tr>
+            <tr><td><code>YouCaiBiKao</code></td><td>有财必拷响（手上有财神时不允许平胡，必须爆头/杠开才能胡）</td></tr>
+            <tr><td><code>PengTimeoutSec</code></td><td>碰窗口（默认 1s，固定走满防时间侧信道）</td></tr>
+            <tr><td><code>ChiTimeoutSec</code></td><td>吃窗口（默认 1s，固定走满）</td></tr>
+            <tr><td><code>DiscardTimeoutSec</code></td><td>出牌思考（默认 3s；可胡时超时自动胡，否则超时自动打出最右一张牌）</td></tr>
+            <tr><td><code>StartAt</code></td><td>开赛时间（unix 秒）</td></tr>
+            <tr><td><code>RegisterDeadlineAt</code></td><td>报名截止（unix 秒；0 = 无截止）</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="guide-block" id="guide-api">
+      <h2>二、API 参考（玩家 API）</h2>
+      <p>认证：所有玩家 API 均需请求头 <code>Authorization: Bearer &lt;令牌&gt;</code>。令牌来源（v24 起，<code>POST /api/users</code> 匿名注册已删除）：门户「报名」/「测试房间」派发<b>参赛令牌</b>（scoped，绑定具体锦标赛，仅显示一次）或门户「我的 AI 身份」签发<b>全局令牌</b>（首访明文一次、可轮换）；运营/验收另可经管理面造号端点取得绑定全局令牌。服务端只存令牌的 SHA-256，丢失只能重新生成。<b>例外</b>：§2.5 的测试房间数据 API 免认证（房间 id 即凭证，每房间独立限速 5/s + 每来源总量兜底 1000/s）。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>端点</th><th>方法</th><th>用途</th></tr></thead>
+          <tbody>
+            <tr><td><code>/api/me</code></td><td>GET</td><td>我的信息：user_id + 令牌绑定的 tournament_id（报名令牌；全局令牌为空串）+ 进行中比赛列表 active_games</td></tr>
+            <tr><td><code>/api/tournaments/me/rules</code></td><td>GET</td><td>当前令牌绑定锦标赛的规则 config（报名令牌直达，无需锦标赛 id；全局令牌返回 400 TOKEN_NOT_SCOPED）</td></tr>
+            <tr><td><code>/api/tournaments/me/ready</code></td><td>POST</td><td>到位（报名令牌直达；全局令牌返回 400 TOKEN_NOT_SCOPED）</td></tr>
+            <tr><td><code>/api/tournaments/{id}/register</code></td><td>POST</td><td>报名（开赛前；幂等；校验同时 16 场上限）</td></tr>
+            <tr><td><code>/api/tournaments/{id}/ready</code></td><td>POST</td><td>到位（开赛前；幂等；须先报名）。新建赛事分桌只认开赛时刻 ≤90s 内有已认证请求者（连上又断开会被剔除）</td></tr>
+            <tr><td><code>/api/tournaments/{id}</code></td><td>GET</td><td>锦标赛状态：status / config / 报名与 ready 人数 / 我的比赛 my_games / ranking 排名 / voided 原因（仅参赛者可查）。多阶段锦标赛另含阶段字段组（stage / stage_status / stage_crashed / qualified / qualify_role）——见 <a href="#guide-multistage">§2.6</a></td></tr>
+            <tr><td><code>/api/games/{id}/state?seq=N</code></td><td>GET</td><td>长轮询状态与事件流：seq=0 返回全量快照（含你的手牌、座位 seat、窗口成员 responding_seats 等自主决策字段）；seq=N 返回 N 之后的新事件；无新事件时挂起最多 30s 后返回 {"pending":true}；seq 落后当前局（round_ended 后新局已发牌、不产生事件）→ 立即返回全量快照（gap:true）</td></tr>
+            <tr><td><code>/api/games/{id}/notify</code></td><td>GET</td><td><b>SSE 通知流</b>（v12 起，服务器推送）：连接即收初始帧 <code>{"seq":N}</code>（当前事件水位）；此后每次状态变更（出牌/摸牌/吃/碰/杠/胡/流局/超时等任意事件）推 <code>{"seq":新水位}</code>——<b>帧只含 seq 信号，不含变化内容</b>；每 30s 一行 <code>: keepalive</code> 维持连接；场终/死场推 <code>{"seq":N,"closed":true}</code> 后关流。收帧后按需 GET /state?seq=本地 拉增量（跨局/落后>256 自动回全量快照）。每用户 32 并发连接（429），不占 /state 的 16/s 频率额度</td></tr>
+            <tr><td><code>/api/games/{id}/action</code></td><td>POST</td><td>提交动作：{"action":"discard|chi|peng|gang|hu|pass","tile":"1w"}——服务端纯验证：合法即执行、不合法 409（动作合法性客户端自研判定，快照无 allowed_actions）；吃可附加 <code>"tiles":["1w","2w"]</code> 指定用哪两张手牌吃（多组合时可选择），缺省服务端取第一组可行顺子</td></tr>
+            <tr><td><code>/api/match</code></td><td>POST</td><td>自动匹配建房与入席（v13 起，全自动）：用<b>全局 token</b>——仅收<b>门户绑定身份</b>（「我的 AI 身份」签发或管理面造号；存量匿名全局令牌 403 PORTAL_BINDING_REQUIRED，v24 起；报名令牌 400 TOKEN_NOT_SCOPED）。服务端从自动匹配池（只含系统按默认配置自动创建的自动房，kind=auto）按就绪席多、开赛早者优先选房入席，无可兼容候选则自动建新房并把你作为首位入席——成功返回 <code>{room_id, config, round_no}</code>，之后用同一全局 token 照常参赛（<code>GET /api/tournaments/{room_id}</code> 的 my_games 发现场次、<code>/state</code> 轮询、<code>/action</code> 出招）。等待期重复调用<b>幂等返回原房</b>，绝不双房双席。body 可选 <code>{"M":10,"Rounds":8}</code>（小写键亦收）声明可承受上限（≤ 过滤——上限须 ≥ 服务默认；缺省/键 ≤0 = 不限）；显式上限低于服务默认（M=10、Rounds=8，v15 起）→ 404 NO_ROOM_AVAILABLE（永久条件，不重试）。满 4 人即开 <b>M=10 场并发对局 × 每场 8 局</b>（同一 4 人、座次逐场重洗，最晚场终后结算——单会话样本 80 手/人）。整场打完（finished 约 60s 宽限）自动房自动关停，玩家 API 对该房一律 404——赛果以最后一次 /state 快照与门户复盘为准；再打重调本端点（每次新会话新房）。限速 10 次/分/用户</td></tr>
+            <tr><td><code>/api/test-rooms/{id}/games</code></td><td>GET</td><td>测试房间局列表（<b>免认证</b>）：[{batch, game_id, status}]，batch 升序——每局结束即可按需拉取（跨轮房间含全部轮次历史）</td></tr>
+            <tr><td><code>/api/test-rooms/{id}/games/{batch}/events</code></td><td>GET</td><td>该局完整对战事件流（<b>免认证</b>）：blocks 分块（含四家手牌）+ rounds 局结果 + seats 座位→名字映射——赛后拉取用于算法优化；running 场次 403，房间删除后 404。<b>只服务 test/auto 房</b>（正式锦标赛 id 一律 404）；seats[].name：test 房 = 自命名玩家名，auto 房 = <b>AI 昵称</b>（真名绝不下发，昵称缺失为空串）</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="guide-note">
+        <b>自动匹配 bot 全流程（v13 起；v24 修订）</b>：门户登录后首访「我的 AI 身份」拿全局 token → <code>POST /api/match</code> 拿 <code>room_id</code>
+        → 按 <code>GET /api/tournaments/{room_id}</code> 的 my_games 轮询出 game_id → <code>/state</code> + <code>/action</code>
+        照常打完；等待期重复调 match 幂等返回原房。整场打完（finished 约 60s 宽限）房间自动关停
+        （closed）——此后该房玩家 API 一律 404，赛果以最后一次 <code>/state</code> 终局快照与门户房间详情/复盘为准；
+        想再打重新调 <code>/api/match</code>（每次新会话新房）。
+      </div>
+
+      <div class="guide-note">
+        <b>排行榜三榜（2026-09-07 起）</b>：门户「排行榜」Tab = 积分总榜（全史/今日/周，2026-09-05）
+        + <b>胡大牌榜</b>——全史单榜，行 = 自动匹配房整场完整打完（finished；宽限后 closed 照计；
+        void/崩溃收敛/强关/测试房/正式赛不计）的<b>每一局自摸胡手</b>（流局不计），数据经门户
+        <code>GET /portal/api/leaderboard/huge-win</code> 拉取（OpenID 登录态）。排序 = 番数↓ → 得分↓
+        （庄闲分差已含）→ 该牌型全史次数↓ → 胡手时刻（后发生优先）→ user_id；行含 <code>detail</code>
+        （番型组合数组）、<code>count</code>（该牌型全史共胡出次数注记）、<code>room_id/game_id</code> 复盘导航与
+        <code>can_replay</code>（该行房间当前用户是否 ready 参与者——false 行不渲染复盘入口；与测试/自动房
+        复盘门禁同源：复盘只对参赛者/owner 域开放）。me = 本人全史最佳手：500 名内精确名次（≤32 即榜内
+        同行高亮）、500 名外独立行 + rank:null、零记录 null。top 恒完整 32 行不因 me 剔行
+        （2026-09-07 由 20 升至 32）。
+      </div>
+
+      <div class="guide-note">
+        <b>单场得分榜（2026-09-07 起，第三榜「单场分」）</b>：全史单榜，行 = 自动匹配房整场完整打完
+        （finished；宽限后 closed 照计；void/崩溃收敛/强关/测试房/正式赛不计）的<b>场次冠军</b>——该场
+        final_scores 总分最高座位，同场并列最高全出（每场 1–3 行）、冠军分 ≤0（零和计分 = 四家全 0）
+        的场次不产行；数据经门户 <code>GET /portal/api/leaderboard/best-game</code> 拉取（OpenID 登录态）。
+        排序 = 冠军分↓ → 场完成时刻（后发生优先）→ user_id → game_id。行含 <code>score</code>（冠军净分）
+        与战绩字段：<code>wins</code>（冠军该场胡把数）与互斥三档 <code>pinghu</code>（平胡）/
+        <code>baotou</code>（爆头）/ <code>big</code>（大牌 kind+次数，kind 升序；三档合计 = wins），
+        以及 <code>lianzhuang</code>（庄胡把数 = 冠军以庄家身份自摸胡的局数）、<code>room_id/game_id</code>
+        复盘导航与 <code>can_replay</code> 行级门禁（同胡大牌榜）。me = 本人最优冠军场，名次恒全史精确
+        （无 500 帽）；top 恒完整 32 行不因 me 剔行。<b>存量场照计</b>：本功能部署前打完的存量 auto 场
+        games 数据完好照常入榜（得分真实），但其战绩按当时库中可读胡行计——早期长局 rounds 每场仅尾部
+        1–2 行，冠军行可显示 wins=0（页面灰「—」），属历史缺口、不补录。
+      </div>
+
+      <div class="guide-note">
+        <b>上期前四置顶（v27 起，今日榜/周榜）</b>：积分榜端点 <code>GET /portal/api/leaderboard</code>
+        响应新增 <code>prev</code> 键——上一期前四名 + 请求者 uid + 上一期第一名的连续霸榜期数；
+        <code>period=all</code> 时为 <code>null</code>，仅 <code>today|week</code> 有值。字段 =
+        <code>{label, from, to, me_uid, top[]}</code>：
+        <code>label</code> 服务端出中文（<code>昨日榜</code> / <code>上周榜</code>，前端不自造期间语义）；
+        <code>from</code>/<code>to</code> = 上一期窗口 <code>[from, to)</code>（北京时间切界，
+        <code>to</code> 恒等于本期窗口起点、为<b>排他上界</b>）；<code>me_uid</code> = 请求者自身 user_id
+        （本期无战绩、主榜 <code>me</code> 为 null 时仍可定位本人行——前端只按
+        <code>user_id === me_uid</code> 高亮，禁止按 name 匹配）；<code>top</code> ≤4 行、字段与主榜行
+        同形（<code>rank/user_id/name/rooms/firsts/score</code>）。<b>三态</b>：<code>period=all</code> →
+        <code>prev:null</code>；上一期零对局 → <code>prev.top:[]</code>（空数组，非 null）；否则 ≤4 行。
+        <code>streak</code>（可选整数，仅 rank=1 行且 ≥2 时出现）= 该用户从上一期起连续为「该期第一名」
+        的期数（含上一期本身；某期全平台零 auto 房结算 = <b>空档即断</b>，换人亦断），前端渲染
+        「👑 连续 N 日霸榜」/「👑 连续 N 周霸榜」徽章。<b>显示值为回退上限（日 60 / 周 8），触顶显示
+        精确上限值——可能低于真实连续数</b>。主榜 <code>top</code>/<code>me</code>/限速/no-store 语义零变化。
+      </div>
+
+      <h3>2.1 协议要点（AI 接入必读）</h3>
+      <ul>
+        <li><b>快照规范</b>：seq=S 的响应已包含全部 ≤S 的事件，快照是规范真相；客户端局面 = 快照 + 后续增量事件（事件带自身 seq，校验连续性）；跨局落后返回的快照同样规范（含新局 round_no/phase/my_hand）。</li>
+        <li><b>失步恢复</b>：发现缺口（响应含 gap:true）或动作 409 后，用 seq=0 重建全量快照。</li>
+        <li><b>跨局边界（v10 起）</b>：每局结束（round_ended）后新局自动发牌<b>不产生任何事件</b>——事件流在新局首个动作前为空，庄家第 14 张为发牌直抽、无摸牌事件。此时继续用上一局末的 seq 轮询会<b>立即收到新局全量快照</b>（gap:true，含你的新局手牌 my_hand/round_no/phase），不会挂起至庄家出牌超时自动出牌；新局手牌一律以快照为准。</li>
+        <li><b>round_ended 自带局号/庄键（v19 起）</b>：每局结束的 <code>round_ended</code> 事件——胡牌（<code>draw:false</code>）与流局（<code>draw:true</code>）同款——携带 <code>round_no</code>（本局局号，1 基）/ <code>dealer</code>（本局庄家座）两键，按序消费无需自行推导；纯加性负载，旧 bot 忽略未知键零影响（新键可作复盘/统计/跨局对账依据）。</li>
+        <li><b>通知流（v12 起，可选）</b>：不想高频轮询 `/state` 发现他人动作，可开 `GET /api/games/{id}/notify` SSE 流：收到 <code>{"seq":N}</code> 帧后对比本地已消费 seq，落后则 GET /state?seq=本地（快照/gap 语义不变），不落后丢帧即可；帧不含牌面/动作，牌面仍须按需拉取。<b>游标纪律</b>：/state 的 seq 参数语义 =「N 之后的事件」——游标永远是本地已消费 seq，初始帧的 seq 是包含式水位（服务器已发到 N），<b>不可</b>直接当轮询游标（会跳过之前全部事件）；游标未知请 seq=0 拿快照起步。</li>
+        <li><b>私有信息</b>：事件流只含自己的摸牌；他人手牌绝不出现。</li>
+        <li><b>超时兜底</b>：出牌思考超时——可胡时服务端自动胡（弃胡兜底，不丢番），否则自动打出最右一张牌；碰/吃窗口固定走满（防时间侧信道；抓打圈内窗口只对豁免方开放，同样固定走满）——AI 无响应比赛不会卡死，但积分损失不可避免。</li>
+        <li><b>自研动作判定</b>（v2 起，快照无 <code>allowed_actions</code>）：客户端依快照字段自判可执行动作——<code>seat</code>（本人座位，观赛 -1）、<code>phase</code>（<code>deal|draw|response_peng|response_chi|settled|finished</code>）、<code>turn</code>（当前行动座位）、<code>responding_seats</code>（响应窗口成员）、<code>drawn_tile</code>（仅本人刚摸的牌）、<code>melds</code>（四家副露 <code>{kind,tiles}</code>——本人吃摊数 = <code>melds[seat]</code> 中 <code>kind=="chi"</code> 的组数）、<code>god.catch_play</code>（抓打圈）、<code>god.god_discarder_seat</code>（抓打圈豁免方座位，无圈 = <code>-1</code>；本人受限 ⇔ <code>catch_play &amp;&amp; god_discarder_seat != seat</code>）。<code>draw</code> 且 <code>turn==seat</code> 可出牌/胡/杠；窗口阶段仅 <code>responding_seats</code> 成员可碰/吃/明杠/pass，且 <b>吃摊数已达 2 组时不可再吃</b>（吃最多 2 摊，服务端 409）。<b>窗口「已响应」状态须客户端本地跟踪</b>——重复提交 pass/动作返回 409 INVALID_ACTION。</li>
+        <li><b>弃胡机制</b>：摸牌后不强制自动胡——客户端自行判胡（快照无 allowed_actions）后可提交 <code>{"action":"hu"}</code> 胡牌，也可继续打牌（飘/杠链前提：爆头态摸白板弃胡打出 = 财飘）。</li>
+        <li><b>快照 god 字段</b>（本人视角）：<code>baotou</code>（爆头状态）、<code>chain_count</code>（本人动作链次数：飘/杠累计，断链清零）、<code>catch_play</code>（抓打圈）、<code>god_discarder_seat</code>（抓打圈豁免方座位：打财神者本人；无圈 = <code>-1</code>——圈中等于本人 <code>seat</code> 即豁免，可吃碰明杠与任意出牌）。</li>
+        <li><b>多阶段锦标赛（v7 起）</b>：普通锦标赛打完一个阶段 ≠ 结束——status 会停在 <code>stage_done</code>（等管理员推进）或进入 <code>stage_open</code>（下一阶段资格确认）；决赛轮并列还会自动加赛（新 game_id 出现）。阶段协议见 <a href="#guide-multistage">§2.6</a>，排名判定链见 <code>docs/胡牌规则与番数计算.md</code> §7。</li>
+      </ul>
+
+      <h3>2.2 版本自检（推荐）</h3>
+      <p>系统迭代快，接口可能变更。bot 启动时拉 <code>GET /portal/api/guide/version</code>（免认证，5/s）
+      获取服务器接入指南版本号与变更日志，与本 bot 开发时已知版本比对——发现 <b>BREAKING</b> 变更即提示
+      人工核对（版本为递增整数，直接数值比较；返回结构见下方示例）。</p>
+      <pre class="guide-code"><code># 版本自检示例（纯标准库，随最小 Bot 同款姿势）
+import json, ssl, urllib.request
+
+KNOWN = 1  # 本 bot 开发时对应的接入指南版本（写在代码里）
+ctx = ssl._create_unverified_context()  # 部署实例为自签证书，跳过校验
+req = urllib.request.Request("https://&lt;SERVER&gt;/portal/api/guide/version")
+with urllib.request.urlopen(req, timeout=10, context=ctx) as r:
+    meta = json.load(r)
+if meta["version"] &gt; KNOWN:
+    breaking = [c["summary"] for c in meta["changes"]
+                if c["type"] == "breaking" and c["version"] &gt; KNOWN]
+    print(f"服务器指南 v{meta['version']} &gt; 本 bot 已知 v{KNOWN}；BREAKING 变更：")
+    for s in breaking:
+        print("  -", s)</code></pre>
+      <p class="guide-note">响应结构：<code>{"version": 7, "updated_at": "2026-09-02", "changes": [{"version", "date", "type": "breaking|added|changed", "summary", "detail"}]}</code>
+      ——changes 版本降序、首条最新；<code>type=breaking</code> 表示旧行为不再兼容（如 v2「快照移除 allowed_actions」；v7「普通锦标赛多阶段化」「status 新值 stage_open/stage_done」），
+      <code>added</code> 为新增端点/能力，<code>changed</code> 为行为调整。</p>
+
+      <h3>2.3 身份与限制</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>限制</th><th>数值</th></tr></thead>
+          <tbody>
+            <tr><td>每用户同时参赛场数（含挂起）</td><td>≤ 16</td></tr>
+            <tr><td>state 轮询频率</td><td>16 次/秒（2026-09-03 从 8/s 放宽：认证缓存落地后 A/B 实测达标；旧 bot 按 8/s 自限无需改动）</td></tr>
+            <tr><td>每用户并发挂起轮询</td><td>≤ 32</td></tr>
+            <tr><td>自动匹配（/api/match）频率</td><td>10 次/分/用户</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>2.4 常见错误码</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>状态码</th><th>错误码</th><th>含义</th></tr></thead>
+          <tbody>
+            <tr><td>400</td><td>TOKEN_NOT_SCOPED</td><td>全局令牌调用 /me/rules、/me/ready（需报名令牌）</td></tr>
+            <tr><td>401</td><td>UNAUTHORIZED</td><td>token 无效或已吊销</td></tr>
+            <tr><td>403</td><td>FORBIDDEN</td><td>非该场参赛者 / 非参赛者查询他人锦标赛</td></tr>
+            <tr><td>403</td><td>GAME_NOT_FINISHED</td><td>数据 API 拉取进行中场次（对局内禁实时数据，防作弊）</td></tr>
+            <tr><td>404</td><td>TOURNAMENT_NOT_FOUND / GAME_NOT_FOUND</td><td>锦标赛 / 房间不存在</td></tr>
+            <tr><td>404</td><td>NO_ROOM_AVAILABLE</td><td>自动匹配（/api/match）无可用房：body <b>显式声明</b>的上限低于服务默认（M=10/Rounds=8 = 永久条件，改上限或放弃，<b>不重试</b>）；或兜底瞬态（建房后入席失败等，message 附原因）。code 恒定、判型用 code；无 body/缺省键恒不触发（v13 起；默认值 v15 上调）</td></tr>
+            <tr><td>409</td><td>INVALID_ACTION</td><td>动作不合法（阶段/座位/手牌自检失败；含吃摊已满 2 组仍提交 chi）——提交前自行核算动作（快照提供 seat/phase/responding_seats/drawn_tile/melds 等全部判定所需信息）</td></tr>
+            <tr><td>409</td><td>TOURNAMENT_CLOSED</td><td>赛事已关闭（closed）——报名/ready 均拒绝</td></tr>
+            <tr><td>409</td><td>TOURNAMENT_STARTED</td><td>开赛后报名；非确认期（running / stage_done / finished / void）提交 ready</td></tr>
+            <tr><td>409</td><td>NOT_REGISTERED</td><td>阶段 1（报名期）未报名就提交 ready</td></tr>
+            <tr><td>409</td><td>NOT_QUALIFIED</td><td>阶段 2+ 确认期（stage_open）名单外提交 ready——海选已淘汰或未报名者无本阶段资格（多阶段，v7 起）</td></tr>
+            <tr><td>403</td><td>PORTAL_BINDING_REQUIRED</td><td>全局令牌（存量匿名，openid 未绑定）调用 /api/match 或新报名 register——v24 起身份门禁：存量匿名不能开新参赛/新匹配，须改走门户「我的 AI 身份」或门户报名取得绑定身份/参赛令牌；已报名行幂等重试、ready 与在途场次一律不受影响（永久条件，勿重试）</td></tr>
+            <tr><td>409</td><td>AUTO_MATCH_ONLY</td><td>对自动匹配房玩家 API 直连 register/ready——自动房唯一入席入口是 POST /api/match（在册/门户绑定成员直连 register/ready 亦 409，幂等语义由 /api/match 承担；v13 起。v24 修订：无在途报名行的<b>存量匿名</b>令牌直连 register 为 403 PORTAL_BINDING_REQUIRED——先撞身份门禁，见下）</td></tr>
+            <tr><td>409</td><td>MATCH_BUSY</td><td>自动匹配（/api/match）在途自动房达 50 上限且无半空房可入——只挡建房、不挡入席（半空房永远可入），message 明示，延时后自重试（v13 起）</td></tr>
+            <tr><td>409</td><td>MATCH_LIMIT_REACHED</td><td>已达同时 16 场上限（register/ready 与 /api/match 同码；match 为建房前校验 + actor 兜底双位点）——释放场次后重试，不换房不空转</td></tr>
+            <tr><td>429</td><td>RATE_LIMITED</td><td>轮询超频 / 并发挂起超限</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>2.5 赛后数据（事件流 API，免认证）</h3>
+      <ul>
+        <li>测试房间<b>任一局结束后</b>（该局场次 finished；房间状态 finished/void/closed 均可），用<b>房间 id</b> 即可拉取该局完整对战事件流（含四家开局手牌与逐事件摸/打/吃碰杠），供离线复盘与<b>算法优化</b>。</li>
+        <li>流程：先 <code>GET /api/test-rooms/{id}/games</code> 拿局列表（batch 序）→ 按 batch 逐个 <code>GET /api/test-rooms/{id}/games/{batch}/events</code> 拉取。</li>
+        <li>房间 id 即凭证——请勿公开分享；限速为<b>每房间独立 5 次/秒</b>（另每来源总量兜底 1000 次/秒；2026-09-03 起按房间分桶，不同房间并行互不挤占，支持大规模并行房间评测）；响应 <code>Cache-Control: no-store</code> 勿缓存。</li>
+        <li>进行中场次（running）返回 403 GAME_NOT_FINISHED；房间或 batch 不存在 404；房间删除后数据级联清除（404）。</li>
+        <li><b>跨轮复用（2026-09-02 起）</b>：测试房间 finished 后 4 令牌再次各 ready 一次即开启下一轮——局列表随时间累积含<b>全部轮次</b>（每轮批次从 0 重号）；跨轮按局拉完整事件日志建议用 <code>GET /portal/api/games/{id}/events</code>（按 game_id 无批次歧义，owner 登录态可拉；复盘按钮同源）。</li>
+      </ul>
+
+      <h3 id="guide-multistage">2.6 多阶段锦标赛协议（2026-09-02 起，v7）</h3>
+      <p>普通锦标赛（kind 为空，创建参数不变）已按报名人数 <code>m</code> 自动多阶段化：<code>m≥17</code> 海选→16强(4组×4人)→8强(2组×4人)→决赛(4人)；<code>9≤m≤16</code> 海选→8强→决赛；<code>5≤m≤8</code> 海选(资格)→决赛；<code>m=4</code> 直接决赛（无淘汰）；<code>m&lt;4</code> 到点作废。每阶段组内循环 M 场（M/N 创建时全局配置、跨阶段一致）。测试房间（kind=test）单阶段不变。</p>
+      <ul>
+        <li><b>打完阶段 ≠ 结束</b>：status 在 <code>registering → running → stage_done → stage_open → running → …（决赛轮）→ finished</code> 间流转（任时可 closed / void）；非决赛轮打完停在 <code>stage_done</code>（等管理员推进下一阶段），<b>只有决赛轮打完才 finished</b>。晋级轮阶段打完、新阶段确认期、决赛加赛间隙，<code>/api/me</code> 的 active_games 为空——空转 ≠ 结束，以 <code>GET /api/tournaments/{id}</code> 的 status 为唯一进度真相，直至 finished/closed/void。</li>
+        <li><b>阶段字段组</b>（开赛后出现；registering 未开赛整组省略，旧字段不变）：<code>stage{no,role,total,name}</code>（阶段号 / qualify|final / 当前推断阶段总数 / 显示名：原名｜原名-第N轮｜原名-决赛）、<code>stage_status</code>（open|running|done）、<code>stage_crashed</code>（true=中断待重赛——bot 须区分「正常 done」与「中断」）、<code>qualified / qualify_role</code>（你在本阶段资格：finalist 晋级 / backup 候补；阶段 1 无名单 → false/空，唯阶段 1 崩溃重赛的确认期例外——报名全量 qualified=true、role 空）。<code>stage.total</code> 随降档/翻转动态收缩，<b>不可按创建时规划轮次</b>。</li>
+        <li><b>阶段确认</b>：<code>stage_open</code> 时名单内（晋级者/候补）提交 <code>POST /api/tournaments/{id}/ready</code> 或 <code>/me/ready</code> = 出席确认（幂等 200；门户玩家也可用「资格确认」按钮，同语义）。名单外（海选已淘汰仍 registered、未报名者）→ 409 <code>NOT_QUALIFIED</code>。确认不跨阶段继承——每阶段都要重新确认（漏确认不冻结，到点按<b>已确认且开赛时刻在线</b>者取前 G、候补顶替——v13 新建赛事：在线 = 最近 90s 内有已认证请求，见 §2.6 附注）；非确认期提交 → 409 <code>TOURNAMENT_STARTED</code>。阶段 2+ 响应中 <code>ready_users</code> 恒 0（防泄底），确认人数不对玩家暴露。</li>
+        <li><b>排名语义</b>：ranking 条目 = <code>user_id/total_score/place_points/god_count/games_played/rank(1..n)</code>；<code>running</code> 期是当阶段实时账，<code>stage_open/stage_done</code> 间隙回落上一阶段结算榜；<b><code>games_played</code> 每阶段归零</b>（当阶段按局累计——字段名沿旧：每局结束参与者 +1、轮空一场 +1），不可跨阶段累加推进度。</li>
+        <li><b>决赛加赛</b>：决赛轮常规场次打完若 1-4 名总得分有并列 → running 态自动加赛并账循环（无上限）。新加赛场的 <code>game_id</code> 自动出现（含 <code>_s{k}</code> 阶段段标识）——持续轮询 <code>/api/me</code> 的 active_games（或 tournament 详情 my_games，历史累计新 ID 追加）发现并照常参赛。</li>
+        <li><b>判定链（晋级轮排名）</b>：键序 total_score → place_points → god_count → user_id（字典序兜底），三键独立永不相加；名次分每场 1 位 +3 / 2 位 +1 / 3 位 −1 / 4 位 −3、本场同分共享并列区间平均、不进总得分；白板获取数口径 = 配牌扫全手（庄家含第 14 张直抽）+ 每次墙摸到白板（含杠上摸），<b>不可经事件流复算</b>，轮空积 0；决赛轮纯总得分、任何同分加赛至 1-4 名两两不同，加赛场不产生名次分/白板数。权威细则见 <code>docs/胡牌规则与番数计算.md</code> §7。</li>
+      </ul>
+    </div>
+
+    <div class="guide-block" id="guide-bot">
+      <h2>三、最小 Bot（复制即用，无策略）</h2>
+      <p>以下脚本只演示协议循环，不含任何牌技：令牌 → 发现锦标赛 → 报名/到位 → 按 <b>status 多阶段循环</b>——running 打活跃场（决赛加赛新 game_id 自动出现照常打）、stage_open 确认出席、stage_done 等推进，<b>finished/closed/void 才退出</b>。测试房间（单阶段）与正式锦标赛（多阶段）同一套循环。示例策略：出牌打第一张、碰/吃/杠窗口一律过；快照无 allowed_actions，判胡需自行实现胡牌算法——示例从简，可胡不胡由服务端超时自动胡兜底。保存为 <code>my_bot.py</code>，在「测试房间」或正式锦标赛拿到参赛令牌后直接运行：</p>
+      <pre class="guide-code"><code>python my_bot.py &lt;参赛令牌&gt;</code></pre>
+      <p>自测用全局令牌（门户「我的 AI 身份」或管理面造号取得）时需显式带锦标赛 id：<code>python my_bot.py &lt;token&gt; &lt;锦标赛id&gt;</code>。替换其中的决策分支（"提交:" 前的 if/else）即可接入你自己的牌技。</p>
+      <pre class="guide-code"><code>#!/usr/bin/env python3
+"""最小示例 Bot —— 杭州麻将对战平台 AI 接入模板（纯标准库，零依赖，无策略）。
+
+只演示协议循环（v7 多阶段）：令牌 -&gt; 发现锦标赛 -&gt; 报名/到位 -&gt; 按 status 循环：
+running 收割活跃场（决赛加赛新场自动出现）-&gt; stage_open 确认出席
+-&gt; stage_done 等推进 -&gt; finished/closed/void 才退出。自研动作判定见 play()。
+"""
+import json
+import ssl
+import sys
+import time
+import urllib.request
+
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # Windows 控制台兜底
+
+SERVER = "https://10.240.169.190:18080"  # 部署实例（自签证书）；本地调试改 http://localhost:8080
+TOKEN = sys.argv[1] if len(sys.argv) &gt; 1 else "PASTE_TOKEN_HERE"
+
+
+class ApiError(Exception):
+    def __init__(self, status, body):
+        self.status, self.body = status, body
+
+
+def api(method, path, body=None):
+    """带 Bearer 认证的 JSON 请求；429 退避重试，其余 HTTP 错误抛 ApiError。"""
+    req = urllib.request.Request(
+        SERVER.rstrip("/") + path,
+        data=json.dumps(body).encode() if body is not None else None,
+        method=method)
+    req.add_header("Content-Type", "application/json")
+    req.add_header("Authorization", "Bearer " + TOKEN)
+    ctx = ssl._create_unverified_context()  # 部署实例为 caddy 自签证书，跳过校验
+    try:
+        with urllib.request.urlopen(req, timeout=35, context=ctx) as r:
+            return json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            time.sleep(2)
+            return api(method, path, body)
+        raise ApiError(e.code, e.read().decode(errors="replace"))
+
+
+# 1) 令牌发现锦标赛（报名令牌作用域直达；全局令牌用 argv[2] 显式指定）
+me = api("GET", "/api/me")
+tid = me["tournament_id"] or (sys.argv[2] if len(sys.argv) &gt; 2 else "")
+scoped = bool(me["tournament_id"])  # 报名令牌：/api/me 已限定本锦标赛
+if not tid:
+    raise SystemExit("令牌未绑定锦标赛：请用门户「报名」或「测试房间」派发的参赛令牌（自测可用 python my_bot.py &lt;token&gt; &lt;锦标赛id&gt;）")
+print("锦标赛:", tid)
+
+# 2) 进场：先幂等报名 + 到位（顺序必要——锦标赛详情对非参赛者 403；全局令牌
+#    自测路径须为门户绑定身份（「我的 AI 身份」/管理面造号，v24 起匿名注册已删）；
+#    报名/到位 409（已开赛/已关闭等）吞掉，
+#    主循环按最新 status 兜底）
+try:
+    api("POST", "/api/tournaments/%s/register" % tid)
+    api("POST", "/api/tournaments/%s/ready" % tid)
+except ApiError as e:
+    print("进场被拒:", e.body)
+
+
+def play(gid):
+    """单场主循环：长轮询 -&gt; 快照 -&gt; 自研动作判定（快照无 allowed_actions，
+    2026-09-02 协议：客户端全自主、服务端纯验证）。"""
+    seq = 0
+    while True:
+        res = api("GET", "/api/games/%s/state?seq=%d" % (gid, seq))
+        if res.get("finished"):
+            print("本场结束，积分:", (res.get("snapshot") or {}).get("scores"))
+            return
+        if res.get("pending"):      # 30s 内无新事件：继续挂起
+            # 局边界例外（v10）：round_ended 后新局不发事件——seq 落后当前局时
+            # poll 立即回新局全量快照（gap:true），直接以快照为准，不会挂起
+            continue
+        snap = res.get("snapshot")
+        if snap is None:            # 增量事件：推进 seq 后重拉权威快照
+            for ev in res.get("events") or []:
+                seq = ev.get("seq", seq)
+            snap = api("GET", "/api/games/%s/state?seq=0" % gid).get("snapshot")
+        else:
+            seq = res.get("seq", seq)
+        seat = snap.get("seat", -1)
+        if seat &lt; 0:                # 观赛视角无动作权
+            continue
+        phase, turn = snap.get("phase"), snap.get("turn")
+        god = snap.get("god", {})
+        # 抓打圈受限 = 圈中且本人非打财神者（豁免方可任意出牌/续飘）
+        catch_restricted = god.get("catch_play") and god.get("god_discarder_seat") != seat
+        if phase == "draw" and turn == seat:
+            if catch_restricted and snap.get("drawn_tile"):
+                act = {"action": "discard", "tile": snap["drawn_tile"]}  # 受限方只出刚摸的
+            elif snap.get("my_hand"):
+                act = {"action": "discard", "tile": snap["my_hand"][0]}  # 出牌打第一张
+            else:
+                continue
+        elif phase in ("response_peng", "response_chi"):
+            if seat not in (snap.get("responding_seats") or []):
+                continue            # 窗口无响应权
+            act = {"action": "pass", "tile": ""}  # 示例策略：碰/吃一律过
+        else:
+            continue                # 非本人回合/窗口
+        print("提交:", act)
+        try:
+            api("POST", "/api/games/%s/action" % gid, act)
+        except ApiError as e:
+            if e.status != 409:     # 409 = 动作已失效（竞态）：重建快照后重试
+                raise
+        seq = 0                     # 动作后重建快照，避免状态漂移
+
+
+def my_active(t):
+    """本锦标赛的活跃场列表：报名令牌 /api/me 已限定；全局令牌按 my_games 交集过滤
+    （my_games 历史累计、含各阶段全部场次——新加的决赛加赛场也会出现在里面）。"""
+    act = [g["game_id"] for g in api("GET", "/api/me")["active_games"]]
+    if scoped:
+        return act
+    mine = set(t.get("my_games") or [])
+    return [g for g in act if g in mine]
+
+
+# 3) 多阶段主循环（v7）：status 是唯一进度真相 —— 打完一个阶段 != 结束，
+#    晋级轮打完 stage_done（等管理员推进）、新阶段 stage_open 需重新确认出席、
+#    决赛并列自动加赛（running 内新 game_id 出现）；finished/closed/void 才退出。
+while True:
+    t = api("GET", "/api/tournaments/%s" % tid)
+    status = t["status"]
+    stname = (t.get("stage") or {}).get("name", "")
+    print("status:", status, stname)
+    if status in ("finished", "closed", "void"):
+        break                       # 终态：才退出
+    if status == "registering":
+        # 阶段 1 报名期：报名（幂等）+ 到位（幂等）；409 竞态（恰逢开赛）回主循环
+        try:
+            api("POST", "/api/tournaments/%s/register" % tid)
+            api("POST", "/api/tournaments/%s/ready" % tid)
+        except ApiError:
+            pass
+    elif status == "stage_open":
+        # 阶段 2+ 确认期：晋级者/候补确认出席（幂等，每阶段都要重新确认）。
+        # 名单外 409 NOT_QUALIFIED = 已淘汰（海选未晋级/未报名者）。
+        if t.get("qualified"):
+            try:
+                api("POST", "/api/tournaments/%s/ready" % tid)
+                print("已确认出席:", stname)
+            except ApiError as e:
+                print("确认被拒:", e.body)  # 竞态（如恰逢开赛）：回主循环按最新状态处理
+        else:
+            print("未获得本阶段资格（已淘汰），退出")
+            break
+    elif status == "stage_done":
+        pass                        # 晋级轮打完：等管理员推进（空转窗口 != 结束）
+    else:                           # running：收割本阶段活跃场
+        act = my_active(t)
+        for gid in act:
+            play(gid)
+        if act:
+            continue                # 立刻复查：同批余场/决赛加赛新场可能刚出现
+    time.sleep(1)
+print("锦标赛结束")</code></pre>
+
+    </div>

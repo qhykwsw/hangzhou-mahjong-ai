@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mahjong-ai-iteration"
+version = "0.1.0"
+description = "Multi-policy self-iteration infrastructure for Hangzhou Mahjong AI"
+requires-python = ">=3.12"
+dependencies = ["numpy>=1.26,<3", "mcp>=1.26,<2"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+mahjong-ai = "mahjong_ai.cli:main"
+mahjong-research = "mahjong_ai.research_cli:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

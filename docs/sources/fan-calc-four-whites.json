@@ -1,0 +1,59 @@
+{
+  "source": "https://10.240.169.190:18080/portal/api/tools/fan-calc",
+  "retrieved_at": "2026-09-09T03:29:29.210857+00:00",
+  "guide_version": 27,
+  "method": "POST",
+  "endpoint_semantics": "pure stateless calculation",
+  "request": {
+    "hand": [
+      "1w",
+      "1w",
+      "2w",
+      "2w",
+      "3w",
+      "3w",
+      "4w",
+      "5w",
+      "6w",
+      "白",
+      "白",
+      "白",
+      "白"
+    ],
+    "draw": "9t",
+    "chain": {
+      "count": 0,
+      "piao": 0
+    },
+    "base": 1
+  },
+  "status": 200,
+  "response": {
+    "hu": true,
+    "baotou": true,
+    "fan": 8,
+    "detail": [
+      "七对",
+      "4个白板",
+      "爆头"
+    ],
+    "scores": {
+      "dealer_hu": {
+        "win": 192,
+        "lose": [
+          64,
+          64,
+          64
+        ]
+      },
+      "nondealer_hu": {
+        "win": 80,
+        "lose": [
+          64,
+          8,
+          8
+        ]
+      }
+    }
+  }
+}

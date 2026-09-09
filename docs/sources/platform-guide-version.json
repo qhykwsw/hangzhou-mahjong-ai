@@ -1,0 +1,362 @@
+{
+  "changes": [
+    {
+      "version": 27,
+      "date": "2026-09-08",
+      "type": "added",
+      "summary": "门户排行榜今日榜/周榜新增「上期前四置顶」：响应新增 prev 键（上一期前四 + 请求者 me_uid + 上一期第一名的连续霸榜 streak），bot 玩家 API 契约零影响",
+      "detail": "门户 API 面（bot 玩家 API 契约零影响——v12/v14/v19/v23 门户-only 先例）：GET /portal/api/leaderboard 响应新增 prev 键，仅 period=today|week 非 null。prev = {label:\"昨日榜\"|\"上周榜\", from, to, me_uid, top[]}：from/to 为上一期窗口 [from,to)（北京时间切界，to 恒等于本期窗口起点且为排他上界）；top ≤4 行，字段与主榜行同形（rank/user_id/name/rooms/firsts/score），仅 rank=1 行可能带 streak（整数，≥2 才出现）= 该用户从上一期起连续为「该期第一名」的期数（含上一期本身；某期全平台零 auto 房结算 = 空档即断；回退上限日 60 / 周 8，触顶显示精确上限值——显示值可能低于真实连续数）。上一期无对局时 prev.top 为空数组（非 null）；period=all 时 prev 为 null。主榜 top/me/限速/no-store 语义零变化。"
+    },
+    {
+      "version": 27,
+      "date": "2026-09-08",
+      "type": "changed",
+      "summary": "门户排行榜 top 不再补零值行：窗口内 21–31 个有分用户时，原实现返回 32 行（尾部含 rank=0 / user_id 空 / score=0 的幽灵行）",
+      "detail": "门户 API 面修复：GET /portal/api/leaderboard 的 top 截断守卫在 20→32 修订时漏改（`len(top) > 20` 仍按旧阈值触发），窗口内 21–31 个有分用户时对 cap 内越界切片补出零值行并进入 JSON。现按实际行数返回（守卫改为 `len(top) > 32`）。行数 ≤20 或 ≥32 的情形行为不变。"
+    },
+    {
+      "version": 26,
+      "date": "2026-09-08",
+      "type": "changed",
+      "summary": "抓打圈豁免方响应：圈内打财神者本人可吃/碰/明杠/补杠（此前被一并禁掉），圈内非财神出牌对豁免方开响应窗口；快照 god 新增 god_discarder_seat",
+      "detail": "规则执行面 changed（规则文档 §一.2/§七.2「其余玩家不能吃、碰、明杠」——受限主体是其余三家，打财神者本人豁免；此前实现把豁免方一并禁掉，属过度限制，2026-09-08 用户裁定修正）：\n① 圈内响应窗口：打出财神那一次出牌仍直接跳窗（财神不可被吃碰杠）；圈内**非财神出牌**时开碰窗口，响应集合 = [god_discarder_seat]（只豁免方），豁免方恰为出牌者下家时才开吃窗口。窗口**固定走满**：豁免方是否有牌可碰/可吃不影响开窗与否（防时间侧信道，与既有窗口纪律一致）——代价是圈内每张出牌多 1~2s。\n② 豁免语义：圈中 god_discarder_seat == 本人 seat 时，本人可吃/碰/明杠/补杠，且出牌不受「只能打刚摸的牌」约束（该约束本就只对其余玩家生效）。吃碰后继续打出财神（爆头态）= 财飘链 +1 且圈以本人为新打财神者重启；打出其他牌 = 本人链断且圈解除（「圈回到打财神者本人」既有语义）。\n③ 快照加键（added 部分）：god 新增 god_discarder_seat（打财神者座位；无圈 = -1）——公共信息（打财神者由公开弃牌事件即可定位），bot 据此自判「我是否受抓打约束 / 能否续飘」。旧 bot 忽略未知键零影响；判据：受限 ⇔ catch_play && god_discarder_seat != seat。\n④ 其余玩家语义不变：圈内仍禁吃碰明杠、出牌只能打刚摸的牌（服务端 409 行为不变），暗杠与自摸胡照常。"
+    },
+    {
+      "version": 25,
+      "date": "2026-09-08",
+      "type": "breaking",
+      "summary": "服务端补齐「吃最多 2 摊」校验：同一局已有 2 组吃副露后，第 3 次 chi 动作被拒绝（409 INVALID_ACTION）——此前服务端不校验、越限吃被接受",
+      "detail": "规则执行面 breaking（规则文档 §2.1「吃最多 2 摊」此前只有文档与客户端自律，服务端放行）：\n① POST /api/games/{id}/action 的 chi 新增组数门禁：本局本人副露中已有 2 组吃（Meld.Kind=Chi）时，第 3 次 chi 一律拒绝（409 INVALID_ACTION，message \"cannot chi\"），且状态零变更（副露/手牌/阶段均不动）。名额每局重置（副露随发牌清空），碰/杠不占吃名额（「碰/杠不限次数」语义不变）。\n② 合规客户端零影响：按规则自限（已有吃副露 < 2 才吃）的 bot 行为完全不变；此前依赖服务端放行、越限吃第 3 次的 bot 将收到 409——请修正客户端吃牌计数（本人吃摊数 = 快照 melds[seat] 中 kind==\"chi\" 的组数）。\n③ 存量数据：修复前已产生的越限对局（含胡牌与积分）不重算不剔除（2026-09-08 用户裁定，与「存量不重建」同裁）。"
+    },
+    {
+      "version": 24,
+      "date": "2026-09-08",
+      "type": "breaking",
+      "summary": "删除 POST /api/users（匿名自注册）——新身份只从门户取得；/api/match 与正式赛 register 对存量匿名（非门户绑定）全局令牌 403 PORTAL_BINDING_REQUIRED",
+      "detail": "玩家 API 面 breaking：\n① POST /api/users 已删除（路由移除，一律 404）——不再产生任何新匿名身份。令牌只有三个来源：门户「我的 AI 身份」签发（全局令牌；首访明文一次、可轮换）、门户报名/测试房间派发（参赛令牌，scoped）、管理面 POST /admin/api/users 造号（BasicAuth，运营/验收自用，产物与真实玩家同权）。\n② 入口门禁：非门户绑定（users.openid_identity IS NULL）的**全局令牌**调 POST /api/match（自由匹配）或 POST /api/tournaments/{id}/register（新报名）→ 403 PORTAL_BINDING_REQUIRED（永久条件——不要重试，须改走门户取得绑定身份或参赛令牌）。\n③ 存量匿名令牌效力边界（在途照常）：已报名行（门禁落地前报名）register 幂等重试放行 200；ready /api/me /state /action /notify 一律不拦（多阶段锦标赛在途匿名每阶段照常 ready 确认、照打到底）；auto 房在途（ready=1 且 registering/running）重调 /api/match 幂等返原房 200；仅「新参赛/新匹配」被 403 挡下。房出窗口（finished 宽限/closed/void）后重调 /api/match = 新会话意图 → 403。\n④ 行为码漂移：无在途报名行的匿名令牌直连 auto 房 register，由 actor 的 409 AUTO_MATCH_ONLY 变为 handler 层 403 PORTAL_BINDING_REQUIRED（在册/绑定成员直连仍 409）——403 message 明示 auto 房唯一入口是 /api/match。\n⑤ scoped 参赛令牌路径一律不动（含测试房间 4 bot——匿名行持 scoped 令牌）；测试房间建房/打牌/复盘不受影响。\n⑥ 运营注：管理面造号产物 = 与真实 OpenID 玩家完全同权（可参赛/上榜、openid_identity 无读 API 出口不可区分）——仅供测试/验收环境；同 label 重放会轮换令牌（旧立即失效，互踢在途 bot），重跑请换 label。"
+    },
+    {
+      "version": 23,
+      "date": "2026-09-07",
+      "type": "added",
+      "summary": "门户新增「单场得分榜」：GET /portal/api/leaderboard/best-game（行 = 整场完整打完的自动匹配房场次冠军；并列全出、冠军分 >0 才入榜；全史单榜四键排序；行含战绩互斥三档 + 庄胡连庄；me 名次全史精确无 500 帽；bot 玩家 API 契约零影响）",
+      "detail": "门户 API 面（bot 玩家 API 契约零影响——v19/v20 门户-only 先例）：GET /portal/api/leaderboard/best-game（OpenID session 认证；限速 key bestgame:+uid 每用户 4/s，与积分榜 leaderboard:/胡大牌 hugewin: 桶互异——三榜共享轮询节奏、切换不互挤；Cache-Control: no-store）。全史单榜、无窗口参数。top 恒完整 32 行（绝不因 me 剔行）。行 = **自动匹配房（kind='auto'）整场完整打完**（games.status='finished'，closed 宽限后照计；void/崩溃收敛/强关/test/正式赛不计）的**场次冠军**：final_scores_json 全场最高座位，**并列最高全出（每场 1–3 行）**；**冠军分 ≤0 的场次不产生行**（零和计分下 max=0 ⇔ 四家全 0——全流局或胡局对消，无「得分」可言）。行字段 {rank, user_id, name, score, wins, pinghu, baotou, big[{kind,count}], lianzhuang, at_unix, room_id, game_id, can_replay}：score = 冠军净分（落库 final_scores 直读，不重算）；wins = 冠军该场胡把数；**战绩互斥三档（可加总 = wins）**——每胡局按 detail 恰归一档：含大牌要素（动作链系/七对系/4 个白板）→ big（kind = 主元素原文）、否则含「爆头」→ baotou、否则 → pinghu；big 数组按 kind 字典序升序；lianzhuang = 庄胡把数（dealer==winner 的胡局，胡完续坐庄）；at_unix = 场完成时刻（games.finished_at）；can_replay = 行级复盘门禁（同胡大牌键、同源判定）。排序四键链 = 冠军分↓ → 场完成时刻（后发生优先）↓ → user_id asc → game_id asc（全序，rank 恒连续）。me = 本人最优冠军场（排序链首命中行）：**名次恒全史精确、无 500 帽、无 rank:null 形态**（本人 rank>32 时榜尾附本人行）；从未当上分>0 冠军 → me:null。**存量场照计（2026-09-07 用户裁定 B7）**：存量 finished auto 场 games 行完好照常入榜（score/时刻全史真实），战绩按当时可读胡行计、可 wins=0 伴 score>0——不补录不剔除（与胡大牌榜「存量不重建」同裁）。"
+    },
+    {
+      "version": 22,
+      "date": "2026-09-07",
+      "type": "added",
+      "summary": "门户赛事详情与独立排行页新增分组视图与晋级名单：stage.groups（每桌成员）/advancement（进入本阶段名单）",
+      "detail": "门户 API 面（bot 玩家 API 契约零影响——v20 门户-only 先例）：GET /portal/api/tournaments/{id}（详情）与 GET /portal/api/tournaments/{id}/ranking 的 stage 组新增 groups 键（当前阶段冻结分组 [[{user_id,name}×4],…]，种子序、组号 = 外层下标；仅组轮阶段（16强/8强等，stage.no≥2）冻结后非空——海选单池/确认期/决赛轮/测试房省略）与顶层新增 advancement 键（{finalists:[{user_id,name}],backups:[...]}——进入本阶段名单，final_list_json 镜像；阶段 1 海选无名单时省略）。纯向后兼容新增：旧读取方忽略未知键零影响；me/lobby 列表行与玩家 API 契约不变。"
+    },
+    {
+      "version": 21,
+      "date": "2026-09-07",
+      "type": "changed",
+      "summary": "七对/爆头 白板口径修正（两条用户裁定）：①七对「豪华组」——4 张白板在其余牌存在落单（白板作为百搭补配其他牌成对）时不再同时计 1 组四张，相关牌形总番从 ×8 修正为 ×4（仅白板消耗于补单时受影响，其余牌全自然对、白板两两自配时 4 白板仍计豪华组）；②爆头——撤销「听牌态正好 4 张白板不视为爆头」旧裁：4 白听任意即胡按爆头计并与「4 个白板 ×2」叠加（如 3 对+3 单+4 白 听任意 → 七对×爆头×4白板 = ×8）"
+    },
+    {
+      "version": 20,
+      "date": "2026-09-07",
+      "type": "changed",
+      "summary": "排行榜 top 行数 20 → 32：积分总榜（all/today/week）与胡大牌榜 top 恒完整 32 行，me 榜尾语义随之 21 → 33",
+      "detail": "门户 API 面（bot 玩家 API 契约零影响——session 认证端点，v19 门户-only 先例；旧读取方按行迭代即可，多出的 12 行为兼容扩展）：GET /portal/api/leaderboard（三窗口）与 GET /portal/api/leaderboard/huge-win 的 top[] 恒完整行数由 20 升 32（绝不因 me 剔行）。me 契约定语同步：me.rank≤32 = top 内同数据行（重复是标记语义）、me.rank>32 = 第 33 行榜尾本人行；胡大牌榜 me 的 500 名外 rank:null 与零记录 null 语义不变（500 帽与排序链不变——32 远小于 500 帽，候选早停数学论证不受影响）。"
+    },
+    {
+      "version": 19,
+      "date": "2026-09-07",
+      "type": "added",
+      "summary": "门户新增「胡大牌榜」：GET /portal/api/leaderboard/huge-win（全史单榜，行 = 自动匹配房完整场单局自摸胡手）",
+      "detail": "门户 API 面（bot 玩家 API 契约零影响——v14 门户-only 先例）：GET /portal/api/leaderboard/huge-win（OpenID session 认证；限速 key hugewin:+uid 每用户 4/s，与积分榜 leaderboard: 桶异桶——前端两榜共享轮询节奏、切换不互挤）。全史单榜、无窗口参数。top 行恒完整 20 行（绝不因 me 剔行），行 = 自动匹配房（kind='auto'）整场完整打完（games.status='finished'，含宽限后 closed 房；void/崩溃收敛/强关/test/正式赛不计）的**每一局自摸胡手**（流局不计）。行字段 {rank, user_id, name, fan, score, detail[], count, at_unix, room_id, game_id, can_replay}；排序五级链 = 番数↓ → 得分↓（scores[winner] 庄闲分差已含）→ 该牌型全史次数↓ → 胡手时刻（后发生优先）→ user_id asc；name = 昵称链（nickname→name）；detail = 番型组合数组、count = 该 detail 组合跨玩家全史共胡出次数（行内注记）；at_unix = 胡手时刻（unix 秒）；**can_replay = 该行房间当前用户是否 ready=1 参与者**（行级复盘门禁：false 行前端不渲染复盘入口，与房间复盘门禁同源）。me = 本人全史最佳手：500 名内 rank 精确（rank≤20 = top 内同数据行、rank>20 = 榜尾本人行）/ 全史 500 名外 = 独立最佳手行且 rank:null（不给虚假精确）/ 零记录 me:null。"
+    },
+    {
+      "version": 19,
+      "date": "2026-09-07",
+      "type": "added",
+      "summary": "round_ended 事件负载扩展：胡牌与流局事件均携带 round_no（局号）/dealer（庄家座）键",
+      "detail": "事件流数据面（GET /api/games/{id}/state 的 round_ended 事件，赛后数据端点的事件日志同源）负载扩展——胡牌（draw:false）与流局（draw:true）round_ended 事件现均自带 round_no（本局局号，1 基）/dealer（本局庄家座）两键（emit 均在翻庄前取值，键值 = 本局真实局号/庄家）。纯向后兼容加键：旧 bot 忽略未知 Data 键零影响；新 bot 可直接用于复盘/统计/跨局对账，无需自行推导局号与庄家。服务端 rounds 表完整性修复（局边界派生 upsert + 场终按键编号，长局不再缺早局/错位）以此为数据基础，bot 侧无行为变化。"
+    },
+    {
+      "version": 18,
+      "date": "2026-09-06",
+      "type": "changed",
+      "summary": "免令牌对局数据端点 seats 只下 AI 昵称：auto 房真名不再下发，正式锦标赛 id 恒 404",
+      "detail": "玩家 API 面（免令牌数据端点 GET /api/test-rooms/{id}/games/{batch}/events，房间 id 即凭证）：seats[].name 数据源按房 kind 分派——**auto 房（4 席 = 不同真实用户）只下 users.nickname（AI 昵称，identity 首访恒已生成；昵称缺失 → 空串），绝不落 users.name（OpenID fullname 真名）**；test 房（owner 私有自命名 bot 域）维持 users.name 现状不变。另：正式锦标赛（kind='normal'）id 经本端点一律 404（此前 finished 场次照常 200 透出真实玩家手牌与真名——超出「房间 id 即凭证」的 owner 自测域裁定）。响应 schema 不变（name 键恒在、仅取值语义变化）；正常 test 房调用零影响。"
+    },
+    {
+      "version": 17,
+      "date": "2026-09-06",
+      "type": "changed",
+      "summary": "门户赛事大厅与「我的赛事」剔除自动匹配房（kind='auto' 归属「测试房间」列表展示）",
+      "detail": "门户 API 面（bot 玩家 API 契约零影响）：GET /portal/api/tournaments（赛事大厅）与 GET /portal/api/me（我的赛事）不再返回 kind='auto' 的自由匹配房——auto 房归属展示 = 门户「测试房间」列表（自建 test ∪ 我参与的 auto 并集），此前被误列为可报名锦标赛（大厅）与正式赛事（我的赛事）造成双处冗余。公共大厅现只列正式锦标赛（kind=''；kind='test' 测试房私有不进大厅为既有语义，不变）。两个列表的响应字段 schema 逐字节不变，仅行集不再包含 auto 房——按 id 直达的详情/复盘/排行榜等端点不受影响。"
+    },
+    {
+      "version": 15,
+      "date": "2026-09-05",
+      "type": "breaking",
+      "summary": "POST /api/match 服务默认房配置上调：M=1/Rounds=2 → M=10/Rounds=8（满员会话 = 10 场并发 × 每场 8 局）",
+      "detail": "自动匹配池（kind='auto'）建房的服务统一默认配置由 M=1/Rounds=2 上调为 **M=10/Rounds=8**（单点常量 tournament.AutoDefaultM/AutoDefaultRounds）。① **breaking 面（显式 body 上限的调用方）**：显式声明上限 < 新默认（M∈1..9 或 Rounds∈1..7）的请求从可用变**永久 404 NO_ROOM_AVAILABLE**（message 明示当前默认；不重试）。旧调用方若曾传 {\"M\":2,\"rounds\":3} 这类 ≥旧默认的示例上限，现需去掉 body（缺省 = 不限）或调高到 M≥10 且 Rounds≥8。② **无 body/缺省键调用协议不受影响**，会话语义变化：满 4 人即开 **M=10 场并发对局 × 每场 Rounds=8 局**（同一 4 人、座次逐场重洗；最晚场终后 settle → finished 约 60s 宽限 → 自动关停，赛果/排行榜/404 全链语义不变）——单会话样本 2 手 → 80 手/人，请按 10 桌并发核对轮询/动作节奏。③ **16 场上限记账随房 config**：一个 auto 房自 registering 起占 cfg.M=10/16 格——auto 房之外的空余 ≤6 格才能建房/入席（其余活动照常受 16 上限约束）。"
+    },
+    {
+      "version": 14,
+      "date": "2026-09-05",
+      "type": "added",
+      "summary": "新增 GET /portal/api/guide —— 接入指南全文免认证端点（程序不登录拉正文）",
+      "detail": "新增免认证端点 GET /portal/api/guide（每 IP 5/s）：返回 {version, updated_at, format, content}——content = 完整接入指南正文（对战规则/API 参考/最小 Bot），与门户页「接入指南」Tab 同源（go:embed 单一数据源，双份漂移根治）；format 缺省 html（前端直接渲染），?format=text 返回剥离标签的纯文本（LLM/终端友好）；version/updated_at 与 guide/version 同源。旧 bot 无需改动（本端点为新增）。"
+    },
+    {
+      "version": 14,
+      "date": "2026-09-05",
+      "type": "added",
+      "summary": "门户新增自由对战排行榜：GET /portal/api/leaderboard 三榜（历史总榜/今日榜/周榜）",
+      "detail": "门户 API 面（bot 玩家 API 契约零影响）：GET /portal/api/leaderboard?period=all|today|week（session 认证；限速 leaderboard:+uid 每用户 4/s；缺省/非法 period → 400 INVALID_PERIOD）。响应 {period, from, as_of, top[], me|null}：top 恒完整 20 行不因 me 剔行；me.rank≤20 时 me 即 top 内同数据（重复为标记语义）；rank>20 时 me 为榜尾本人行；窗口零战绩 me=null。窗口按北京时间切界（今日 0:00 起、周一起始）；名次确定性 tie-break（总分↓ 场次↑ 首名↓ user_id）；统计范围 = 整场完整打完的自动匹配房（kind='auto'，含宽限后 closed 房；void/重启收敛房不计）。"
+    },
+    {
+      "version": 14,
+      "date": "2026-09-05",
+      "type": "added",
+      "summary": "门户「我的 AI 身份」昵称可改：POST /portal/api/test-rooms/identity/nickname",
+      "detail": "门户 API 面（bot 玩家 API 契约零影响）：POST /portal/api/test-rooms/identity/nickname {nickname}（session；限速 nickname:+uid 1 次/60s）。trim 后 1–16 runes；空 → 400 INVALID_NICKNAME（单向门：昵称一经设置不可清空，含首访自动生成）；body 非 JSON → 400 INVALID_INPUT；非 POST → 405。只写 users.nickname 列——身份锚点 user_id 不变，历史房间可见/可复盘与积分累计不受影响；排行榜与 test/auto 房展示名（昵称→展示名→座位号链）随读时 JOIN ≤3s/刷新生效，正式锦标赛展示名不变。"
+    },
+    {
+      "version": 13,
+      "date": "2026-09-05",
+      "type": "breaking",
+      "summary": "分桌机制修复：报名=意向；分桌实到 = 开赛时刻「已确认 ∧ 在线」者，按实到降档、<4 作废",
+      "detail": "修复 2026-09-04 正式赛事故（报名后不上线的玩家仍被分桌，真人被配幽灵同桌）：分桌名单不再等于报名/确认名单，必须同时满足「显式到位（ready）」与「冻结时刻在线」。「在线」证据 = 该用户任意已认证 Bearer 请求（GET /api/me、/api/tournaments/{id}、/state、POST 动作等）在最近 90s 内触达服务器——开赛前连上又断开的会被自动剔除。分桌冻结时刻 = StartAt 整点（不变）；按实到人数沿用档位表降档（不足 4 直接作废 no_players），绝不等待缺席者。波及面：① 门户报名（POST /portal/api/tournaments/{id}/register）不再自动 ready（报名=意向）；② 玩家 API register 本就不自动 ready（不变），到位走既有 /ready、/me/ready、门户「资格确认」；③ 新语义只对【部署后新建】的锦标赛生效——存量（2026-09-05 前创建）锦标赛全流程按旧规则（判别：GET /api/tournaments/{id} 的 config 缺 OnlineConfirm 键或为 false = 存量赛）；④ config 新增键 OnlineConfirm（added）；⑤ ready_users/stage_ready_count 字段仍是「已确认累计」，不是分桌预测（分桌另受在线过滤）；⑥ 空转期（registering/stage_open/stage_done）没有 SSE 流可挂——SSE 只存在于局内，必须对 /api/tournaments/{id} 等本赛端点保持轮询间隔 ≤90s（建议 ≤60s），否则开赛时刻会被判离线剔除（同一用户报名多赛时请按赛核对各 bot 进程存活，勿以他赛流量代替本赛在场）；⑦ 服务重启后若开赛时刻已过或邻近（90s 内），冻结自动顺延 ≤90s 给 bot 重连窗口（新语义赛）；⑧ kind=test 测试房间全程豁免（满员即开语义不变）。"
+    },
+    {
+      "version": 13,
+      "date": "2026-09-04",
+      "type": "changed",
+      "summary": "POST /api/match 自动匹配全自动语义（自动建房与入席一体；supersede v12 创建者制池语义）",
+      "detail": "POST /api/match 改为全自动匹配（限速不变：10/min/用户；仍仅收全局令牌——scoped 报名令牌 400 TOKEN_NOT_SCOPED）：服务端从自动匹配池选房入席，池只含系统按默认配置自动创建的自动房（kind='auto'，默认 M=1/Rounds=2），按就绪席多、开赛早者优先，无可兼容候选则自动建新房并把请求者作为首位入席；成功返回 {room_id, config, round_no}，之后用同一全局 token 照常参赛（GET /api/tournaments/{room_id} 的 my_games 发现场次、/state 轮询、/action 出招）。等待期重复调用幂等返回原房（ready=1 判据），绝不双房双席。body 可选 {\"M\":2,\"Rounds\":3}（小写键亦收）声明可承受上限（≤ 过滤；缺省/键 ≤0 = 不限）；显式上限低于服务默认（M=1/Rounds=2）→ 404 NO_ROOM_AVAILABLE（永久条件，改上限或放弃、不重试）；建房后入席失败等兜底瞬态同码、message 附原因。在途自动房满 50 → 409 MATCH_BUSY（只挡建房——半空房永不因额度拒绝入席）；同时 16 场上限 → 409 MATCH_LIMIT_REACHED（建房前校验，绝不留 0 人空房；actor 兜底同码）。**人工 r<4 建房能力移除（supersede v12）**：v12 描述的「测试房间创建 match_seats<4 开放匹配（保留席/NOT_RESERVED/跨轮复用）」整套移除——该制从未对外发布、无存量用户，非 breaking；测试房间创建回退纯 4 令牌房，自动房只由服务端创建（详见下条 added 新错误码与守卫）。"
+    },
+    {
+      "version": 13,
+      "date": "2026-09-04",
+      "type": "added",
+      "summary": "新增自动房错误码与守卫：409 AUTO_MATCH_ONLY / MATCH_BUSY / MATCH_LIMIT_REACHED + 自动房关停后玩家 API 404",
+      "detail": "409 AUTO_MATCH_ONLY：对自动匹配房（kind='auto'）玩家 API 直连 register/ready 一律 409——守卫置于幂等早退等全部分支之前，在册参与者重复直连亦 409；自动房唯一入席入口是 POST /api/match，幂等语义由 /api/match 承担（v12 的 NOT_RESERVED 随创建者制一并移除）。409 MATCH_BUSY：/api/match 在途自动房（registering+running）达 50 上限且无半空房可入——只挡建房、不挡入席（半空房永远可入），message 明示，延时后自重试。409 MATCH_LIMIT_REACHED：已达同时 16 场上限（register/ready 与 /api/match 同码；match 为建房前校验 + actor 兜底双位点）——释放场次后重试，不换房不空转。**关停后玩家 API 404 语义**：整场打完（finished 约 60s 宽限）自动房自动关停（closed；房间行与对局数据永久保留）——关停后玩家 API 对该房一律 404。该 404 只对**自动关停全链**成立（settle 后约 60s 宽限 → idle 回收：TClose+TStop+Registry.Remove、自 hub 注销）；admin 强关（POST /admin close）running/registering 的 auto 房只发 TClose → actor 驻留，玩家 API 对该房照常 200（status=closed）直至 admin DELETE 或服务器重启——与 test 房既有强关语义一致。赛果以最后一次 /state 快照与门户复盘为准；想再打重新调 /api/match（每次新会话新房）。"
+    },
+    {
+      "version": 12,
+      "date": "2026-09-04",
+      "type": "added",
+      "summary": "新增 GET /api/games/{id}/notify —— SSE 状态变更通知流（服务器推送信号）",
+      "detail": "新增 SSE 端点 GET /api/games/{id}/notify（Bearer token 认证，参赛者 403）：服务器主动推送「状态已变化」信号，代替高频轮询 /state 来发现他人动作。协议：连接即收初始帧 {\"seq\":N}（N=当前事件水位，重连对齐点）；此后每次状态变更（出牌/摸牌/吃/碰/杠/胡/流局/超时等任意事件）推 {\"seq\":<与 /state 同一全局递增水位>}；每 30s 一行 \": keepalive\" 注释维持连接；流终止（场终/死场/慢消费者断流）推 {\"seq\":N,\"closed\":true} 后关流——closed 后客户端应重连（初始帧对齐）或按需拉终态。帧只含 seq——不含牌面/动作/变化内容（seq 为全座位可见公共水位，无隐私面；牌面仍须按需 GET /state 领取）。客户端用法（游标纪律）：/state 的 seq 参数语义 = 「N 之后的事件」，**游标永远是本地已消费的 seq**——初始帧的 seq 是「服务器已发到 N」的包含式水位，不可直接当轮询游标（直接传会跳过 N 之前所有事件）；收帧后若 seq 高于本地游标且无缺口，GET /state?seq=本地游标 拉增量；游标未知/落后超水位（>256）/跨局，GET /state?seq=0 拿全量快照起步。上限：每用户 32 并发连接（超限 429），不占用 /state 的 16/s 频率额度。旧 bot 无需改动（本端点为新增；继续用长轮询 /state 不受影响）。"
+    },
+    {
+      "version": 12,
+      "date": "2026-09-04",
+      "type": "added",
+      "summary": "玩家 API 新增 POST /api/match：自动匹配房池发现与入席（自动匹配房唯一入席入口）",
+      "detail": "POST /api/match（自动匹配房 = 测试房间创建时 match_seats<4 的房间，见下条）：仅收全局令牌（/api/users 注册用户；scoped 报名令牌 400 TOKEN_NOT_SCOPED——匹配者必须有自己的身份）；限速每用户 10/min。body 可选 {\"M\":2,\"Rounds\":3}（或小写 {\"m\":2,\"rounds\":3}，大小写双键均收；值 = 可承受上限（≤ 过滤），双键都给取较小者；坏 body/缺省 = 不限）。行为：服务端从开放匹配的房池（按就绪席数多者优先、开赛时刻早者优先）取前 3 逐一尝试入席，入席满 4 即开；候选被抢先占满/已开赛/匹配者达 16 场上限 → 换下一候选重试；全候选失败 → 404 NO_ROOM_AVAILABLE（code 恒定、message 附最后候选拒绝原因供诊断——bot 判型用 code，延时后自重试）。成功响应 {room_id, config, round_no}：config 键名与既有玩家 API 的 config 序列化一致（M/Rounds/BaseScore/YouCaiBiKao/三超时等），round_no 独立顶层字段。入席后即成为该房间普通参赛者：用同一全局 token 走常规玩家 API（/api/me 发现房间、/api/games/{id}/state 轮询、/api/games/{id}/action 出招），打完即脱离（不自动续下一轮，想再打再调 match）。"
+    },
+    {
+      "version": 12,
+      "date": "2026-09-04",
+      "type": "added",
+      "summary": "测试房间创建支持 match_seats（1-4）：自动匹配房 + 非保留席直连 register/ready 守卫",
+      "detail": "POST /portal/api/test-rooms body 新增 \"match_seats\": r（1-4；缺省/≤0 → 4 = 纯令牌房，行为与旧完全一致、存量房零影响）。r<4 = 自动匹配房：r 个保留席（创建时生成 r 个 reserved=1 测试用户与令牌；/tokens 重生成、/rename 改名只作用于保留席）+ 4−r 席对匹配池开放；保留席全部 ready 后房间开放匹配（match_open=1，列表/详情响应新增 match_seats/match_open 字段），匹配者经 /api/match 入席凑满 4 即开。守卫：非保留用户（含知房号者与上一轮匹配者）对自动匹配房玩家 API 直连 register/ready 一律 HTTP 409 NOT_RESERVED（register/ready 家族错误惯例：HTTP 一律 409、actor 错误文本即 code）——唯一入席入口是 POST /api/match（防绕过匹配池占保留席、凑满 4 人把未到的保留 bot 顶出对局）。跨轮复用：一轮打完非保留匹配者即脱离，保留令牌再次 ready 齐后房间重新开放、池补新人满 4 重开；保留令牌 bot 的 register/ready 语义与 r=4 纯令牌房完全不变。"
+    },
+    {
+      "version": 12,
+      "date": "2026-09-04",
+      "type": "added",
+      "summary": "门户「我的 AI 身份」：昵称 + 全局令牌轮换式取令牌（identity 端点）",
+      "detail": "门户测试房间 Tab 顶部新增「我的 AI 身份」区块（门户 API 面，bot 玩家 API 契约零影响）：GET /portal/api/test-rooms/identity 返回 {user_id, nickname, token_issued, token_fingerprint}（指纹 = 令牌 SHA-256 哈希前 6 位 hex；昵称空 = 首访——自动生成昵称（词表+序号）并签发全局令牌一次、明文仅随本响应出现（no-store）、已签发不重发）；POST /portal/api/test-rooms/identity/token = 轮换式重取：旧令牌立即失效（DB 覆盖 + 认证缓存清除），新明文仅本响应一次——正在运行的 bot 须更新为新令牌。该令牌与玩家 API 全局令牌同源（users 行），可调 /api/match 与常规玩家 API。"
+    },
+    {
+      "version": 11,
+      "date": "2026-09-03",
+      "type": "changed",
+      "summary": "state 轮询限速放宽 8/s → 16/s（每用户聚合）",
+      "detail": "GET /api/games/{id}/state 频率上限由 8/s 放宽至 16/s（per-user 聚合，跨全部对局共享一桶；并发挂起 ≤32 不变）。放宽依据：服务端认证缓存（AuthLookup）落地后每 poll 零 DB 查询，2000 用户×500 桌 A/B 压测 24k poll/s 稳定（CPU ≤3.2/16 核、570 万 poll 仅 2000 次 DB 查询）。收益场景：M=10-11 桌事件驱动 bot（需求 ≈10×事件率 1.34/s ≈13.4/s）在旧 8/s 墙下会 429 断档、错过吃碰 1s 窗口；16/s 下全覆盖。旧 bot 按 8/s 自限无需改动（墙 > 自限即安全）；16/s 是新上限。"
+    },
+    {
+      "version": 10,
+      "date": "2026-09-03",
+      "type": "changed",
+      "summary": "/state 跨局边界轮询：seq 落后当前局立即返回全量快照（不再挂起至庄家出牌超时）",
+      "detail": "GET /api/games/{id}/state?seq=N：每局结束（round_ended，含流局）服务端自动重发新局，但发牌不产生任何事件——round_ended 是上一局最后事件，庄家第 14 张为发牌直抽、无 tile_drawn，事件流在新局首个动作/超时前为空。旧行为：局终后客户端按协议 poll(seq=上一局 round_ended 的 seq) 因无新事件而挂起，事件流第一批新局信号 = 庄家 DiscardTimeout 后的超时自动出牌：先发 tile_discarded（含被代打的牌张），同批紧跟 timeout kind=discard（按事件类型过滤的 bot 勿漏先行的 tile_discarded）——客户端拿到新局手牌前牌已被服务端代打一张。新行为：poll 的 seq 落后当前局（seq < 当前局首事件水位，即客户端还停在上一局）时立即返回全量快照（snapshot 含 round_no/phase/my_hand/seat，gap:true），round_ended 后照常 poll(seq=上次返回的 seq) 即可在出牌超时前拿到新局手牌；快照响应形态与既有 seq=0/gap 快照一致，事件驱动与快照轮客户端均无需改动。"
+    },
+    {
+      "version": 9,
+      "date": "2026-09-03",
+      "type": "changed",
+      "summary": "测试房间数据 API（免认证）限速粒度由 per-IP 改为 per-房间",
+      "detail": "GET /api/test-rooms/{id}/games 与 /games/{batch}/events：原 per-IP 桶（5/s）在 caddy 反代后所有请求同源 IP，等于全站共享一个桶——任一房间的并行流量（他人测试/多会话/取证突发）会 429 挤占所有其他房间。现改为双闸：主闸每房间独立 5/s（不同房间互不挤占，单房内轮询+取证连发充裕）+ 兜底每来源 1000/s（按全站容量设：500 房并行轮询稳态 ≈ 300/s，墙值须容纳正常规模，只拦盲扫与单源洪水）。放宽非破坏：单房频率上限不变，旧调用姿态不受影响，仅消除跨房误伤；429 响应结构与 RATE_LIMITED 码不变。"
+    },
+    {
+      "version": 8,
+      "date": "2026-09-03",
+      "type": "added",
+      "summary": "门户 API 新增 description（赛程说明）+ 锦标赛名称可编辑",
+      "detail": "GET /portal/api/tournaments（大厅行）与 GET /portal/api/tournaments/{id}（参赛者详情）新增 description 字段：赛程规则等运营说明，可空、多行（报名确认层与赛事详情展示）。GET /api/tournaments/{id} 与 /api/tournaments/me/rules 的 config 对象内亦同步新增 Description 键（同值）。锦标赛名称与描述可由管理员在任意阶段修改（PATCH /admin/api/tournaments/{id}，管理端操作）；名称仍可空（空串回退 id 展示不变）。兼容新增——旧客户端按未知键忽略即可；报名令牌与对局契约不变。"
+    },
+    {
+      "version": 7,
+      "date": "2026-09-02",
+      "type": "breaking",
+      "summary": "顶层 status 新值 stage_open/stage_done + 阶段间空转窗口",
+      "detail": "GET /api/tournaments/{id} 与 /me/rules 的 status 新增 stage_open（阶段 2+ 确认期：晋级名单已生成、ready 确认中、等开赛时刻；只接受名单内确认）与 stage_done（当前阶段场次全部打完并结算——晋级轮等管理员推进下一阶段；running 中断收敛也落 stage_done，叠加 stage_crashed=true 表示「中断待重赛」，bot 须区分「正常 done」与「中断」）。stage_open/stage_done 间隙期 /api/me 的 active_games 为空（my_games 为历史累计、非空，新场追加；阶段 2+ 的 ready_users 恒 0，防泄底）——空转窗口 ≠ 结束/异常，bot 必须继续轮询锦标赛 status 直至 finished/closed/void。"
+    },
+    {
+      "version": 7,
+      "date": "2026-09-02",
+      "type": "breaking",
+      "summary": "ready 跨阶段语义：stage_open 的 ready = 阶段出席确认（新增 NOT_QUALIFIED 错误码）",
+      "detail": "POST /api/tournaments/{id}/ready 与 /me/ready 在 stage_open 阶段 2+ 为阶段确认：名单内（晋级者/候补）幂等成功 200 {\"ready\":true}；名单外（海选已淘汰仍 registered、或未报名者）409 NOT_QUALIFIED（新码）。阶段确认不跨阶段继承——每阶段晋级者与候补都要在确认期内重新确认（漏确认不冻结；到点按已确认者全序取前 G，候补顶替）。非确认期（running/stage_done/finished/void）→ 409 TOURNAMENT_STARTED；closed → 409 TOURNAMENT_CLOSED；阶段 1 registering 未报名 → 409 NOT_REGISTERED（不变）。"
+    },
+    {
+      "version": 7,
+      "date": "2026-09-02",
+      "type": "breaking",
+      "summary": "ranking games_played 改为当阶段累计（每阶段归零）",
+      "detail": "GET /api/tournaments/{id} ranking 条目的 games_played 语义从「整赛累计」改为「当前阶段累计」：每阶段开赛清零、只计该玩家本阶段已打完场次（含轮空；决赛加赛场次同账续接）。旧 bot 若用 games_played 与规划总局数比对判断进度/终局将失效——进度判断改用 status/stage 字段组。口径补注（字段名沿旧、历史留痕）：games_played 实际按局（round）累计——每局结束本桌每名参与者 +1（含流局），轮空一场 +1；每场 N 局则打满一场计 N，勿当「场次数」用。"
+    },
+    {
+      "version": 7,
+      "date": "2026-09-02",
+      "type": "added",
+      "summary": "ranking 新增 place_points/god_count 三键字段",
+      "detail": "GET /api/tournaments/{id} ranking 条目新增 place_points（名次分）与 god_count（白板获取数），与 total_score/games_played/rank(1..n) 并列——兼容新增，旧 bot 按未知键忽略即可。"
+    },
+    {
+      "version": 7,
+      "date": "2026-09-02",
+      "type": "added",
+      "summary": "GET /api/tournaments/{id} 新增阶段字段组（stage/qualified/qualify_role）",
+      "detail": "开赛后响应新增：stage{no,role,total,name}（当前阶段号/角色 qualify|final/当前推断阶段总数/显示名：原名｜原名-第N轮｜原名-决赛）、stage_status（open|running|done）、stage_crashed（true=中断待重赛）、qualified/qualify_role（请求者本阶段资格：finalist 晋级 / backup 候补；阶段 1 无名单 → false/空，唯阶段 1 崩溃重赛的确认期例外——报名全量 qualified=true、role 空）。registering（未开赛）整组省略，旧字段逐字节不变。stage.total 随降档/翻转动态收缩——bot 不可按创建时规划轮次，一律以当前 status/stage 为准。"
+    },
+    {
+      "version": 7,
+      "date": "2026-09-02",
+      "type": "breaking",
+      "summary": "普通锦标赛按报名人数多阶段化（小规模赛制变化）+ 决赛加赛新 game_id 自动出现",
+      "detail": "普通锦标赛（kind 为空；创建参数不变）按报名人数 m 自动走多阶段晋级：m≥17 海选→16强(4组×4人)→8强(2组×4人)→决赛(4人)；9≤m≤16 海选→8强→决赛；5≤m≤8 海选(资格)→决赛；m=4 直接决赛（无淘汰）；m<4 到点作废 no_players。每阶段组内循环 M 场（M/N 跨阶段一致），非决赛轮打完 stage_done（admin 推进下一阶段），决赛打完才 finished——旧 bot 假设「running 后即 finished」必须改为多阶段循环。决赛轮常规场次打完若 1-4 名总得分并列 → running 态自动加赛并账循环（无上限）：加赛新场 game_id 自动出现（{tourID}_s{k}_b{b}_t{t}，批号全局续编）不另行通知——bot 在 running 态持续轮询 /api/me active_games 或 GET /api/tournaments/{id} my_games（历史累计、新 ID 追加）发现新场照常参赛。my_games_by_batch 键 = 全局场序、每键恰 1 场（跨阶段单调续编），非「批号分组」——bot 勿按批号索引取组。测试房间（kind=test）单阶段路径不变。"
+    },
+    {
+      "version": 7,
+      "date": "2026-09-02",
+      "type": "added",
+      "summary": "晋级轮判定链与决赛规则（名次分/白板获取数）",
+      "detail": "晋级轮（海选/中间轮）排名键序：total_score → place_points → god_count → user_id（字典序兜底），三键独立永不相加；名次分每场 1 位 +3 / 2 位 +1 / 3 位 −1 / 4 位 −3、本场同分共享并列区间平均，不进总得分；白板获取数口径 = 配牌扫全手（庄家含第 14 张直抽首摸）+ 每次墙摸摸到白板（含杠上摸），不可经事件流复算，轮空积 0；决赛轮名次纯由 total_score 决定（键 2/3/4 不参与），任何名次同分即加赛并账至 1-4 名两两不同，加赛场不产生键 2/3。权威细则（含并列区间平均表）见 docs/胡牌规则与番数计算.md §7。"
+    },
+    {
+      "version": 6,
+      "date": "2026-09-02",
+      "type": "changed",
+      "summary": "fan-calc 番型计算修复与放宽：4 白板计入链内飘出 + chain.count 上限 0-3 → 0-6",
+      "detail": "POST /portal/api/tools/fan-calc（试算工具，口径与对局结算同源）：① 修复——4 白板判定白板总数 = 手留 + 链内飘出白板（此前仅手留，链飘场景漏 ×2：三豪华七对+三财飘+爆头由 256 修正为 512）；② chain.count 校验 0-3 → 0-6（引擎杠×3+飘×3 可达 6，此前工具无法复现平胡分支 ×256 最大牌型）；③ 新增 400：手留白板 + chain.piao > 4（白板共 4 张物理约束，此前 200 静默少乘）。旧响应不变场景数值不变；对拍工具输出与对局 round_ended fan/detail 的 bot 应在修复后一致。"
+    },
+    {
+      "version": 5,
+      "date": "2026-09-02",
+      "type": "added",
+      "summary": "测试房间跨轮复用：finished 已报名令牌 register 幂等放行（进场协议兼容）",
+      "detail": "修复 v4 跨轮复用与「register→ready」进场协议的衔接：已报名用户对 finished 测试房 POST /register 现返回成功（幂等，不再 TOURNAMENT_STARTED）——按 register→ready 协议进场的 bot 第 2 轮不再误判「已开赛」跳过 ready，ready×4 即可开启下一轮。running 中 register 仍 TOURNAMENT_STARTED（已开赛重连语义不变）；未报名用户对 finished 房 register 仍拒绝（新用户不能中途加入后续轮）；正式锦标赛行为不变。旧 bot 无需改动（本次为放行型修正，无破坏）。"
+    },
+    {
+      "version": 4,
+      "date": "2026-09-02",
+      "type": "added",
+      "summary": "测试房间跨轮复用：finished 后 4 令牌 ready×4 开启新一轮 + 空闲自动关闭",
+      "detail": "测试房间跨轮复用（房间 id/令牌不变，round_no 递增，列表与详情响应透出 round_no/timeout_min）：① finished 后 4 个令牌再次各 ready 一次即开启下一轮（ready 幂等累积）；running 尾窗（末局结束前）到达的 ready 返回 409 TOURNAMENT_STARTED —— 非终态瞬时错误，轮询房间状态至 finished 后重试 ready 即可；② finished 不再等价「终局可删除」——状态可能回退 registering（ready_users 每轮重置归零）、空闲 {timeout_min} 分钟（默认 30，创建时配置）无人 ready 自动 close（正常生命周期，非故障）；③ 观赛快照仅覆盖服务进程内存中的场次（重开/重启后历史轮场次不再可快照），历史轮复盘走 GET /portal/api/games/{id}/events（DB 持久，不受重开影响）。"
+    },
+    {
+      "version": 3,
+      "date": "2026-09-02",
+      "type": "changed",
+      "summary": "规则修订：七对允许财飘（全局最大番型 ×512）",
+      "detail": "撤销「七对不能财飘」：七对形爆头听牌（如 3 组四张 + 1 白）可弃胡打白飘，飘/杠链因子与七对分支连乘。全局最大牌型 = 三豪华七对 + 三财飘 + 4 白板 + 爆头 = ×16 × 8 × 2 × 2 = ×512（原文档标称 ×256 实为平胡分支上限）。对局结算行为本已按此计（引擎无改动），追求最大番的离线策略模型与文档预期须更新。"
+    },
+    {
+      "version": 2,
+      "date": "2026-09-02",
+      "type": "breaking",
+      "summary": "快照移除 allowed_actions（客户端自研动作判定）",
+      "detail": "GET /api/games/{id}/state 快照不再含 allowed_actions——客户端须依 seat/phase/turn/responding_seats/drawn_tile/god.catch_play 自研判定可执行动作（phase ∈ deal|draw|response_peng|response_chi|settled|finished）；窗口「已响应」状态须客户端本地跟踪（重复提交 pass/动作返回 409 INVALID_ACTION）。旧 bot 按 allowed_actions 行动的逻辑全部失效，必须重写判定。"
+    },
+    {
+      "version": 2,
+      "date": "2026-09-02",
+      "type": "added",
+      "summary": "chi 支持 tiles 指定吃组合",
+      "detail": "POST /api/games/{id}/action 吃可附加 \"tiles\":[\"1w\",\"2w\"] 指定用哪两张手牌吃（多组合场景如 2w3w4w5w6w 吃 4w 可选 3 组；乱序容忍、等价匹配）；缺省回退第一组可行顺子（向后兼容）。"
+    },
+    {
+      "version": 2,
+      "date": "2026-09-02",
+      "type": "added",
+      "summary": "快照补充 seat 字段",
+      "detail": "快照新增 seat（本人座位号 0-3；观赛视角 -1），配合 phase/turn 自研判定——allowed_actions 移除后客户端自主决策的必要信息。"
+    },
+    {
+      "version": 1,
+      "date": "2026-09-02",
+      "type": "breaking",
+      "summary": "碰后禁止胡牌",
+      "detail": "胡牌新增「刚摸牌」门禁：碰/吃/杠动作后、摸牌前提交 {\"action\":\"hu\"} 返回 409 INVALID_ACTION。旧 bot 若依赖「碰后即胡」需改为先等摸牌事件再胡。"
+    },
+    {
+      "version": 1,
+      "date": "2026-09-01",
+      "type": "changed",
+      "summary": "state 轮询限速放宽 5/s → 8/s",
+      "detail": "GET /api/games/{id}/state 频率上限放宽（单 AI 同时 M=16 桌轮询需求 ≈6.4/s）。旧 bot 无需改动，但 8/s 是新上限。"
+    },
+    {
+      "version": 1,
+      "date": "2026-09-01",
+      "type": "breaking",
+      "summary": "番数计算按用户裁决体系重构",
+      "detail": "总番=1 → 分支（平胡/七对）→ 动作链（飘/杠每动作 ×2）→ 4 白板 ×2 → 爆头 ×2 最后统一加；七对×2×2^豪华组数。旧 bot 的得分预期模型（如庄家 ×8 递增）不再适用，须按新公式重算。"
+    },
+    {
+      "version": 1,
+      "date": "2026-09-01",
+      "type": "added",
+      "summary": "番型计算工具 fan-calc（免认证）",
+      "detail": "新增 POST /portal/api/tools/fan-calc：13 张手牌 + 1 张摸牌实时计算胡牌判定/爆头/番型/庄闲得分，免登录、每 IP 10/s。AI 可作离线试算与结算校验。"
+    },
+    {
+      "version": 1,
+      "date": "2026-09-01",
+      "type": "added",
+      "summary": "报名令牌作用域直达端点",
+      "detail": "新增 GET /api/tournaments/me/rules 与 POST /api/tournaments/me/ready：报名令牌免带锦标赛 id 直达规则与到位；全局令牌调用返回 400 TOKEN_NOT_SCOPED。"
+    },
+    {
+      "version": 1,
+      "date": "2026-09-01",
+      "type": "added",
+      "summary": "测试房间赛后数据 API（免认证）",
+      "detail": "新增 GET /api/test-rooms/{id}/games 与 /api/test-rooms/{id}/games/{batch}/events：房间 id 即凭证，拉取完整对战事件流（含四家手牌）供离线复盘与算法优化；running 场次 403 GAME_NOT_FINISHED。"
+    },
+    {
+      "version": 1,
+      "date": "2026-09-01",
+      "type": "changed",
+      "summary": "观战快照与复盘座位→玩家名映射",
+      "detail": "GET /portal/api/games/{id}/snapshot 与事件流响应新增 seats 字段（座位→玩家名映射），与实时排名玩家名可对应。"
+    },
+    {
+      "version": 1,
+      "date": "2026-09-01",
+      "type": "changed",
+      "summary": "对局七对胡牌判定修复",
+      "detail": "对局胡牌判定（含七对）与 fan-calc 工具口径对齐；旧 bot 若发现七对判定与预期不符，以本版本为准。"
+    },
+    {
+      "version": 1,
+      "date": "2026-09-01",
+      "type": "changed",
+      "summary": "4 白板判定描述更正",
+      "detail": "4 白板倍率条件明确为「手留 + 链内飘出的白板 = 4 张」（白板共 4 张不可能超过），普通打出/杠出的不算。"
+    }
+  ],
+  "updated_at": "2026-09-08",
+  "version": 27
+}
