@@ -1,7 +1,10 @@
 """Operator entry point. Budget additions are never exposed to the research agent."""
 import argparse
+from datetime import date
+from itertools import count
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -14,6 +17,36 @@ from .research import Research
 from .research_templates import CONTRACT
 from .storage import atomic_json, exclusive_lock
 from .types import RoundConfig
+
+
+def create_run_root(family):
+    """Reserve a dated directory atomically; a resumed run keeps its original name."""
+    base = Path('.local/runs').resolve()
+    base.mkdir(parents=True, exist_ok=True)
+    for number in count(1):
+        root = base / f'{date.today():%Y%m%d}-{family}-{number:02d}'
+        try:
+            root.mkdir(mode=0o700)
+            return root
+        except FileExistsError:
+            continue
+
+
+def list_runs(base):
+    """Inspect persisted metadata without loading or changing frozen runtimes."""
+    rows = []
+    for root in sorted(base.iterdir()) if base.exists() else []:
+        path = root / 'run.json'
+        if root.is_symlink() or not path.is_file():
+            continue
+        state = json.loads(path.read_text())
+        engine_path = root / 'runtime/mahjong_ai/engine.py'
+        engine = re.search(r"^ENGINE_VERSION\s*=\s*['\"]([^'\"]+)", engine_path.read_text(), re.M) if engine_path.exists() else None
+        rows.append({'name': root.name, 'root': str(root.resolve()), 'run_id': state['id'],
+                     'family': state['family'], 'baseline': state['baseline'],
+                     'engine': engine[1] if engine else None,
+                     'batches': len(state['batches']), 'acceptances': len(state['acceptances'])})
+    return {'root': str(base.resolve()), 'runs': rows}
 
 
 def toml_value(value):
@@ -126,8 +159,10 @@ def drive(research,brief=''):
 def main(argv=None):
     parser=argparse.ArgumentParser(description='Persistent population research with a dedicated Codex')
     sub=parser.add_subparsers(dest='command',required=True)
-    for name in ('init','run','status','budget','history'):
-        p=sub.add_parser(name);p.add_argument('--root',required=True)
+    for name in ('init','run','status','budget','history','list'):
+        p=sub.add_parser(name)
+        p.add_argument('--root', required=name not in ('init','list'),
+                       help='run directory; init defaults to .local/runs/YYYYMMDD-family-NN; list uses the runs parent')
         if name=='init':
             p.add_argument('--family',choices=['rule','rl'],required=True)
             p.add_argument('--seconds',type=float,default=3600);p.add_argument('--acceptance-slots',type=int,default=None)
@@ -139,7 +174,11 @@ def main(argv=None):
             p.add_argument('--unlimited-acceptance',action='store_true')
         if name=='history':p.add_argument('--query',default='')
         if name=='run':p.add_argument('--brief',default='')
-    args=parser.parse_args(argv);root=Path(args.root).resolve()
+    args=parser.parse_args(argv)
+    if args.command=='list':
+        print(json.dumps(list_runs(Path(args.root or '.local/runs').resolve()),ensure_ascii=False,indent=2))
+        return 0
+    root=Path(args.root).resolve() if args.root else create_run_root(args.family)
     # Freeze runtime before initialization; later work in the repository cannot invalidate a long run.
     runtime=root/'runtime'
     if not os.environ.get('MAHJONG_FROZEN_RESEARCH'):
@@ -148,14 +187,16 @@ def main(argv=None):
             shutil.copytree(Path(__file__).parent,runtime/'mahjong_ai',ignore=shutil.ignore_patterns('__pycache__'))
         if not runtime.exists():raise ValueError('run runtime missing; initialize first')
         env=dict(os.environ,PYTHONPATH=str(runtime),MAHJONG_FROZEN_RESEARCH='1')
-        return subprocess.call([sys.executable,'-B','-m','mahjong_ai.research_cli',*(argv if argv is not None else sys.argv[1:])],env=env)
+        forwarded=list(argv if argv is not None else sys.argv[1:])
+        if args.root is None:forwarded+=['--root',str(root)]
+        return subprocess.call([sys.executable,'-B','-m','mahjong_ai.research_cli',*forwarded],env=env)
     r=Research(root)
     if args.command=='init':result=r.initialize(args.family,RoundConfig(rounds=args.rounds,games_per_round=args.games_per_round),args.seconds,args.acceptance_slots,args.workers,args.action_seconds,args.seed)
     elif args.command=='run':result=drive(r,args.brief)
     elif args.command=='budget':result=r.add_budget(args.seconds,args.slots,args.unlimited_acceptance)
     elif args.command=='history':result=r.history(args.query)
     else:result=r.status()
-    print(json.dumps(result,ensure_ascii=False,indent=2))
+    print(json.dumps({'root':str(root),**result},ensure_ascii=False,indent=2))
     return 0
 
 

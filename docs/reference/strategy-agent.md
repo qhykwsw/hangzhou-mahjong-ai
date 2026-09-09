@@ -8,16 +8,29 @@
 
 规则和 RL 各维护一个长期 run，分别积累历史和种群，不交换 run 成果。初次创建见[README](../../README.md)。`--rounds` 是每场局数，`--games-per-round` 是每个完整结算的场数；评估中的“一轮”指一个完整结算。
 
+## 目录与命名
+
+长期迭代实验统一放在 `.local/runs/YYYYMMDD-{family}-NN/`：日期取创建当天的本地日期，`family` 为 `rule` 或 `rl`，`NN` 为同日同路线从 `01` 起的首个可用序号。`init --family rule` 自动分配目录；显式指定 `--root` 时，新建项目实验仍遵守此规范，已有 run 则使用原路径。
+
+续跑和加预算沿用原目录，不因新的一批实验另建 run。候选、模型、批次、验收与冻结 runtime 留在 run 内，报告及会话辅助记录放其 `reports/`。平台测试、正式对战与凭据分别管理，不混入研究 run。
+
+run 初始化时冻结源码和环境指纹，后续仓库更新或目录改名不会升级它。旧结果可能保存绝对路径，搬迁时须校验原文件内容一致，并保留必要的旧路径链接；不要批量改写冻结结果。
+
+## 管理与续跑
+
+在项目根目录执行，`<run-name>` 替换为 `list` 返回的名称。`list` 只读列出已有 run 的路径、路线、基线和冻结引擎版本，不启动实验。
+
 ```bash
-.venv/bin/mahjong-research status --root .local/research/rule
-.venv/bin/mahjong-research history --root .local/research/rule --query 听牌
-.venv/bin/mahjong-research budget --root .local/research/rule --seconds 3600 --unlimited-acceptance
-.venv/bin/mahjong-research run --root .local/research/rule
+.venv/bin/mahjong-research list
+.venv/bin/mahjong-research status --root ".local/runs/<run-name>"
+.venv/bin/mahjong-research history --root ".local/runs/<run-name>" --query 听牌
+.venv/bin/mahjong-research budget --root ".local/runs/<run-name>" --seconds 3600 --unlimited-acceptance
+.venv/bin/mahjong-research run --root ".local/runs/<run-name>"
 ```
 
 `init` 只创建一次，`run` 恢复原线程和进度，`budget` 显式增加时间。默认预算 60 分钟且不限验收次数；新 run 可用 `--acceptance-slots N` 限制次数，续跑可用 `budget --slots N` 增加次数。`acceptance_remaining=null` 表示不限。
 
-预算覆盖思考、工具和实验等待，暂停期间不计时。时间耗尽、中断或提供商错误后保存状态供续跑。run 初始化冻结源码和环境指纹，仓库后续改动不会静默改变研究条件。
+预算覆盖思考、工具和实验等待，暂停期间不计时。时间耗尽、中断或提供商错误后保存状态供续跑。
 
 ## 每批操作
 
@@ -38,7 +51,7 @@
 
 历史接口支持摘要搜索与分页详情。诊断提供最多 128 个固定公开观察，用于解释动作差异；它不是全部开发对局的完整牌谱。正式验收私有明细与随机种子不会返回研究 Agent。
 
-测试房和本地实验可作为研究反馈。自由对战与正式比赛使用冻结策略，结果只作比赛记录，不回流迭代。运行报告写入本 run 的 `reports/`，不追加到通用手册。
+测试房和本地实验可作为研究反馈。自由对战与正式比赛使用冻结策略，结果只作比赛记录，不回流迭代。
 
 ## 研究工具
 

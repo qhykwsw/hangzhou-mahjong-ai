@@ -222,3 +222,44 @@ def test_operator_interrupt_stops_codex_and_preserves_run(tmp_path,monkeypatch):
     assert killed==[process.pid]
     assert r._read()['lease'] is None
     assert r.status()['run_id']==r._read()['id']
+
+
+def test_cli_allocates_unique_runs_and_lists_without_changing_them(tmp_path):
+    import os
+    import re
+    import subprocess
+    import sys
+    env=dict(os.environ,PYTHONPATH=str(Path(__file__).resolve().parents[1]/'src'))
+    env.pop('MAHJONG_FROZEN_RESEARCH',None)
+    def cli(*args):
+        return json.loads(subprocess.check_output(
+            [sys.executable,'-B','-m','mahjong_ai.research_cli',*args],cwd=tmp_path,env=env,text=True))
+    first=cli('init','--family','rule')
+    second=cli('init','--family','rule')
+    roots=[Path(row['root']) for row in (first,second)]
+    assert roots[0]!=roots[1]
+    assert all(root.parent==tmp_path/'.local/runs' for root in roots)
+    assert re.fullmatch(r'\d{8}-rule-01',roots[0].name)
+    assert re.fullmatch(r'\d{8}-rule-02',roots[1].name)
+    before={root:(root/'run.json').read_bytes() for root in roots}
+    (roots[0].parent/'legacy-alias').symlink_to(roots[0],target_is_directory=True)
+    listed=cli('list')['runs']
+    assert [row['run_id'] for row in listed]==[first['run_id'],second['run_id']]
+    assert all(row['engine']=='hangzhou-local-v4' for row in listed)
+    assert all((root/'run.json').read_bytes()==before[root] for root in roots)
+    assert cli('status','--root',str(roots[0]))['run_id']==first['run_id']
+    assert len(list(roots[0].parent.glob('*/run.json')))==3  # two runs and the alias
+
+
+def test_cli_keeps_explicit_root_compatible(tmp_path):
+    import os
+    import subprocess
+    import sys
+    root=tmp_path/'custom-root'
+    env=dict(os.environ,PYTHONPATH=str(Path(__file__).resolve().parents[1]/'src'))
+    env.pop('MAHJONG_FROZEN_RESEARCH',None)
+    completed=subprocess.run([sys.executable,'-B','-m','mahjong_ai.research_cli',
+        'init','--family','rl','--root',str(root)],cwd=tmp_path,env=env,text=True,capture_output=True,check=True)
+    assert json.loads(completed.stdout)['root']==str(root)
+    assert (root/'runtime/mahjong_ai/research_cli.py').exists()
+    assert not (tmp_path/'.local/runs').exists()

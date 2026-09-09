@@ -15,11 +15,12 @@ python3 -m venv .venv
 创建规则研究 run 并启动。默认运行 60 分钟，不限制正式验收次数。
 
 ```bash
-.venv/bin/mahjong-research init --root .local/research/rule --family rule
-.venv/bin/mahjong-research run --root .local/research/rule
+.venv/bin/mahjong-research init --family rule
+.venv/bin/mahjong-research list
+.venv/bin/mahjong-research run --root ".local/runs/<run-name>"
 ```
 
-RL 使用独立目录和 `--family rl`。已有 run 使用原目录续跑，管理命令见[研究流程](docs/reference/strategy-agent.md)。
+`init` 在 `.local/runs/` 下自动创建 run 并返回路径；将 `<run-name>` 替换为 `list` 返回的目录名。RL 使用 `--family rl` 创建独立 run。命名、续跑和预算管理见[研究手册](docs/reference/strategy-agent.md#目录与命名)。
 
 ## 文档导航
 
@@ -30,4 +31,4 @@ RL 使用独立目录和 `--family rl`。已有 run 使用原目录续跑，管�
 | 修改框架、定位代码和验证 | [开发索引](docs/reference/development.md) · [AGENTS.md](AGENTS.md) |
 | 查看平台原文与响应样本 | [原始资料](docs/sources/README.md) |
 
-运行报告随各自 run 保存在 `<run>/reports/`。本地历史设计位于 `.local/documentation-archive/`，不作为现行规范。
+`.local/` 保存本地运行数据和凭据，被 Git 忽略；运行报告随各自 run 保存在 `<run>/reports/`。

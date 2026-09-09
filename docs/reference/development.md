@@ -5,9 +5,9 @@
 | 概念 | 含义与实现入口 |
 | --- | --- |
 | 局（Hand） | 一次发牌到胡牌或流局；[engine.py](../../src/mahjong_ai/engine.py)、[rules.py](../../src/mahjong_ai/rules.py) |
-| 场（Game） | 若干局，分数在局间累计；`GameConfig.rounds` 是每场局数 |
+| 场（Game） | 若干局，分数在局间累计；`RoundConfig.rounds` 是每场局数 |
 | 完整结算（Round） | 一个评估样本，可含多场；场间累计，最终结算一次名次与 RL 奖励；[settlement.py](../../src/mahjong_ai/settlement.py) |
-| 观察与结果 | [types.py](../../src/mahjong_ai/types.py)；`Observation.seat` 是物理座位，`RoundResult.rank_by_seat` 按稳定参与者索引 |
+| 观察与结果 | [types.py](../../src/mahjong_ai/types.py)；`Observation.stage.seat` 是物理座位，`RoundResult.rank_by_seat` 按稳定参与者索引 |
 | 策略与训练 | [policy.py](../../src/mahjong_ai/policy.py)、[training.py](../../src/mahjong_ai/training.py) |
 | 评估与 Elo | [evaluator.py](../../src/mahjong_ai/evaluator.py)、[ratings.py](../../src/mahjong_ai/ratings.py)、[league.py](../../src/mahjong_ai/league.py) |
 | 持久研究 | [research.py](../../src/mahjong_ai/research.py) 管状态与记忆；[research_jobs.py](../../src/mahjong_ai/research_jobs.py) 执行实验 |
