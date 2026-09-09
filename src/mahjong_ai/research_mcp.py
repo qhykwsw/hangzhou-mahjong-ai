@@ -1,110 +1,70 @@
-"""Typed research tools. There is deliberately no private-file or shell endpoint."""
-import asyncio
-import sys
-import time
+"""Direction-scoped candidate tools; the arena alone controls competition."""
 from pathlib import Path
-
+import sys
 from mcp.server.fastmcp import FastMCP
-
-from .research import Research
+from .arena import Arena
 from .research_templates import CONTRACT
 
 
-def server(root):
-    research=Research(root)
-    mcp=FastMCP('mahjong_research_mcp',instructions=(
-        'Optimize terminal average four-player rank. One persistent rule OR RL run. '
-        'Create multiple code candidates, submit a batch, wait for ALL experiments, then decide once. '
-        'Query history summaries and details. You cannot edit evaluation rules or grant budget.\n'+CONTRACT))
-    ro={'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False}
-    rw={'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False}
+def server(project, run_id, direction):
+    arena = Arena(project)
+    if direction not in arena.read(run_id)['directions']:
+        raise ValueError('unknown direction')
+    mcp = FastMCP('mahjong_research', instructions=CONTRACT)
+    ro = {'readOnlyHint': True, 'destructiveHint': False, 'openWorldHint': False}
+    rw = {'readOnlyHint': False, 'destructiveHint': False, 'openWorldHint': False}
 
     @mcp.tool(annotations=ro)
-    def research_status()->dict:
-        """Get objective, remaining budgets, baseline, population and batch/acceptance states."""
-        return research.status()
+    def research_status() -> dict:
+        """Read remaining budget, own drafts/batches and shared period ranking."""
+        return arena.snapshot(run_id, direction)
 
     @mcp.tool(annotations=ro)
-    def research_history(query:str='',offset:int=0,limit:int=10)->dict:
-        """Search all persisted candidate hypotheses, outcomes, batches and decisions. Paginated."""
-        return research.history(query,offset,limit)
+    def research_history(query: str = '', offset: int = 0, limit: int = 10) -> dict:
+        """Search this direction's candidate hypotheses and completed competition evidence."""
+        if offset < 0 or not 1 <= limit <= 50:
+            raise ValueError('invalid page')
+        state = arena.snapshot(run_id, direction)
+        rows = [c for c in state['candidates'] if c['direction'] == direction
+                and query.lower() in str(c).lower()]
+        return {'total': len(rows), 'items': rows[offset:offset+limit], 'periods': state['periods'][-3:]}
 
     @mcp.tool(annotations=ro)
-    def research_details(kind:str,object_id:str,offset:int=0,limit:int=10)->dict:
-        """Read candidate, batch, acceptance summary or trace (public decision observations).
-        Batch results stay hidden until all experiments finish. Trace object_id is candidate ID.
-        """
-        return research.details(kind,object_id,offset,limit)
+    def research_read_source(name: str = 'contract') -> dict:
+        """Read contract or the public types, rules, policy and candidate_worker SDK."""
+        if name == 'contract':
+            return {'content': CONTRACT}
+        if name not in ('types', 'rules', 'policy', 'candidate_worker'):
+            raise ValueError('unknown public SDK source')
+        return {'content': Path(__file__).with_name(name + '.py').read_text()}
+
+    @mcp.tool(annotations=rw)
+    def research_create_candidate(candidate_id: str, hypothesis: str, parent: str | None = None) -> dict:
+        """Create an own-direction draft, optionally from one of its existing candidates."""
+        return arena.fork(run_id, direction, candidate_id, hypothesis, parent)
 
     @mcp.tool(annotations=ro)
-    def research_sample_parents(limit:int=4)->dict:
-        """Recommend baseline, quality leaders and an alternative; you may choose any stored candidate."""
-        return research.sample(limit)
-
-    @mcp.tool(annotations=ro)
-    def research_read_source(name:str)->dict:
-        """Read contract or SDK source: contract, types, policy, rules, candidate_worker.
-        Use policy for the complete initial RL algorithm, types for all legal observations.
-        types includes catch_play, god_discarder_seat and the derived catch_restricted flag.
-        """
-        if name=='contract':return {'content':CONTRACT}
-        if name not in ('types','policy','rules','candidate_worker'):raise ValueError('unknown SDK source')
-        return {'name':name,'content':Path(__file__).with_name(name+'.py').read_text()}
+    def research_read_file(candidate_id: str, path: str = 'strategy.py') -> dict:
+        """Read one own-direction candidate file. Archived source remains available."""
+        return arena.candidate(run_id, direction, candidate_id, path=path)
 
     @mcp.tool(annotations=rw)
-    def research_create_candidate(candidate_id:str,hypothesis:str,parent:str|None=None,references:list[str]|None=None)->dict:
-        """Fork a candidate package for unrestricted strategy/algorithm editing; record its hypothesis and ancestry."""
-        return research.create_candidate(candidate_id,hypothesis,parent,references)
-
-    @mcp.tool(annotations=ro)
-    def research_read_file(candidate_id:str,path:str='strategy.py')->dict:
-        """Read a candidate source file, including archived versions. Relative path only."""
-        return research.candidate_file(candidate_id,path)
+    def research_write_file(candidate_id: str, path: str, content: str) -> dict:
+        """Write a draft source file; frozen submissions cannot be edited."""
+        return arena.candidate(run_id, direction, candidate_id, path=path, content=content)
 
     @mcp.tool(annotations=rw)
-    def research_write_file(candidate_id:str,path:str,content:str)->dict:
-        """Write a complete Python module/text file in a draft candidate. No limited expression schema."""
-        return research.candidate_file(candidate_id,path,content)
+    def research_set_dependencies(candidate_id: str, requirements: list[str]) -> dict:
+        """Declare exact name==version wheels for a draft."""
+        return arena.dependencies(run_id, direction, candidate_id, requirements)
 
     @mcp.tool(annotations=rw)
-    def research_set_dependencies(candidate_id:str,requirements:list[str])->dict:
-        """Declare exact name==version packages. Host prepares a separate environment and locks dependencies."""
-        return research.dependencies(candidate_id,requirements)
-
-    @mcp.tool(annotations=rw)
-    def research_submit_batch(candidates:list[str],pairs:int=20,training_episodes:int=64,league_samples:int=8)->dict:
-        """Freeze candidate code, train RL, run paired developer games and candidate league in parallel.
-        pairs is old/new complete settlement pairs per candidate. All results form ONE decision snapshot.
-        Bootstrap a new run first with candidates=['initial']. Does not spend formal acceptance slots.
-        """
-        return research.submit_batch(candidates,pairs,training_episodes,league_samples)
-
-    @mcp.tool(annotations=ro)
-    async def research_wait(seconds:int=20)->dict:
-        """Wait up to 30 seconds for active batch/acceptance completion, then return status. Never evolve early."""
-        end=time.monotonic()+max(0,min(seconds,30))
-        while True:
-            status=research.status()
-            running=any(b['status']=='running' for b in status['batches']) or any(a['status']=='running' for a in status['acceptances'])
-            if not running or time.monotonic()>=end:return status
-            await asyncio.sleep(.5)
-
-    @mcp.tool(annotations=rw)
-    def research_cancel(kind:str,object_id:str)->dict:
-        """Stop a batch or acceptance job and record cancellation. Acceptance slot stays spent."""
-        return research.cancel(kind,object_id)
-
-    @mcp.tool(annotations=rw)
-    def research_decide_batch(batch_id:str,retain:list[str],conclusion:str)->dict:
-        """After ALL results finish, record one evidence-based decision and retained population. Archive others, never delete history."""
-        return research.decide(batch_id,retain,conclusion)
-
-    @mcp.tool(annotations=rw)
-    def research_submit_acceptance(candidate_id:str)->dict:
-        """Spend one slot on independent old/new 1000 settlements each. Same code/conditions reuse evidence. No private traces returned."""
-        return research.accept(candidate_id)
+    def research_submit_batch(candidates: list[str], training_games: int | None = None) -> dict:
+        """Freeze 1..4 own drafts and queue preparation plus mixed competition. End this turn after submitting."""
+        return arena.submit(run_id, direction, candidates, training_games)
 
     return mcp
 
 
-if __name__=='__main__':server(sys.argv[1]).run(transport='stdio')
+if __name__ == '__main__':
+    server(*sys.argv[1:4]).run(transport='stdio')

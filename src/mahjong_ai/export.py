@@ -1,25 +1,29 @@
-"""Portable policy bundles. Export does not certify or submit a competition release."""
-from __future__ import annotations
-
+"""Export an immutable arena entrant and its matching runtime for platform use."""
 import shutil
-from dataclasses import replace
 from pathlib import Path
-
+from .arena import Arena
 from .policy import PolicySpec
-from .storage import atomic_json, environment_info, read_json, runtime_fingerprint
+from .storage import atomic_json
 
 
-def export_baseline(root, family, output):
-    original = PolicySpec(**read_json(Path(root) / 'baselines.json')[family])
+def export_candidate(root, candidate, output):
+    root = Path(root).resolve()
+    arena = Arena(root.parents[2])
+    state = arena.read(root.name)
+    row = state['candidates'].get(candidate)
+    if not row or not row.get('spec'):
+        raise ValueError('select a prepared candidate by its full ID')
+    original = PolicySpec(**row['spec'])
+    original.identity  # verify immutable source
     destination = Path(output).resolve()
     if destination.exists() and any(destination.iterdir()):
         raise ValueError('export destination must be empty')
     destination.mkdir(parents=True, exist_ok=True)
-    if original.model_path:
-        shutil.copy2(original.model_path, destination / 'model.npz')
-    policy = replace(original, model_path='model.npz' if original.model_path else None)
-    atomic_json(destination / 'policy.json', policy.as_dict())
-    atomic_json(destination / 'manifest.json', {'policy_id': original.identity,
-                'runtime': runtime_fingerprint(), 'environment': environment_info(),
-                'scope': 'experimental local baseline; online certification pending'})
-    return {'policy': str(destination / 'policy.json'), 'family': family}
+    shutil.copytree(original.package_path, destination / 'candidate')
+    shutil.copytree(root / 'runtime', destination / 'runtime')
+    value = original.as_dict() | {'package_path': 'candidate', 'python_path': None}
+    atomic_json(destination / 'policy.json', value)
+    atomic_json(destination / 'manifest.json', {'candidate': candidate, 'run': root.name,
+        'runtime': state['runtime'], 'requirements': row.get('requirements', []),
+        'scope': 'local competition result; external platform has separate records'})
+    return {'policy': str(destination / 'policy.json'), 'candidate': candidate}

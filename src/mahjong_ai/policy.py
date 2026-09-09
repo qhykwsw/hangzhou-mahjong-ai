@@ -315,18 +315,19 @@ class PolicySpec:
     program: str | None = None
     package_path: str | None = None
     package_hash: str | None = None
-    action_seconds: float = .05
+    action_seconds: float = 3.
     python_path: str | None = None
+    response_seconds: float = 1.
 
     def __post_init__(self):
-        if self.family not in ('rule', 'rl'):
-            raise ValueError('unknown policy family')
         if not self.version or len(self.version) > 128:
             raise ValueError('invalid version')
         if self.package_path:
-            if not self.package_hash or not 0 < self.action_seconds <= 10:
+            if not self.package_hash or not 0 < self.action_seconds <= 10 or not 0 < self.response_seconds <= 10:
                 raise ValueError('code policy requires a content hash and finite action budget')
             return
+        if self.family not in ('rule', 'rl'):
+            raise ValueError('unknown builtin policy family')
         if self.program:
             from .program import compile_program
             if self.family != 'rule': raise ValueError('only rule policies accept expressions')
@@ -345,7 +346,8 @@ class PolicySpec:
         if self.package_path:
             if training: raise ValueError('code policies train through train(ctx), not PolicySpec.build')
             from .candidate_runtime import RemotePolicy
-            return RemotePolicy(self.package_path, self.package_hash, self.action_seconds, self.python_path, self.version)
+            return RemotePolicy(self.package_path, self.package_hash, self.action_seconds, self.python_path, self.version,
+                                self.response_seconds)
         if self.family == 'rule':
             return RulePolicy(version=self.version, program=self.program, **self.parameters)
         return RLPolicy(TrainingRecipe(**self.parameters), self.model_path, training, version=self.version)
@@ -353,7 +355,7 @@ class PolicySpec:
     def as_dict(self):
         data = asdict(self)
         if not self.package_path:
-            for key in ('package_path', 'package_hash', 'action_seconds', 'python_path'): data.pop(key)
+            for key in ('package_path', 'package_hash', 'action_seconds', 'python_path', 'response_seconds'): data.pop(key)
         return data
 
     @property
@@ -362,8 +364,12 @@ class PolicySpec:
         d.pop('version')
         if self.package_path:
             from .candidate_runtime import tree_hash
+            import sys
             if tree_hash(self.package_path) != self.package_hash: raise ValueError('frozen candidate changed')
             d['package_path'] = self.package_hash
+            # venv locations are not distinct experiments. The package content
+            # includes locked wheel hashes; resolve the shared interpreter identity.
+            d['python_path'] = str(Path(self.python_path or sys.executable).resolve())
         from .storage import runtime_fingerprint
         d['runtime'] = runtime_fingerprint()
         if self.model_path:

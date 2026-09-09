@@ -10,7 +10,7 @@ from .rules import WHITE, counts, calculate_fan, is_baotou, payments
 from .types import Action, Meld, Observation, PublicEvent, RoundConfig, RoundResult, StageContext, StageKind
 
 
-ENGINE_VERSION = 'hangzhou-local-v4'
+ENGINE_VERSION = 'hangzhou-local-v5'
 
 
 def derive_seed(*parts) -> int:
@@ -152,6 +152,20 @@ class HandState:
             god_discarder_seat=self.catch_owner if self.catch_owner is not None else -1,
         )
 
+    def timeout_action(self):
+        """Official fallback uses insertion order, not the sorted public hand."""
+        legal = self.legal_actions()
+        if self.phase.startswith('response_'):
+            return next(a for a in legal if a.action == 'pass')
+        hu = next((a for a in legal if a.action == 'hu'), None)
+        if hu is not None:
+            return hu
+        for tile in reversed(self.hands[self.turn]):
+            action = next((a for a in legal if a.action == 'discard' and a.tile == tile), None)
+            if action is not None:
+                return action
+        raise IllegalAction('no official timeout action')
+
     def step(self, action):
         legal = self.legal_actions()
         if action not in legal:
@@ -257,6 +271,6 @@ class MahjongEngine:
         self.record_events = record_events
         self.check_invariants = check_invariants
 
-    def run_round(self, policies, config, seed):
+    def run_round(self, policies, config, seed, *, policy_seeds=None):
         from .settlement import run_settlement
-        return run_settlement(self, policies, config, seed)
+        return run_settlement(self, policies, config, seed, policy_seeds=policy_seeds)

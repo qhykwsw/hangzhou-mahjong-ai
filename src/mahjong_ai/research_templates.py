@@ -1,74 +1,34 @@
-"""Editable starting programs, not a restricted proposal language."""
-RULE = '''from mahjong_ai.policy import RulePolicy
+"""Small research interface shared by every configured direction."""
+CONTRACT = '''# Mahjong strategy research
 
-def build(model_dir):
-    return RulePolicy()
-'''
+Optimize average complete four-player settlement rank utility: 3, 2, 1, 0.
+Use ONLY mahjong_research MCP tools. No native shell, other tools or subagents.
+The direction brief is an initial research suggestion, not a restricted algorithm type.
+Read status and your previous complete batch evidence; edit your own candidate package;
+submit one batch of one to four candidates, then END this turn with a short explanation.
+The controller will resume this same conversation when that batch has finished.
 
-RL = '''from mahjong_ai.policy import RLPolicy, TrainingRecipe
+Candidates implement strategy.py: build(model_dir) returns reset(seed), act(observation),
+finish_round(result,seat). Choose an action in observation.legal_actions. Optional train(ctx)
+may generate models or other artifacts; ctx.play(learner) executes a real settlement.
+ctx.episodes bounds training games. Save artifacts in ctx.output; parent model files are
+in ctx.initial. ctx.checkpoint(metadata) saves a resumable training checkpoint. No family
+name determines what algorithms or models are allowed. Dependencies are exact version wheels.
 
-RECIPE = TrainingRecipe()
+reset seeds are private-independent strategy randomness, never wall seeds. Only legal
+observations and sanitized results enter training. No hidden opponent hands, future wall,
+platform credentials, other directions' source or models. You may inspect common rankings,
+but may only read, fork and edit candidates owned by this direction.
 
-def build(model_dir):
-    return RLPolicy(RECIPE, model_dir / "model.npz")
+The arena chooses opponents and sample counts. Each period has a frozen diverse roster,
+balanced appearances and four-seat rotations. Results are available after the whole period.
+Lowest average rank utility entrants are periodically archived; history remains readable.
+There is one period-relative leaderboard, no separate acceptance or certification.
+Timeouts use official fallback and affect actual results, without extra ranking penalties.
+The configured action windows default to 3 seconds for discards and 1 second for responses.
 
-def train(ctx):
-    # Replace this entire function and model implementation to explore other RL algorithms.
-    # ctx.play runs one real complete settlement and calls learner.finish_round once.
-    # Save checkpoints under ctx.output; this directory survives interruption.
-    initial = ctx.initial / "model.npz"
-    checkpoint = ctx.output / "model.npz"
-    load = checkpoint if ctx.completed_episodes else initial
-    learner = RLPolicy(RECIPE, load if load.exists() else None, training=True)
-    for episode in range(ctx.completed_episodes, ctx.episodes):
-        result, seat = ctx.play(learner)
-        learner.save(checkpoint)
-        ctx.checkpoint({"episode": episode + 1})
-    learner.save(ctx.output / "model.npz")
-    return {"algorithm": RECIPE.algorithm, "episodes": ctx.episodes}
-'''
-
-CONTRACT = '''# Strategy research interface v1
-
-Goal: maximize average terminal four-player rank utility (ranks 1/2/3/4 -> 3/2/1/0).
-Use all legally observable information and variable settlement progress; no extra reward for
-raw score at an unchanged final rank. Elo describes developer results, not promotion evidence.
-
-Each candidate is a Python package containing strategy.py and optional helper modules.
-build(model_dir) returns an object with reset(seed), act(observation), finish_round(result, seat).
-act must return an element of observation.legal_actions. Imports, loops, new algorithms,
-state and search are allowed. The worker only receives public observations and sanitized
-terminal results. No actual unseen hands or future wall are available. Hidden-state
-simulation must sample hypothetical worlds using public information.
-observation.catch_play indicates a table-wide catch-play circle; god_discarder_seat is
-its publicly visible exempt physical seat (-1 when inactive). catch_restricted indicates
-whether this player must discard the drawn tile and cannot chi/peng/exposed or added kong.
-The exempt player can claim and discard freely; use legal_actions as the action authority.
-
-RL candidates additionally implement train(ctx). ctx.episodes is the allowed number of
-real training settlements; ctx.play(learner) returns (result, seat), after invoking reset,
-act and finish_round on learner. You can implement arbitrary RL optimizers, buffers,
-networks, update schedules and checkpoint formats. Write model artifacts to ctx.output.
-ctx.initial contains parent artifacts if available. ctx.output persists after interruption.
-ctx.completed_episodes and ctx.checkpoint_metadata describe the last committed checkpoint.
-After saving model/optimizer/buffer/RNG files under ctx.output, call ctx.checkpoint(metadata)
-to commit them with real game progress. On resume load these files and continue from
-ctx.completed_episodes. Without checkpoint calls, an interrupted train function restarts.
-Training must use actual RL and the resulting model must be used by build.
-Rule candidates must not load trained models. Both routes may use rules and search.
-
-Frozen files are immutable. Create descendants to change code. Dependencies are declared
-as exact package==version requirements; environment preparation and locking are host operations.
-Use research_read_source to inspect SDK examples, observation types, rules and baseline code.
-
-Workflow: status -> search history/get details -> choose parents -> create/read/write candidates
--> submit ONE batch of candidates and development experiments -> wait until all finish
--> inspect full batch and individual results -> record one unified population decision
--> optionally submit selected frozen candidates for independent acceptance -> next batch.
-Do not evolve or change population while a batch is in progress. Failures are recorded.
-All experiments remain searchable even after a candidate is archived. The environment
-suggests parents; you may retain diverse candidates with a reason. Do not fabricate results.
-Total active run time limits research. Formal acceptance slots are an optional cap;
-acceptance_remaining=null means unlimited, not exhausted. Query remaining budget.
-You cannot grant yourself additional time. Never use external competition data.
+You cannot change the evaluator, pool membership, match conditions, worker limit or budget.
+Do not create workspace experiments or structured knowledge records. Use candidate hypotheses
+and your concise final explanation to preserve the reason for a change. Fork a new candidate
+to change a frozen package. Initial draft is named initial within your direction.
 '''

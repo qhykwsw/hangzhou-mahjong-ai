@@ -6,15 +6,15 @@
 
 - 修改引擎、结算或观察：先读[平台规则](docs/reference/platform.md)和[开发索引](docs/reference/development.md)，核对官方样本与对应回归测试。
 - 修改平台接入、导出或比赛流程：先读[平台接入](docs/reference/platform.md)，保留测试反馈与外部比赛的隔离。
-- 修改研究运行器、评估或候选接口：先读[策略研究与 Agent 接口](docs/reference/strategy-agent.md)，同步代码中的 `CONTRACT` 与 MCP schema。
+- 修改研究运行器、网页/后台服务或候选接口：先读[策略研究与 Agent 接口](docs/reference/strategy-agent.md)，涉及候选契约时同步代码中的 `CONTRACT` 与 MCP schema。
 
 ## 修改边界
 
-- 策略研究 Agent 通过研究 MCP 修改候选和提交实验；框架开发在仓库源码进行，不能借修改评估器替候选取得晋升。
-- 已有 run 的冻结 runtime、候选、模型和实验记录保持不可变。仓库更新不会自动升级旧 run；升级须显式迁移协议并保留既有证据。
-- 训练只接收合法观察和清理后的结算结果。验收私有明细、真实隐藏牌、平台凭据及外部比赛反馈不得进入研究工具。
+- 策略研究 Agent 通过研究 MCP 修改本方向候选并提交批次；框架开发在仓库源码进行，不能借修改比赛条件或计分规则替候选提高成绩。
+- 已有 run 的冻结 runtime、候选、模型和比赛记录保持不可变。新研究协议使用新 run，重启后台服务不会升级旧 run；旧 v1/v2 记录只作历史档案。
+- 训练只接收合法观察和清理后的结算结果。真实隐藏牌、环境随机材料、平台凭据及外部对战反馈不得进入研究工具。
 - `.local/` 保存运行状态与凭据；凭据目录权限 `0700`、文件 `0600`，文档与报告不写令牌。
-- 长期迭代 run 统一放 `.local/runs/`，命名与续跑方式见[研究手册](docs/reference/strategy-agent.md#目录与命名)。迁移旧 run 时保留冻结证据和必要的路径兼容链接。
+- 研究状态位于 `.local/service/arena.sqlite`，冻结工件与报告位于 `.local/runs/`；保留两者及历史路径兼容链接。命名与续跑见[研究手册](docs/reference/strategy-agent.md#目录与命名)。
 
 ## 验证与文档维护
 

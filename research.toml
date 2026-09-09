@@ -1,0 +1,21 @@
+directions = ["rule", "rl"]
+seconds = 3600
+agent_concurrency = 1
+agent_turn_seconds = 300
+workers = 2
+pool_size = 16
+survivors = 8
+matches_per_period = 128
+new_candidates_per_period = 4
+pending_limit = 16
+training_seconds = 300
+
+[game]
+rounds = 8
+games_per_round = 1
+stage = "qualifier"
+base_score = 1
+
+[timeouts]
+discard = 3.0
+response = 1.0

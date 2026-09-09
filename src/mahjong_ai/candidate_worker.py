@@ -5,6 +5,7 @@ import sys
 import os
 import threading
 import time
+import traceback
 from pathlib import Path
 
 from .types import Action, Meld, Observation, PublicEvent, RoundResult, StageContext
@@ -43,8 +44,10 @@ def main():
         op = request['op']
         if op == 'act':
             obs = observation(request['observation'])
+            started = time.perf_counter()
             action = policy.act(obs)
-            return {'index': obs.legal_actions.index(action)}
+            elapsed = time.perf_counter() - started
+            return {'index': obs.legal_actions.index(action), 'compute_seconds': elapsed}
         if op == 'reset': policy.reset(request['seed'])
         elif op == 'finish': policy.finish_round(RoundResult(**request['result']), request['seat'])
         else: raise ValueError('unknown policy operation')
@@ -78,14 +81,20 @@ def main():
             request = read()
             if request['op'] == 'build':
                 policy = module.build(package / 'model')
+                if not all(callable(getattr(policy, name, None)) for name in ('reset', 'act', 'finish_round')):
+                    raise TypeError('build must return reset, act and finish_round methods')
                 send({'ok': True})
+            elif request['op'] == 'describe':
+                send({'train': callable(getattr(module, 'train', None))})
             elif request['op'] == 'train':
                 metrics = module.train(TrainingContext(request))
                 send({'done': True, 'metrics': metrics or {}})
             else: send(dispatch(policy, request))
     except EOFError: pass
     except Exception as exc:
-        send({'error': f'{type(exc).__name__}: {exc}'})
+        frames = [{'file': Path(f.filename).name, 'line': f.lineno, 'function': f.name}
+                  for f in traceback.extract_tb(exc.__traceback__)[-12:]]
+        send({'error': f'{type(exc).__name__}: {exc}', 'traceback': frames})
 
 
 if __name__ == '__main__': main()

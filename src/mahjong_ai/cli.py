@@ -7,9 +7,7 @@ import time
 from pathlib import Path
 
 from .engine import ENGINE_VERSION, MahjongEngine
-from .evaluator import Evaluator, promotion_decision
-from .generation import CodexGenerator, CommandGenerator, SearchGenerator
-from .iteration import IterationRunner, IterationRunConfig, default_opponents
+from .seeds import default_opponents
 from .policy import PolicySpec, TrainingRecipe
 from .storage import atomic_json, read_json
 from .training import train
@@ -24,6 +22,9 @@ def spec(value):
     if data.get('model_path'):
         model = Path(data['model_path'])
         data['model_path'] = str(model if model.is_absolute() else (path.parent / model).resolve())
+    for key in ('package_path', 'python_path'):
+        if data.get(key) and not Path(data[key]).is_absolute():
+            data[key] = str((path.parent / data[key]).resolve())
     return PolicySpec(**data)
 
 
@@ -54,18 +55,6 @@ def main(argv=None):
     play.add_argument('--policies', nargs=4, default=['rule'] * 4)
     play.add_argument('--output', default='.local/mahjong-ai/play.json')
     play.add_argument('--check-invariants', action='store_true')
-    evaluate = sub.add_parser('evaluate', help='paired full-round evaluation, old and new vs three opponents')
-    common(evaluate)
-    evaluate.add_argument('--baseline', default='rule')
-    evaluate.add_argument('--candidate', required=True)
-    evaluate.add_argument('--evaluation-rounds', type=int, default=2000, help='total complete settlements, split equally old/new')
-    evaluate.add_argument('--workers', type=int, default=1)
-    evaluate.add_argument('--output', required=True)
-    league = sub.add_parser('league', help='local frozen-policy league and Elo table; no training or promotion')
-    common(league)
-    league.add_argument('--policies', nargs=4, required=True)
-    league.add_argument('--samples', type=int, default=100)
-    league.add_argument('--output', required=True)
     training = sub.add_parser('train', help='train a terminal rank-reward RL policy')
     common(training)
     training.add_argument('--training-rounds', type=int, default=24)
@@ -73,28 +62,14 @@ def main(argv=None):
     training.add_argument('--hidden-size', type=int, default=16)
     training.add_argument('--initial-model')
     training.add_argument('--output', required=True)
-    iteration = sub.add_parser('iterate', help='generate, train, evaluate, promote and resume')
-    common(iteration)
-    iteration.add_argument('--root', default='.local/mahjong-rank')
-    iteration.add_argument('--run-id', required=True)
-    iteration.add_argument('--iterations', type=int, default=2)
-    iteration.add_argument('--evaluation-rounds', type=int, default=2000, help='total complete settlements, split equally old/new')
-    iteration.add_argument('--training-rounds', type=int, default=12)
-    iteration.add_argument('--seconds', type=float, default=300)
-    iteration.add_argument('--workers', type=int, default=1)
-    iteration.add_argument('--families', nargs='+', choices=['rule', 'rl'], default=['rule', 'rl'])
-    iteration.add_argument('--generator', choices=['search', 'codex', 'command'], default='codex')
-    iteration.add_argument('--generator-argv', help='JSON array of executable and arguments, no shell expansion')
-    iteration.add_argument('--generator-timeout', type=float, default=180)
-    iteration.add_argument('--model', help='optional generator model; otherwise preserve configured model')
     benchmark = sub.add_parser('benchmark', help='measure real rules and RL throughput locally')
     common(benchmark)
     benchmark.add_argument('--rl-policy', help='trained policy.json; default is an initialized network')
     benchmark.add_argument('--samples', type=int, default=20)
     benchmark.add_argument('--output', default='.local/mahjong-ai/benchmark.json')
-    export = sub.add_parser('export', help='export a portable local baseline policy bundle')
+    export = sub.add_parser('export', help='export a frozen arena candidate bundle')
     export.add_argument('--root', required=True)
-    export.add_argument('--family', choices=['rule', 'rl'], required=True)
+    export.add_argument('--candidate', required=True)
     export.add_argument('--output', required=True)
     calibration = sub.add_parser('calibrate', help='compare local fan results with stateless official oracle')
     calibration.add_argument('--base-url', default='https://10.240.169.190:18080')
@@ -116,8 +91,8 @@ def main(argv=None):
             online.add_argument('--join', action='store_true', help='also register/ready in available stages')
     args = parser.parse_args(argv)
     if args.command == 'export':
-        from .export import export_baseline
-        print(json.dumps(export_baseline(args.root, args.family, args.output), ensure_ascii=False))
+        from .export import export_candidate
+        print(json.dumps(export_candidate(args.root, args.candidate, args.output), ensure_ascii=False))
         return 0
     if args.command == 'calibrate':
         from .calibration import calibrate
@@ -138,21 +113,12 @@ def main(argv=None):
         print(json.dumps(result, ensure_ascii=False))
         return 0
     cfg = config(args)
-    if args.command == 'league':
-        from .league import run_league
-        print(json.dumps(run_league([spec(p) for p in args.policies],cfg,args.samples,args.seed,args.output),ensure_ascii=False))
-    elif args.command == 'play':
+    if args.command == 'play':
         result = MahjongEngine(check_invariants=args.check_invariants).run_round(
             [spec(p).build() for p in args.policies], cfg, args.seed)
         atomic_json(args.output, result.as_dict())
         print(json.dumps({'completed': result.completed, 'scores': result.total_score_by_seat,
                           'hands': result.rounds_played, 'ranks': result.rank_by_seat, 'output': args.output}, ensure_ascii=False))
-    elif args.command == 'evaluate':
-        if args.evaluation_rounds < 2 or args.evaluation_rounds % 2:
-            parser.error('evaluation-rounds must be positive and even')
-        report = Evaluator().evaluate(spec(args.baseline), spec(args.candidate), default_opponents(), cfg,
-                                     args.evaluation_rounds // 2, args.seed, args.output, args.workers)
-        print(json.dumps(report.summary() | {'decision': promotion_decision(report)}, ensure_ascii=False))
     elif args.command == 'train':
         recipe = TrainingRecipe(learning_rate=args.learning_rate, hidden_size=args.hidden_size, seed=args.seed)
         state = train(recipe, default_opponents(), cfg, args.training_rounds, args.output,
@@ -162,17 +128,6 @@ def main(argv=None):
         print(json.dumps({'status': state['status'], 'training_rounds': len(state['episodes']),
                           'gradient_updates': sum(e['updated'] for e in state['episodes']),
                           'policy': str(Path(args.output) / 'policy.json')}, ensure_ascii=False))
-    elif args.command == 'iterate':
-        if args.generator == 'codex':
-            generator = CodexGenerator(timeout=args.generator_timeout, model=args.model)
-        elif args.generator == 'command':
-            if not args.generator_argv: parser.error('--generator-argv required')
-            generator = CommandGenerator(json.loads(args.generator_argv), args.generator_timeout)
-        else:
-            generator = SearchGenerator(args.seed)
-        settings = IterationRunConfig(args.iterations, args.evaluation_rounds, args.training_rounds,
-                                      args.workers, args.seconds, args.seed, tuple(args.families))
-        print(json.dumps(IterationRunner(args.root).run(args.run_id, cfg, settings, generator), ensure_ascii=False))
     else:
         if args.samples < 1: parser.error('samples must be positive')
         from .storage import environment_info, runtime_fingerprint

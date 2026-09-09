@@ -16,11 +16,15 @@ def final_ranks(scores, place_points, whites, player_ids, stage):
     return tuple(order.index(i) + 1 for i in range(4))
 
 
-def run_settlement(engine, policies, config, seed):
+def run_settlement(engine, policies, config, seed, *, policy_seeds=None):
     from .engine import HandState, derive_seed
+    from .candidate_runtime import ActionUnavailable, check_cancelled
     if len(policies) != 4 or len({id(p) for p in policies}) != 4:
         raise ValueError('exactly four independent policy instances required')
-    for player, policy in enumerate(policies): policy.reset(derive_seed(seed, 'policy', player))
+    if policy_seeds is not None and (len(policy_seeds) != 4 or any(type(s) is not int for s in policy_seeds)):
+        raise ValueError('four independent policy seeds required')
+    for player, policy in enumerate(policies):
+        policy.reset(policy_seeds[player] if policy_seeds is not None else derive_seed(seed, 'policy', player))
     scores, whites, points = [0]*4, [0]*4, [0.]*4
     hands, games, archived_events = [], [], []
     hand_no = steps = overtime = game_index = 0
@@ -56,6 +60,7 @@ def run_settlement(engine, policies, config, seed):
             # tie-break fields. Never leak hidden tile counts through live rank.
             stage_ranks = tuple(score_ranks(scores)[i] for i in seat_players)
             while not hand.settled:
+                check_cancelled()
                 if hand.steps >= config.max_actions_per_hand:
                     completed, reason = False, 'hand action budget exhausted'
                     break
@@ -66,7 +71,10 @@ def run_settlement(engine, policies, config, seed):
                     obs = replace(obs, stage=replace(obs.stage, round_no=local_hand,
                                   stage_scores=stage_scores, rank_by_seat=stage_ranks,
                                   stage_round_no=hand_no, stage_rounds_total=horizon))
-                    action = policies[seat_players[hand.turn]].act(obs)
+                    try:
+                        action = policies[seat_players[hand.turn]].act(obs)
+                    except ActionUnavailable:
+                        action = hand.timeout_action()
                 hand.step(action)
                 if engine.check_invariants: hand.assert_conservation()
             steps += hand.steps
@@ -85,6 +93,9 @@ def run_settlement(engine, policies, config, seed):
                           'delta': hand.delta, 'scores': tuple(scores),
                           'game_scores': tuple(game_scores),
                           'initial_hands': hand.initial_hands if engine.record_events else None})
+            if callable(getattr(engine, 'progress', None)):
+                engine.progress({'hands_completed': hand_no, 'hands_total': horizon,
+                                 'scores': tuple(scores)})
             if hand.winner is not None: dealer = hand.winner
         if engine.record_events:
             archived_events.extend(asdict(e) | {'private_to': private, 'game_no': game_index+1,

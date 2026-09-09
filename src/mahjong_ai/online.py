@@ -321,7 +321,18 @@ class TournamentRunner:
                           'drawn': obs.drawn_tile, 'wall': obs.wall_remaining})
             if key in seen: continue
             begin = time.perf_counter()
-            action = policy.act(obs)
+            from .candidate_runtime import ActionUnavailable, RemotePolicy
+            if isinstance(policy, RemotePolicy) and snap.get('window_deadline_ms'):
+                remaining = max(.001, snap['window_deadline_ms']/1000-time.time())
+                policy.action_seconds = min(self.policy.action_seconds, remaining)
+                policy.response_seconds = min(self.policy.response_seconds, remaining)
+            try:
+                action = policy.act(obs)
+            except ActionUnavailable:
+                # The server owns timeout fallback. Never submit a stale action.
+                seen.add(key)
+                force_snapshot = True
+                continue
             decision_ms = (time.perf_counter() - begin) * 1000
             if action not in obs.legal_actions: raise SnapshotError('policy returned an illegal action')
             seen.add(key)

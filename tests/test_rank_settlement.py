@@ -7,8 +7,7 @@ from mahjong_ai.policy import RulePolicy, RLPolicy, TrainingRecipe, PolicySpec, 
 from mahjong_ai.types import RoundConfig, StageKind, RANK_OBJECTIVE
 from mahjong_ai.settlement import final_ranks, score_ranks
 from mahjong_ai.training import train
-from mahjong_ai.iteration import IterationRunner, IterationRunConfig, default_opponents
-from mahjong_ai.evaluator import Evaluator, EvaluationReport, promotion_decision
+from mahjong_ai.seeds import default_opponents
 from mahjong_ai.storage import atomic_json, read_json
 
 
@@ -101,21 +100,8 @@ def test_multigame_training_resume_matches_and_legacy_critic_is_reset(tmp_path,m
     assert np.array_equal(loaded.params['w'],legacy['w'])
 
 
-def test_score_protocol_and_registry_cannot_be_promoted_or_resumed(tmp_path):
-    old=EvaluationReport({'pairs':1},[{'completed':True,'delta':1000}])
-    assert promotion_decision(old)['status']=='inconclusive'
-    atomic_json(tmp_path/'baselines.json',{'version':1,'rule':PolicySpec().as_dict()})
-    with pytest.raises(ValueError,match='legacy baseline'):
-        IterationRunner(tmp_path).run('rank',RoundConfig(),IterationRunConfig(families=('rule',)))
 
 
-def test_rank_pair_summary_and_multigame_cache_contract(tmp_path):
-    p=PolicySpec()
-    r=Evaluator().evaluate(p,p,default_opponents(),RoundConfig(rounds=2,games_per_round=2),pairs=3,output=tmp_path)
-    assert r.summary()['mean_rank_utility_delta']==0 and r.summary()['verified_hands']==24
-    assert all(pair['delta']==pair['candidate']['rank_utility']-pair['baseline']['rank_utility'] for pair in r.pairs)
-    with pytest.raises(ValueError,match='protocol differs'):
-        Evaluator().evaluate(p,p,default_opponents(),RoundConfig(rounds=2,games_per_round=3),pairs=3,output=tmp_path)
 
 
 def test_legacy_feature_schema_warm_start_preserves_actor_columns(tmp_path):

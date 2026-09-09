@@ -1,0 +1,4 @@
+name = "rl"
+brief = "研究能利用完整结算奖励的小型学习策略，检查训练实际产生的效果。"
+template = "template"
+training_games = 64
