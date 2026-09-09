@@ -1,37 +1,45 @@
 # 开发索引
 
-## 术语与索引
+## 模块与职责
 
-| 概念 | 含义与实现入口 |
+| 模块 | 入口与职责 |
 | --- | --- |
-| 手（Hand） | 一次发牌到胡牌或流局；[engine.py](../../src/mahjong_ai/engine.py)、[rules.py](../../src/mahjong_ai/rules.py) |
-| 场（Game） | 多手累计分数；`RoundConfig.rounds` 是每场手数 |
-| 完整结算（Round） | 四名固定参与者最终结算一次名次与奖励；[settlement.py](../../src/mahjong_ai/settlement.py) |
-| 观察与结果 | [types.py](../../src/mahjong_ai/types.py)；`Observation.stage.seat` 是物理座位，`RoundResult.rank_by_seat` 按稳定参与者索引 |
-| 策略与训练 | [policy.py](../../src/mahjong_ai/policy.py)、[training.py](../../src/mahjong_ai/training.py) |
-| 研究方向、混合池、比赛期 | [arena.py](../../src/mahjong_ai/arena.py)；事务状态、调度、排名和方向隔离 |
-| 进程、预算和回执 | [arena_controller.py](../../src/mahjong_ai/arena_controller.py)、[arena_jobs.py](../../src/mahjong_ai/arena_jobs.py) |
-| 后台服务与网页 | [app.py](../../src/mahjong_ai/app.py)、[web](../../src/mahjong_ai/web) |
-| 研究会话与契约 | [research_agent.py](../../src/mahjong_ai/research_agent.py)、[research_mcp.py](../../src/mahjong_ai/research_mcp.py)、[research_templates.py](../../src/mahjong_ai/research_templates.py) |
-| 候选与依赖隔离 | [candidate_runtime.py](../../src/mahjong_ai/candidate_runtime.py)、[candidate_worker.py](../../src/mahjong_ai/candidate_worker.py)、[dependencies.py](../../src/mahjong_ai/dependencies.py) |
-| 平台适配与审计 | [official.py](../../src/mahjong_ai/official.py)、[online.py](../../src/mahjong_ai/online.py)、[replay_audit.py](../../src/mahjong_ai/replay_audit.py) |
+| `domain/` | 牌、规则、观察、动作、真实对局与完整结算 |
+| `sdk/` | 精确牌形、公开轨迹、假想状态生成与模拟 |
+| `strategies/` | 可运行启发式、收益预测、PPO 与搜索基线 |
+| `research/` | 配置、分支、候选、迭代与周期状态转换 |
+| `evaluation/` | 配对参照抽样、四座赛程、成绩与保护淘汰 |
+| `execution/` | 模型配置、会话、依赖沙箱、资源与进程调度 |
+| `persistence/` | SQLite 事务、幂等回执和冻结工件 |
+| `platform/` | 导出、官方协议与牌谱审计 |
+| `interfaces/` | CLI、研究 MCP、HTTP 与网页 |
 
-研究入口是 `mahjong start`，候选接口见[研究手册](strategy-agent.md)。独立引擎、训练、吞吐测试、导出和平台命令保留在 `mahjong-ai`，以 `--help` 为准。旧研究工作台、配对晋升、Elo、独立验收和 campaign 运行器已退出活动源码。
+研究入口为 `mahjong`，独立引擎、训练、吞吐测试、导出与平台命令为 `mahjong-ai`。以 `--help` 为准。
 
-## 验证与边界
+独立 CLI 的 `rule`、`rl` 是基础策略入口；多方向研究的组合基线由 `strategies/catalog.py` 提供。CLI 的基础吞吐测试不替代各研究组合在冻结对手池上的实际训练和评估测量。
+
+研究状态由 `Research` 的接口修改，`Store` 在事务中提交。调度器先登记任务再创建进程；任务结果使用 run/job 唯一标识，比赛逐场落盘，恢复时复用完整回执。暂停是执行状态，不是候选质量结论。
+
+策略只操作公开 SDK 和自身产物。`sdk/simulation.py` 创建的是假想世界，真实 `HandState` 保留在宿主进程；修改两者需同时核对观察过滤、合法动作和牌张守恒。规则、结算不得为了某类算法而改变。
+
+## 修改与验证
 
 ```bash
 .venv/bin/python -m pytest -q
+ruff check src tests scripts --select F401,F821,F822,F823
+ruff format --check src tests scripts
 ```
 
-规则差异优先用 `tests/fixtures/official-v25-*` 的真实快照与牌谱定位；抓打圈豁免使用 [test_catch_play.py](../../tests/test_catch_play.py) 的合成契约场景，四白板回归读取 [fan-calc 原始响应](../sources/fan-calc-four-whites.json)。合成场景与无状态番型核验不能证明整个对局引擎等价。
+引擎与平台事实优先核对 `tests/fixtures/official-v25-*` 官方快照与牌谱。抓打圈的豁免、吃碰后续飘与断链有合成契约回归，四白板使用 `docs/sources/fan-calc-four-whites.json` 原始响应。合成用例不能证明完整线上阶段等价。
 
-本地引擎与平台适配支持抓打圈打财神者豁免、圈内响应与吃碰后的续飘/断链；牌谱审计采用同一规则。`Observation.god_discarder_seat` 是公开物理座位，`catch_restricted` 表示本人是否受限。本地按动作推进响应窗口，不人为等待整个平台窗口结束。
+研究测试覆盖分支隔离、完整配对、幂等入账、代表选择、配置生效、保护跳过和周期终点。策略 SDK 测试用独立牌形枚举核对结构距离，检查假想世界与合法观察一致，并验证 PPO 真实训练更新。
 
-研究候选在 macOS `sandbox-exec` 中运行，禁止网络和私有文件访问。Linux/GPU 机器需要先适配强制隔离执行器。超时采用平台默认动作，迟到动作不能串入后续观察；回退次数、主进程耗时和错误诊断随真实结算保留。
+模型启动必须同时处理 model、provider、reasoning effort 和 catalog。只更换模型名称不足以切换提供方。自定义模型采用直接暴露研究工具的目录副本，原用户配置不改写。新增模型或修改启动方式需真实调用验证，命令构造测试不能证明网关可用。
 
-服务与 run 的代码版本边界、地址和日志位置见[研究手册](strategy-agent.md#目录与命名)。现役协议以源码及 MCP schema 为准，旧 run 中的文档和源码属于冻结证据。
+端到端验收使用独立的新研究，记录在其 `reports/`。按实际算法测量并发和训练资源，再调整固定评估场数；不得将简单规则的吞吐当作搜索或 PPO 的吞吐。网页需验证配置保存、暂停继续、双 tab、历史排名与淘汰隐藏。
 
-研究状态变更由 SQLite 事务提交。控制器先登记任务再创建进程，比赛按 run、期数与场次唯一入账，整期淘汰只执行一次。暂停可重跑当前未完成结算，不能改变已完成回执或已冻结工件。
+完整线上阶段身份映射、最高并发与响应窗口仍需专项平台实战验证。本地通过不等于正式赛事已验证。
 
-完整平台阶段的身份映射、阶段上下文与最高并发窗口仍需专项实战验证。框架端到端验收记录留在对应 run 的 `reports/`，本地通过不等于线上阶段已验证。
+## 领域与决策
+
+[术语表](../../CONTEXT.md) 定义研究方向、组合、分支、候选、派生父代与现役代表。架构取舍见 [ADR](../adr/)，现行操作见[研究手册](strategy-agent.md)。新的通用说明更新现有手册；具体成绩、耗时和核实日期保存在 run 报告中。

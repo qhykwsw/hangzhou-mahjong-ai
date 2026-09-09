@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>杭州麻将 · 策略研究</title>
+    <link rel="stylesheet" href="/assets/style.css" />
+  </head>
+  <body>
+    <header>
+      <div class="brand">
+        <span class="tile">白</span>
+        <div>
+          <h1>杭州麻将策略研究</h1>
+          <p>独立探索 · 同场检验</p>
+        </div>
+      </div>
+      <div class="toolbar">
+        <select id="runSelect" aria-label="研究记录"></select
+        ><button id="configure">研究配置</button
+        ><button id="newRun" class="primary">新建研究</button>
+      </div>
+    </header>
+    <main>
+      <div id="notice" role="status" hidden></div>
+      <section class="statusbar">
+        <div>
+          <span id="phase">尚未开始</span
+          ><strong id="runTitle">创建你的第一项研究</strong>
+        </div>
+        <div id="summary"></div>
+        <div class="toolbar">
+          <button id="pause">暂停</button><button id="resume">继续</button
+          ><button id="extend">追加轮数</button>
+        </div>
+      </section>
+      <nav role="tablist">
+        <button role="tab" id="progressTab" aria-selected="true">
+          研究与对局</button
+        ><button role="tab" id="rankingTab" aria-selected="false">
+          排名与变化
+        </button>
+      </nav>
+      <section id="progressPanel" role="tabpanel">
+        <div class="sectionhead">
+          <h2>研究分支</h2>
+          <label
+            >筛选组合
+            <select id="filter">
+              <option value="">全部组合</option>
+            </select></label
+          >
+        </div>
+        <div id="branches" class="branches">
+          <div class="empty">先配置策略组合和研究模型，再开始独立迭代。</div>
+        </div>
+        <div class="columns">
+          <section>
+            <h2>正在执行</h2>
+            <div id="jobs"></div>
+          </section>
+          <section>
+            <h2>研究记录</h2>
+            <div id="events"></div>
+          </section>
+        </div>
+        <details>
+          <summary>候选版本与研究会话</summary>
+          <div id="candidates"></div>
+          <div id="activity"></div>
+        </details>
+      </section>
+      <section id="rankingPanel" role="tabpanel" hidden>
+        <div class="sectionhead">
+          <h2>共同竞技排名</h2>
+          <span id="rankLabel">首次共同竞技结束后产生排名</span>
+        </div>
+        <p class="muted">
+          名次效用：第一名 3、第二名 2、第三名 1、第四名
+          0。排名随周期共同竞技更新。
+        </p>
+        <div class="tablewrap">
+          <table>
+            <thead>
+              <tr>
+                <th>排名</th>
+                <th>变化</th>
+                <th>策略组合 / 分支</th>
+                <th>研究模型</th>
+                <th>现役版本</th>
+                <th>平均效用</th>
+                <th>出场</th>
+              </tr>
+            </thead>
+            <tbody id="ranking"></tbody>
+          </table>
+        </div>
+        <h2>排名轨迹</h2>
+        <div id="history"></div>
+      </section>
+    </main>
+    <dialog id="configDialog">
+      <form id="configForm">
+        <div class="sectionhead">
+          <h2 id="configTitle">新建研究</h2>
+          <button type="button" id="closeConfig" aria-label="关闭">关闭</button>
+        </div>
+        <p id="configHint" class="muted"></p>
+        <fieldset>
+          <legend>运行与评估</legend>
+          <div id="numberFields" class="fields"></div>
+        </fieldset>
+        <fieldset>
+          <legend>策略组合与研究模型</legend>
+          <p class="muted">
+            每个分支独立保存会话和候选。模型分配数量之和等于分支数量。
+          </p>
+          <div id="combinationFields"></div>
+        </fieldset>
+        <fieldset>
+          <legend>模型推理等级</legend>
+          <div id="modelFields" class="fields"></div>
+        </fieldset>
+        <details>
+          <summary>算法、资源与比赛完整配置</summary>
+          <p class="muted">
+            可编辑全部参数。运行中比赛规则不可变；其他参数按生效时机应用。
+          </p>
+          <textarea
+            id="advanced"
+            aria-label="完整配置"
+            rows="14"
+            spellcheck="false"
+          ></textarea
+          ><button type="button" id="applyAdvanced">
+            将完整配置应用到表单
+          </button>
+        </details>
+        <div id="pending"></div>
+        <div class="dialogfoot">
+          <button type="submit" id="saveConfig" class="primary">
+            创建并开始
+          </button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="detailDialog">
+      <div class="sectionhead">
+        <h2 id="detailTitle">分支历史</h2>
+        <button id="closeDetail">关闭</button>
+      </div>
+      <div id="detailContent"></div>
+    </dialog>
+    <script src="/assets/app.js"></script>
+  </body>
+</html>

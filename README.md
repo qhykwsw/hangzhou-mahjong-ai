@@ -1,10 +1,10 @@
-# 杭州麻将 AI 自迭代框架
+# 杭州麻将策略研究
 
-多个独立研究方向持续编写候选，共同进入四人混合对战池。框架按每期完整比赛的平均名次效用排名、归档末位选手，再把结果交回各方向的同一个 Codex 会话。
+多种算法各自维护独立研究分支，由 Codex 编写候选，经过完整配对评估选出分支代表，再通过周期共同竞技排名和保护淘汰持续探索。
 
-## 开始使用
+## 启动
 
-需要 macOS、Python 3.12+ 和已登录的 Codex CLI。模型与提供方沿用本机 Codex 配置，候选通过系统沙箱隔离执行。
+需要 macOS、Python 3.12+、已登录的 Codex CLI。LightGBM 需要本机 OpenMP 库，可通过 `brew install libomp` 安装。
 
 ```bash
 python3 -m venv .venv
@@ -12,11 +12,7 @@ python3 -m venv .venv
 .venv/bin/mahjong start
 ```
 
-命令启动项目专属的后台服务。首次启动创建默认研究并开始 60 分钟预算；关闭终端或当前对话后继续运行。重复启动打开已有记录，不新增服务或预算；服务不会在登录或重启电脑后自动运行。
-
-在 gpu-4070 上通过 SSH 进入 MacBook 后，同样执行上述命令。终端会显示本机地址和可在 gpu-4070 打开的 Tailscale 地址；SSH 会话中不会打开 MacBook 浏览器。端口和远程访问方法见[启动与远程访问](docs/reference/strategy-agent.md#启动与远程访问)。
-
-网页可选择研究记录、创建新研究、选择已配置的方向、暂停、继续、增加预算，查看实时对战、积分和历史事件。预算耗尽时计算暂停，网页保留。
+启动只打开研究控制台。在网页「新建研究」中设置组合、分支、模型和轮数，再开始运行。默认八种组合、每组合三条独立分支（Astra、DeepSeek、Qwen 各一条），共二十四条，每条默认研究一百轮；首次二十轮淘汰，其后每十轮淘汰。每条分支单轮可提交一至四个候选。配置入口为 [research.toml](research.toml)，模型准备和配置生效规则见[研究手册](docs/reference/strategy-agent.md#配置)。
 
 ```bash
 .venv/bin/mahjong status
@@ -24,15 +20,16 @@ python3 -m venv .venv
 .venv/bin/mahjong-ai play --rounds 8 --check-invariants
 ```
 
-默认配置在 [research.toml](research.toml)，方向模板在 [directions](directions)。规则与强化学习只是初始方向示例，新增方向通过配置和模板完成。
+关闭终端后后台继续运行；停止服务或重启电脑后，重新启动并在网页继续。SSH 启动输出本机与已连接的 Tailscale 地址，不打开远端电脑浏览器。
 
-## 文档导航
+## 入口
 
-| 需要做什么 | 入口 |
+| 需要做什么 | 文档 |
 | --- | --- |
-| 玩法、计分、赛事与平台对战 | [平台规则与接入](docs/reference/platform.md) |
-| 策略研究、候选接口、方向配置 | [策略研究与 Agent 接口](docs/reference/strategy-agent.md) |
-| 修改框架、定位代码和验证 | [开发索引](docs/reference/development.md) · [AGENTS.md](AGENTS.md) |
-| 查看平台原文与响应样本 | [原始资料](docs/sources/README.md) |
+| 配置、运行、暂停和理解排名 | [研究手册](docs/reference/strategy-agent.md) |
+| 修改框架或策略 SDK | [开发索引](docs/reference/development.md) |
+| 核对规则、导出或平台对战 | [平台规则与接入](docs/reference/platform.md) |
+| 理解领域对象和架构取舍 | [术语表](CONTEXT.md) · [决策记录](docs/adr/) |
+| 查阅官方材料 | [原始资料](docs/sources/README.md) |
 
-`.local/` 保存运行状态与凭据，被 Git 忽略。新 run 位于 `.local/runs/YYYYMMDD-arena-NN/`，报告在各 run 的 `reports/`。旧 v1/v2 run 的冻结文件与证据保留为只读历史档案，新入口不续跑或自动迁移旧协议。
+`.local/service/research.sqlite` 保存研究状态，`.local/runs/` 保存冻结代码、候选、任务和报告，两者需要一并备份。新框架不读取旧研究协议。

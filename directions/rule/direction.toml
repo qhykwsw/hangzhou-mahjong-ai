@@ -1,4 +1,0 @@
-name = "rule"
-brief = "改进牌形判断、听牌价值与吃碰取舍，优先简单、稳定的实现。"
-template = "template"
-training_games = 64

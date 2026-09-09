@@ -1,14 +1,17 @@
-directions = ["rule", "rl"]
-seconds = 3600
-agent_concurrency = 1
-agent_turn_seconds = 300
-workers = 2
-pool_size = 16
-survivors = 8
-matches_per_period = 128
-new_candidates_per_period = 4
-pending_limit = 16
-training_seconds = 300
+total_iterations = 100
+first_cycle = 20
+cycle_iterations = 10
+iteration_seconds = 3600
+agent_concurrency = 10
+training_workers = 2
+match_workers = 4
+candidate_limit = 4
+evaluation_games = 64
+competition_games_per_branch = 64
+elimination_fraction = 0.2
+minimum_branches = 2
+training_games = 64
+initialization_seconds = 3600
 
 [game]
 rounds = 8
@@ -19,3 +22,8 @@ base_score = 1
 [timeouts]
 discard = 3.0
 response = 1.0
+
+[resources]
+memory_mb = 4096
+threads = 1
+device = "cpu"

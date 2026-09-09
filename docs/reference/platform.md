@@ -1,4 +1,4 @@
-# 平台规则与接入
+# 平台规则、导出与对战
 
 [赛事公告](https://e.netease.com/community/post/165392) · [竞赛平台](https://10.240.169.190:18080/portal/) · [官方指南](https://10.240.169.190:18080/portal/api/guide) · [指南版本](https://10.240.169.190:18080/portal/api/guide/version)
 
@@ -13,7 +13,7 @@
 - 胡牌者成为下一局庄家，流局庄家不变；保留牌墙 20 张，此时不能杠。
 - 设底分为 B、综合倍率为 F：庄家胡，其余各付 8BF；闲家胡，庄家付 8BF，其余各付 BF。
 
-番型、倍率和状态转换的精确条件参见官方指南及本地 [rules.py](../../src/mahjong_ai/rules.py)、[engine.py](../../src/mahjong_ai/engine.py)。原文冲突排查与番型响应样本见[原始资料](../sources/README.md)。
+番型、倍率和状态转换的精确条件参见官方指南及本地 [rules.py](../../src/mahjong_ai/domain/rules.py)、[engine.py](../../src/mahjong_ai/domain/engine.py)。原文冲突排查与番型响应样本见[原始资料](../sources/README.md)。
 
 本地引擎与平台适配器已实现抓打圈豁免及圈内续飘；验证范围与尚待实战验证的路径见[开发索引](development.md)。
 
@@ -21,7 +21,11 @@
 
 海选、半决赛和决赛共享麻将玩法，场数、并发和晋级安排由阶段配置决定。非决赛排序为总分、名次分、白板数、稳定 ID；场名次分为 +3、+1、−1、−3，同分平均。决赛按总分，同分加赛并累计。
 
-本地将完整结算的终局排名用于训练与评估，详见[研究流程](strategy-agent.md)。策略根据实际进程和排名调整风险，不将固定局数或某一赛段写死。
+本地将完整结算的终局排名用于训练与评估，研究使用独立分支、冻结参照的完整配对评估与周期共同竞技，详见[研究手册](strategy-agent.md)。策略根据实际进程和排名调整风险，不将固定局数或某一赛段写死。
+
+## 冻结策略与外部记录
+
+从研究导出完整候选 ID，使用导出的 `policy.json` 和对应 runtime 运行。外部测试房、自由对战与正式比赛各自建立新的输出目录；这些记录只用于平台运行与框架审计，不作为研究训练数据。命令入口位于 `platform/` 模块，脚本递归冻结全部模块。
 
 ## 对战操作
 
@@ -54,7 +58,7 @@
 .venv/bin/python scripts/audit_free_play_run.py .local/competition/free-01 --insecure
 ```
 
-凭据文件结构、策略参数和导出选项以 [live_workflow.py](../../src/mahjong_ai/live_workflow.py)、[free_play.py](../../src/mahjong_ai/free_play.py) 及相应 CLI `--help` 为准。开放研究候选接入平台前须核对加载/导出兼容性；研究运行完成不代表候选已部署。
+凭据文件结构、策略参数和导出选项以 [live_workflow.py](../../src/mahjong_ai/platform/live_workflow.py)、[free_play.py](../../src/mahjong_ai/platform/free_play.py) 及相应 CLI `--help` 为准。开放研究候选接入平台前须核对加载/导出兼容性；研究运行完成不代表候选已部署。
 
 ## 协议要点
 
