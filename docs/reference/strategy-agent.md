@@ -63,7 +63,7 @@ Agent 在下一次迭代提示中直接收到本分支上次的实际执行反�
 
 执行器面向本机 CPU 和 macOS 强制沙箱。每个候选进程受 RSS 内存上限和计算线程配置约束，超限明确报错，不替换设备或静默缩小算法。默认弃牌三秒、响应一秒，超时或非法动作由环境执行默认动作，完整结果照常计分并保留错误与回退统计。
 
-模型配置从 `CODEX_HOME` 读取，未设置时使用 `~/.codex`。需要 `config.toml`；研究注册表里的 `deepseek`、`deepseek-pro`、`qwen` 分别叠加 `netease-deepseek-flash.config.toml`、`netease-deepseek-pro.config.toml`、`netease-qwen-flash.config.toml`。本机提供方配置和凭据不随仓库分发，变更后须实际调用验证。研究工具直接暴露，不依赖第三方模型工具发现能力。
+模型配置从 `CODEX_HOME` 读取，未设置时使用 `~/.codex`。需要 `config.toml`；研究注册表里的 `deepseek` 与 `qwen` 分别叠加 `netease-deepseek-flash.config.toml`、`netease-qwen-flash.config.toml`。本机提供方配置和凭据不随仓库分发，变更后须实际调用验证。研究工具直接暴露，不依赖第三方模型工具发现能力。
 
 模型网关会按账号限流，因此 Agent 任务每隔 5 秒放出一个，不把并发上限一次性压上去；网关返回 429、5xx 等瞬时错误时执行器按 30、90、180 秒退避重试，重试属于同一次任务，不消耗分支迭代配额。真正的失败（非瞬时错误或重试用尽）才把该次迭代记为失败。
 
