@@ -1,5 +1,6 @@
 import time
 import pytest
+from mahjong_ai.execution.agent import transient_failure
 from mahjong_ai.execution.candidate_runtime import (
     ActionUnavailable,
     RemotePolicy,
@@ -9,6 +10,22 @@ from mahjong_ai.execution.candidate_runtime import (
 from mahjong_ai.domain.engine import HandState
 from mahjong_ai.domain.types import RoundConfig
 from mahjong_ai.strategies.seeds import default_opponents
+
+
+def test_transient_failure_only_matches_gateway_errors():
+    rate_limited = (
+        '{"type": "thread.started", "thread_id": "x"}\n'
+        '{"type": "error", "message": "exceeded retry limit, last status: 429'
+        ' Too Many Requests"}\n'
+    )
+    assert transient_failure(rate_limited)
+    assert transient_failure(
+        '{"type": "error", "message": "stream error: 503 Service Unavailable"}'
+    )
+    assert not transient_failure(
+        '{"type": "item.completed", "item": {"type": "mcp_tool_call", "error": "429"}}'
+    )
+    assert not transient_failure('{"type": "error", "message": "invalid api key"}')
 
 
 def test_timeout_keeps_worker_and_discards_late_reply(tmp_path):

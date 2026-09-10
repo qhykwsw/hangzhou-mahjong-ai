@@ -605,9 +605,56 @@ def test_64_branches_use_dynamic_agent_slots(tmp_path, monkeypatch):
         j["status"] = "running"
 
     monkeypatch.setattr(controller, "launch", launch)
+    controller.agent_launch_interval = 0
     controller.tick()
     controller.tick()
     assert len(launched) == 14 and len(set(launched)) == 14
+
+
+def test_agent_launches_are_paced(tmp_path, monkeypatch):
+    r = Research(tmp_path)
+    cfg = configuration(tmp_path)
+    cfg["combinations"] = [
+        dict(
+            id=key,
+            branches=2,
+            models=["deepseek"] * 2,
+            parameters=params,
+        )
+        for key, (_, _, params) in list(COMBINATIONS.items())[:4]
+    ]
+    run = r.create(cfg)
+    controller = Controller(r)
+    r.control(run, "resume")
+    with r.edit(run) as (s, db):
+        for j in s["jobs"].values():
+            j["status"] = "completed"
+        for b in s["branches"].values():
+            b.update(status="ready", representative="placeholder-" + b["id"])
+        s["phase"] = "researching"
+        s["cycles"] = [
+            dict(
+                id=1,
+                status="researching",
+                targets={b: 20 for b in s["branches"]},
+                config=s["config"],
+            )
+        ]
+    launched = []
+
+    def launch(s, j):
+        launched.append(j["branch"])
+        j["status"] = "running"
+        controller.agent_launch_at = time.time()
+
+    monkeypatch.setattr(controller, "launch", launch)
+    controller.tick()
+    assert len(launched) == 1
+    controller.tick()
+    assert len(launched) == 1
+    controller.agent_launch_at = time.time() - controller.agent_launch_interval
+    controller.tick()
+    assert len(launched) == 2
 
 
 def test_custom_combination_and_model_are_configurable(tmp_path):

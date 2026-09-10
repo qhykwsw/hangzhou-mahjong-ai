@@ -28,6 +28,11 @@ MODELS = {
         "effort": "max",
         "efforts": ["low", "high", "max"],
     },
+    "deepseek-pro": {
+        "profile": "netease-deepseek-pro",
+        "effort": "max",
+        "efforts": ["low", "high", "max"],
+    },
     "qwen": {"profile": "netease-qwen-flash", "effort": "max", "efforts": ["max"]},
 }
 DEFAULTS = {

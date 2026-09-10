@@ -10,11 +10,16 @@ from mahjong_ai.persistence.artifacts import atomic_json, read_json, digest
 from mahjong_ai.domain.engine import derive_seed
 import json
 
+# 逐个放出 Agent，避免同一秒把整个并发上限压给模型网关触发限流。
+AGENT_LAUNCH_INTERVAL = 5.0
+
 
 class Controller:
     def __init__(self, research):
         self.research = research
         self.processes = {}
+        self.agent_launch_interval = AGENT_LAUNCH_INTERVAL
+        self.agent_launch_at = 0.0
         self.recover()
 
     def recover(self):
@@ -275,6 +280,8 @@ class Controller:
             )
         j.update(status="running", pid=process.pid, started_at=time.time())
         j.pop("stop_requested", None)
+        if j["kind"] == "agent":
+            self.agent_launch_at = time.time()
         self.processes[(s["id"], j["id"])] = process
         atomic_json(root / "process.json", {"pid": process.pid})
 
@@ -379,6 +386,7 @@ class Controller:
                     )
                     for b in ready[: max(0, limits["agent"] - active)]:
                         self.research.start_iteration(s, b["id"])
+                now = time.time()
                 for kind, limit in limits.items():
                     used = sum(
                         j["kind"] == kind and j["status"] in ("running", "admitted")
@@ -392,7 +400,14 @@ class Controller:
                         ),
                         key=lambda j: j["created_at"],
                     )
-                    for j in waiting[: max(0, limit - used)]:
+                    room = max(0, limit - used)
+                    if kind == "agent" and self.agent_launch_interval > 0:
+                        room = (
+                            min(room, 1)
+                            if now - self.agent_launch_at >= self.agent_launch_interval
+                            else 0
+                        )
+                    for j in waiting[:room]:
                         j["status"] = "admitted"
                         admissions.append((s["id"], j["id"]))
         for run, jid in admissions:

@@ -10,6 +10,34 @@ import time
 from mahjong_ai.persistence.artifacts import atomic_json, read_json
 from mahjong_ai.research.contract import CONTRACT
 
+# 模型网关在并发启动时会对瞬时过载返回 429/5xx；Codex 自己的重试用尽后整轮
+# 迭代会被记成失败并消耗配额，所以在执行器里再补一层带退避的重试。
+RETRY_DELAYS = (30.0, 90.0, 180.0)
+TRANSIENT_MARKERS = (
+    "429",
+    "too many requests",
+    "rate limit",
+    "overloaded",
+    "502",
+    "503",
+    "504",
+)
+
+
+def transient_failure(window):
+    """判断一次失败的输出里是否只有网关瞬时错误。"""
+    for line in window.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") not in ("error", "turn.failed"):
+            continue
+        message = json.dumps(event, ensure_ascii=False).lower()
+        if any(marker in message for marker in TRANSIENT_MARKERS):
+            return True
+    return False
+
 
 def toml_value(value):
     if isinstance(value, dict):
@@ -129,55 +157,100 @@ def main():
     started = time.monotonic()
     prompt = agent_prompt(task)
     log = root / "codex.jsonl"
+    workspace = root / "workspace"
+    workspace.mkdir(exist_ok=True)
     error = None
     interrupted = False
-    try:
-        workspace = root / "workspace"
-        workspace.mkdir(exist_ok=True)
-        with log.open("ab") as out, (root / "codex.stderr").open("ab") as err:
-            process = subprocess.Popen(
-                codex_command(
-                    task["project"],
-                    task["experiment"],
-                    task["branch"],
-                    task["thread_id"],
-                    task["model_config"],
-                    root,
-                ),
-                stdin=subprocess.PIPE,
-                stdout=out,
-                stderr=err,
-                cwd=workspace,
-                start_new_session=True,
-            )
-            atomic_json(root / "codex-process.json", {"pid": process.pid})
-            process.stdin.write(prompt.encode())
-            process.stdin.close()
-            while process.poll() is None:
-                if (
-                    cancelled
-                    or time.time() >= task["deadline"]
-                    or os.getppid() != task["owner_pid"]
-                    or (root / "cancel.flag").exists()
-                    or (root / "submitted.flag").exists()
-                ):
-                    interrupted = True
-                    os.killpg(process.pid, signal.SIGTERM)
-                    break
-                time.sleep(0.2)
-            try:
-                process.wait(timeout=4)
-            except subprocess.TimeoutExpired:
+
+    def run_once():
+        """跑一次 codex exec，原地更新本次尝试的结果。"""
+        nonlocal process, error, interrupted
+        process = None
+        error = None
+        interrupted = False
+        try:
+            with log.open("ab") as out, (root / "codex.stderr").open("ab") as err:
+                process = subprocess.Popen(
+                    codex_command(
+                        task["project"],
+                        task["experiment"],
+                        task["branch"],
+                        task["thread_id"],
+                        task["model_config"],
+                        root,
+                    ),
+                    stdin=subprocess.PIPE,
+                    stdout=out,
+                    stderr=err,
+                    cwd=workspace,
+                    start_new_session=True,
+                )
+                atomic_json(root / "codex-process.json", {"pid": process.pid})
+                process.stdin.write(prompt.encode())
+                process.stdin.close()
+                while process.poll() is None:
+                    if (
+                        cancelled
+                        or time.time() >= task["deadline"]
+                        or os.getppid() != task["owner_pid"]
+                        or (root / "cancel.flag").exists()
+                        or (root / "submitted.flag").exists()
+                    ):
+                        interrupted = True
+                        os.killpg(process.pid, signal.SIGTERM)
+                        break
+                    time.sleep(0.2)
+                try:
+                    process.wait(timeout=4)
+                except subprocess.TimeoutExpired:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait()
+                if process.returncode and not interrupted:
+                    error = "Codex 未正常完成；请检查登录、模型配置及会话日志。"
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"[:2000]
+        finally:
+            if process is not None and process.poll() is None:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait()
-            if process.returncode and not interrupted:
-                error = "Codex 未正常完成；请检查登录、模型配置及会话日志。"
-    except Exception as exc:
-        error = f"{type(exc).__name__}: {exc}"[:2000]
-    finally:
-        if process is not None and process.poll() is None:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
+
+    def pause_before_retry(delay):
+        end = time.monotonic() + delay
+        while time.monotonic() < end:
+            if (
+                cancelled
+                or time.time() >= task["deadline"] - 30
+                or os.getppid() != task["owner_pid"]
+                or (root / "cancel.flag").exists()
+                or (root / "submitted.flag").exists()
+            ):
+                return False
+            time.sleep(0.5)
+        return True
+
+    for attempt in range(len(RETRY_DELAYS) + 1):
+        offset = log.stat().st_size if log.exists() else 0
+        run_once()
+        if not error or interrupted or attempt >= len(RETRY_DELAYS):
+            break
+        with log.open(errors="replace") as handle:
+            handle.seek(offset)
+            window = handle.read()
+        if not transient_failure(window):
+            break
+        delay = RETRY_DELAYS[attempt]
+        if time.time() + delay >= task["deadline"] - 30:
+            break
+        with log.open("a") as handle:
+            handle.write(
+                json.dumps(
+                    {"type": "retry.scheduled", "attempt": attempt + 1, "delay": delay}
+                )
+                + "\n"
+            )
+        if not pause_before_retry(delay):
+            break
+
     thread, usage = task["thread_id"], []
     if log.exists():
         for line in log.read_text(errors="replace").splitlines():
