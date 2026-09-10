@@ -31,6 +31,10 @@ def resolve_model(selection, catalog_dir=None):
             "model_provider",
             "model_reasoning_effort",
             "model_catalog_json",
+            # Context and compaction limits must survive into the worker: agents
+            # run with --ignore-user-config, so anything not forwarded here is lost.
+            "model_context_window",
+            "model_auto_compact_token_limit",
         )
         if k in config
     }
@@ -38,10 +42,20 @@ def resolve_model(selection, catalog_dir=None):
         source = Path(settings["model_catalog_json"]).expanduser()
         catalog = json.loads(source.read_text())
         rows = catalog.get("models", []) if isinstance(catalog, dict) else catalog
+        selected = settings.get("model")
         for row in rows:
             # This isolated worker has only eight known research tools. Expose
             # them eagerly; third-party gateways may not implement tool search.
             row["supports_search_tool"] = False
+            if selected and row.get("slug") != selected:
+                continue
+            if "model_context_window" in config:
+                row["context_window"] = config["model_context_window"]
+                row["max_context_window"] = config["model_context_window"]
+            if "model_auto_compact_token_limit" in config:
+                row["auto_compact_token_limit"] = config[
+                    "model_auto_compact_token_limit"
+                ]
         target = Path(catalog_dir) / "research-model-catalog.json"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(catalog))

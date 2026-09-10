@@ -26,7 +26,7 @@ def spec(value):
         data["model_path"] = str(
             model if model.is_absolute() else (path.parent / model).resolve()
         )
-    for key in ("package_path", "python_path"):
+    for key in ("package_path", "python_path", "runtime_path"):
         if data.get(key) and not Path(data[key]).is_absolute():
             data[key] = str((path.parent / data[key]).resolve())
     return PolicySpec(**data)
@@ -98,7 +98,7 @@ def main(argv=None):
     benchmark.add_argument("--samples", type=int, default=20)
     benchmark.add_argument("--output", default=".local/mahjong-ai/benchmark.json")
     export = sub.add_parser("export", help="export a frozen research candidate bundle")
-    export.add_argument("--root", required=True)
+    export.add_argument("--project", default=".")
     export.add_argument("--candidate", required=True)
     export.add_argument("--output", required=True)
     calibration = sub.add_parser(
@@ -139,7 +139,7 @@ def main(argv=None):
 
         print(
             json.dumps(
-                export_candidate(args.root, args.candidate, args.output),
+                export_candidate(args.project, args.candidate, args.output),
                 ensure_ascii=False,
             )
         )

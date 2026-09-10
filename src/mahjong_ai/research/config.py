@@ -2,7 +2,6 @@
 
 from copy import deepcopy
 from pathlib import Path
-import math
 import re
 import tomllib
 
@@ -10,6 +9,7 @@ COMBINATIONS = {
     "heuristic-balanced": ("heuristic", "均衡启发式", {"style": "balanced"}),
     "heuristic-adventurous": ("heuristic", "冒险启发式", {"style": "adventurous"}),
     "heuristic-conservative": ("heuristic", "保守启发式", {"style": "conservative"}),
+    "heuristic-unrestricted": ("heuristic", "自由规则策略", {"style": "unrestricted"}),
     "value-lightgbm": ("value", "LightGBM 收益预测", {"algorithm": "lightgbm"}),
     "value-mlp": ("value", "MLP 收益预测", {"algorithm": "mlp"}),
     "ppo": ("ppo", "前馈 PPO", {"algorithm": "ppo"}),
@@ -31,28 +31,30 @@ MODELS = {
     "qwen": {"profile": "netease-qwen-flash", "effort": "max", "efforts": ["max"]},
 }
 DEFAULTS = {
-    "total_iterations": 100,
-    "first_cycle": 20,
-    "cycle_iterations": 10,
+    "total_rounds": 10,
+    "iterations_per_round": 10,
+    "opponent_limit": 7,
+    "branch_iterations": {},
+    "training_caps": {"heuristic": 0, "search": 0, "value": 256, "ppo": 256},
     "iteration_seconds": 3600,
-    "agent_concurrency": 10,
-    "training_workers": 2,
-    "match_workers": 4,
-    "candidate_limit": 4,
-    "evaluation_games": 64,
-    "competition_games_per_branch": 64,
-    "elimination_fraction": 0.2,
-    "minimum_branches": 2,
-    "training_games": 64,
+    "agent_concurrency": 14,
+    "training_workers": 12,
+    "match_workers": 12,
+    "candidate_limit": 1,
+    "evaluation_games": 256,
+    "competition_games_per_branch": 512,
+    "training_games": 128,
     "initialization_seconds": 3600,
     "combinations": [
         {
             "id": key,
-            "branches": 3,
-            "models": ["astra", "deepseek", "qwen"],
+            "branches": 2,
+            "branch_ids": ["02", "03"],
+            "models": ["deepseek", "qwen"],
             "parameters": params,
         }
         for key, (_, _, params) in COMBINATIONS.items()
+        if not key.startswith("search-")
     ],
     "models": MODELS,
     "game": {"rounds": 8, "games_per_round": 1, "stage": "qualifier", "base_score": 1},
@@ -63,10 +65,8 @@ IMMEDIATE = {
     "agent_concurrency",
     "training_workers",
     "match_workers",
-    "total_iterations",
+    "total_rounds",
 }
-ITERATION = {"iteration_seconds", "training_games", "candidate_limit", "resources"}
-NEW_RUN = {"game", "timeouts"}
 
 
 def merge(base, patch):
@@ -85,9 +85,9 @@ def validate(config):
     if unknown:
         raise ValueError("unknown settings: " + ", ".join(sorted(unknown)))
     for key in (
-        "total_iterations",
-        "first_cycle",
-        "cycle_iterations",
+        "total_rounds",
+        "iterations_per_round",
+        "opponent_limit",
         "iteration_seconds",
         "agent_concurrency",
         "training_workers",
@@ -95,7 +95,6 @@ def validate(config):
         "candidate_limit",
         "evaluation_games",
         "competition_games_per_branch",
-        "minimum_branches",
         "training_games",
         "initialization_seconds",
     ):
@@ -107,13 +106,20 @@ def validate(config):
     for k in ("evaluation_games", "competition_games_per_branch"):
         if config[k] % 4:
             raise ValueError(k + " must be a multiple of four")
-    fraction = config["elimination_fraction"]
-    if (
-        not isinstance(fraction, (int, float))
-        or not math.isfinite(fraction)
-        or not 0 <= fraction < 1
+    if not isinstance(config["branch_iterations"], dict) or any(
+        not isinstance(k, str) or type(v) is not int or not 1 <= v <= 1000000
+        for k, v in config["branch_iterations"].items()
     ):
-        raise ValueError("elimination_fraction must be in [0,1)")
+        raise ValueError("branch_iterations requires positive integer allowances")
+    if not isinstance(config["training_caps"], dict) or any(
+        k not in ("heuristic", "value", "ppo", "search")
+        or type(v) is not int
+        or not 0 <= v <= 1000000
+        for k, v in config["training_caps"].items()
+    ):
+        raise ValueError(
+            "training_caps requires non-negative integer limits per family"
+        )
     ids = set()
     for c in config["combinations"]:
         if (
@@ -130,7 +136,10 @@ def validate(config):
             raise ValueError("combination requires a supported algorithm family")
         params = c.setdefault("parameters", deepcopy(default[2]) if default else {})
         required = {
-            "heuristic": ("style", ("balanced", "adventurous", "conservative")),
+            "heuristic": (
+                "style",
+                ("balanced", "adventurous", "conservative", "unrestricted"),
+            ),
             "value": ("algorithm", ("lightgbm", "mlp")),
             "ppo": ("algorithm", ("ppo",)),
             "search": ("algorithm", ("rollout", "mcts")),
@@ -138,10 +147,21 @@ def validate(config):
         key, allowed = required[c["family"]]
         if params.get(key) not in allowed:
             raise ValueError("combination algorithm/style does not match its family")
-        if type(c["branches"]) is not int or c["branches"] < config["minimum_branches"]:
-            raise ValueError("branches below protection minimum")
+        if type(c["branches"]) is not int or c["branches"] < 1:
+            raise ValueError("positive branch count required")
         if len(c["models"]) != c["branches"]:
             raise ValueError("one model per branch required")
+        branch_ids = c.get("branch_ids", [f"{i + 1:02d}" for i in range(c["branches"])])
+        if (
+            not isinstance(branch_ids, list)
+            or len(branch_ids) != c["branches"]
+            or any(
+                not isinstance(b, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", b)
+                for b in branch_ids
+            )
+            or len(set(branch_ids)) != len(branch_ids)
+        ):
+            raise ValueError("distinct stable branch_ids required for every branch")
         if any(m not in config["models"] for m in c["models"]):
             raise ValueError("unknown research model")
         if (
@@ -149,8 +169,8 @@ def validate(config):
             or c.get("training_games", config["training_games"]) < 1
         ):
             raise ValueError("positive training_games required")
-    if sum(c["branches"] for c in config["combinations"]) < 4:
-        raise ValueError("at least four branches required")
+    if not config["combinations"]:
+        raise ValueError("register at least one combination")
     for model in config["models"].values():
         if model["effort"] not in model["efforts"]:
             raise ValueError("unsupported reasoning effort")

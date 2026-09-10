@@ -13,7 +13,9 @@ import time
 from mahjong_ai.execution.candidate_runtime import (
     CandidateProcess,
     JobCancelled,
+    begin_finalize,
     check_cancelled,
+    is_finalizing,
     train_package,
     tree_hash,
 )
@@ -29,9 +31,41 @@ from mahjong_ai.persistence.artifacts import (
 from mahjong_ai.domain.types import RoundConfig
 
 
+def frozen_checkpoint(out):
+    """Last committed training state, usable when the iteration deadline hits."""
+    progress = out / "training-checkpoint.json"
+    if not progress.exists():
+        return None
+    checkpoint = read_json(progress)
+    episodes = checkpoint.get("episodes") or []
+    committed = out / str(checkpoint.get("directory") or "")
+    if not episodes or not committed.is_dir():
+        return None
+    return committed, {
+        "status": "partial",
+        "episodes": episodes,
+        "metadata": checkpoint.get("metadata"),
+        "interrupted": "iteration execution limit reached",
+    }
+
+
 def prepare(task, root, deadline):
+    # The deadline arrives on the monotonic clock; the budget signal and the
+    # worker use wall time.
+    wall_deadline = time.time() + max(0.0, deadline - time.monotonic())
     rows = {}
+    expired = False
     for cid, item in task["packages"].items():
+        if expired:
+            rows[cid] = {
+                "status": "failed",
+                "error": "iteration execution limit reached",
+            }
+            atomic_json(
+                root / "progress.json",
+                {"prepared": len(rows), "total": len(task["packages"])},
+            )
+            continue
         check_cancelled()
         out = root / cid
         out.mkdir(exist_ok=True)
@@ -44,7 +78,7 @@ def prepare(task, root, deadline):
         try:
             source = Path(item["input"])
             if tree_hash(source) != item["hash"]:
-                raise ValueError("submitted artifact changed")
+                raise ValueError("已提交的产物发生变化")
             environment = out / "environment"
             if task.get("dependency_root"):
                 import numpy as np
@@ -63,6 +97,7 @@ def prepare(task, root, deadline):
             finally:
                 probe.close()
             model = out / "training-model"
+            model_source = model
             training = None
             if capabilities["train"]:
 
@@ -71,32 +106,53 @@ def prepare(task, root, deadline):
                         derive_seed(task["seed"], "training-opponents", cid, index)
                     )
                     return (
-                        [PolicySpec(**p) for p in rng.sample(task["opponents"], 3)]
+                        [PolicySpec(**p) for p in rng.choices(task["opponents"], k=3)]
                         if task["opponents"]
                         else [PolicySpec() for _ in range(3)]
                     )
 
-                training = train_package(
-                    source,
-                    model,
-                    RoundConfig(**task["config"]),
-                    opponents,
-                    task["training_games"],
-                    derive_seed(task["seed"], "training", cid),
-                    deadline,
-                    python,
-                    policy_seed=derive_seed(task["seed"], "policy", cid),
-                )
-            package = out / "frozen"
+                try:
+                    training = train_package(
+                        source,
+                        model,
+                        RoundConfig(**task["config"]),
+                        opponents,
+                        task["training_games"],
+                        derive_seed(task["seed"], "training", cid),
+                        deadline,
+                        python,
+                        policy_seed=derive_seed(task["seed"], "policy", cid),
+                    )
+                except (JobCancelled, TimeoutError) as exc:
+                    # The deadline ends training but not the version: freeze the
+                    # last committed checkpoint so it still reaches evaluation.
+                    # The watchdog signal and the worker read timeout race, so
+                    # accept either within a second of the wall deadline.
+                    if isinstance(exc, JobCancelled) and time.time() < (
+                        wall_deadline - 1
+                    ):
+                        raise
+                    frozen = frozen_checkpoint(out)
+                    if frozen is None:
+                        raise
+                    begin_finalize()
+                    model_source, training = frozen
+                    expired = True
+            package = Path(item["output"]) if item.get("output") else out / "frozen"
+            package.parent.mkdir(parents=True, exist_ok=True)
             if package.exists():
                 shutil.rmtree(package)
             shutil.copytree(source, package)
             if training is not None:
                 if (package / "model").exists():
                     shutil.rmtree(package / "model")
-                shutil.copytree(model, package / "model")
+                shutil.copytree(model_source, package / "model")
             if wheels:
                 atomic_json(package / "dependencies.json", wheels)
+            # Freezing a checkpoint needs its own window past the job deadline.
+            finalize = (
+                time.monotonic() + 120 if time.time() >= wall_deadline else deadline
+            )
             probe = CandidateProcess(package, python)
             try:
                 probe.call(
@@ -105,7 +161,7 @@ def prepare(task, root, deadline):
                         "combination": task["combination"],
                         "definition": task.get("definition"),
                     },
-                    min(10, max(0.01, deadline - time.monotonic())),
+                    min(120, max(0.01, finalize - time.monotonic())),
                 )
             finally:
                 probe.close()
@@ -117,6 +173,7 @@ def prepare(task, root, deadline):
                 python_path=python,
                 action_seconds=task["timeouts"]["discard"],
                 response_seconds=task["timeouts"]["response"],
+                runtime_path=task.get("runtime_path"),
             ).as_dict()
             rows[cid] = dict(status="ready", spec=spec, training=training)
             atomic_json(artifact, rows[cid])
@@ -134,7 +191,7 @@ def prepare(task, root, deadline):
 
 
 def play(task, root):
-    from mahjong_ai.evaluation.schedule import standings
+    from mahjong_ai.evaluation.schedule import group_uncertainty, standings
 
     receipts = []
     for assignment in task["assignments"]:
@@ -165,7 +222,7 @@ def play(task, root):
                 players, RoundConfig(**task["config"]), seed, policy_seeds=seeds
             )
             if not result.completed:
-                raise ValueError("incomplete evaluation settlement")
+                raise ValueError("评估结算不完整")
             receipt = dict(
                 players=assignment["players"],
                 ranks=result.rank_by_seat,
@@ -187,8 +244,24 @@ def play(task, root):
     summary = standings(roster, receipts)
     result = {"status": "completed", "summary": summary, "matches": len(receipts)}
     if task.get("candidate"):
-        result["focal"] = next(
-            r for r in summary if r["candidate_id"] == task["candidate"]
+        focal_receipts = [
+            {
+                **receipt,
+                "players": [
+                    task["candidate"] if seat == assignment["focal"] else "__opponent__"
+                    for seat in range(4)
+                ],
+            }
+            for assignment, receipt in zip(task["assignments"], receipts)
+        ]
+        result["focal"] = standings([task["candidate"]], focal_receipts)[0]
+        groups = {}
+        for assignment, receipt in zip(task["assignments"], receipts):
+            groups.setdefault(assignment["block"], []).append(
+                4 - receipt["ranks"][assignment["focal"]]
+            )
+        result["focal"].update(
+            group_uncertainty([sum(values) / len(values) for values in groups.values()])
         )
     return result
 
@@ -197,13 +270,15 @@ def main():
     root = Path(sys.argv[1])
     task = read_json(root / "task.json")
     if task["runtime"] != runtime_fingerprint():
-        raise ValueError("job requires its frozen runtime")
+        raise ValueError("任务必须使用自己的冻结运行时")
     cancel = root / "cancel.flag"
     os.environ["MAHJONG_JOB_CANCEL"] = str(cancel)
 
     def stop(signum, frame):
         cancel.touch()
-        raise JobCancelled("operator or budget interrupted job")
+        if is_finalizing():
+            return
+        raise JobCancelled("任务被操作或额度中断")
 
     signal.signal(signal.SIGTERM, stop)
 

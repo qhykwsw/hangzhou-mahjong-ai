@@ -27,10 +27,32 @@ class ActionUnavailable(RuntimeError):
     """The environment must apply its own timeout/default action."""
 
 
+# Set while a deadline-cut job freezes its checkpoint. The budget signal already
+# fired, and aborting here would discard the frozen version it was meant to keep.
+_FINALIZING = False
+
+
+def begin_finalize():
+    """Enter the checkpoint-freeze window that a deadline cut has to be able to finish.
+
+    The deadline signal writes cancel.flag before freezing starts, so the flag must
+    stop interrupting the job here: discarding the committed checkpoint would lose
+    the version the iteration limit was supposed to preserve.
+    """
+    global _FINALIZING
+    _FINALIZING = True
+
+
+def is_finalizing():
+    return _FINALIZING
+
+
 def check_cancelled():
+    if _FINALIZING:
+        return
     cancel = os.environ.get("MAHJONG_JOB_CANCEL")
     if cancel and Path(cancel).exists():
-        raise JobCancelled("job cancelled")
+        raise JobCancelled("任务已取消")
 
 
 def tree_hash(root):
@@ -38,7 +60,7 @@ def tree_hash(root):
     files = {}
     for p in sorted(root.rglob("*")):
         if p.is_symlink():
-            raise ValueError("candidate packages may not contain symlinks")
+            raise ValueError("候选包不能包含符号链接")
         if p.is_file() and "__pycache__" not in p.parts:
             files[str(p.relative_to(root))] = file_hash(p)
     return digest(files)
@@ -47,9 +69,7 @@ def tree_hash(root):
 def sandbox_command(argv, readable, writable, *, no_fork=True, network=False):
     """macOS seatbelt is an enforced allowlist, not a prompt-based restriction."""
     if sys.platform != "darwin" or not shutil.which("sandbox-exec"):
-        raise RuntimeError(
-            "isolated candidate runner requires macOS sandbox-exec; no unsafe fallback"
-        )
+        raise RuntimeError("隔离候选进程需要 macOS sandbox-exec，没有不安全的降级路径")
 
     def sub(path):
         return "(subpath " + json.dumps(str(Path(path).resolve())) + ")"
@@ -107,14 +127,14 @@ def public_result(result):
 
 
 class CandidateProcess:
-    def __init__(self, package, python=None, output=None):
+    def __init__(self, package, python=None, output=None, runtime=None):
         self.package = Path(package).resolve()
         self.temp = tempfile.TemporaryDirectory(prefix="mahjong-candidate-")
         self.output = (
             Path(output).resolve() if output else Path(self.temp.name) / "output"
         )
         self.output.mkdir(parents=True, exist_ok=True)
-        runtime = str(Path(__file__).parents[2])
+        runtime = runtime or str(Path(__file__).parents[2])
         argv = [
             python or sys.executable,
             "-B",
@@ -123,7 +143,7 @@ class CandidateProcess:
             str(self.package),
             str(self.output),
         ]
-        readable = [self.package]
+        readable = [self.package, runtime]
         if python:
             readable.append(Path(python).parent.parent)
         env = {
@@ -196,22 +216,20 @@ class CandidateProcess:
         end = time.monotonic() + max(0.001, seconds)
         while b"\n" not in self.pending:
             cancel = os.environ.get("MAHJONG_JOB_CANCEL")
-            if cancel and Path(cancel).exists():
-                raise JobCancelled("job cancelled")
+            if cancel and Path(cancel).exists() and not _FINALIZING:
+                raise JobCancelled("任务已取消")
             if not self.selector.select(min(0.25, max(0, end - time.monotonic()))):
                 if time.monotonic() >= end:
-                    raise TimeoutError("candidate response deadline exceeded")
+                    raise TimeoutError("候选进程响应超时")
                 continue
             data = os.read(self.process.stdout.fileno(), 65536)
             if not data:
                 raise RuntimeError(
-                    "candidate memory limit exceeded"
-                    if self.memory_exceeded
-                    else "candidate worker exited"
+                    "候选进程超出内存上限" if self.memory_exceeded else "候选进程已退出"
                 )
             self.pending.extend(data)
             if len(self.pending) > 8_000_000:
-                raise ValueError("candidate response too large")
+                raise ValueError("候选进程回执过大")
         line, _, rest = self.pending.partition(b"\n")
         self.pending = bytearray(rest)
         value = json.loads(line)
@@ -260,9 +278,10 @@ class RemotePolicy:
         python=None,
         version="code",
         response_seconds=1.0,
+        runtime=None,
     ):
         if tree_hash(package) != package_hash:
-            raise ValueError("frozen candidate changed")
+            raise ValueError("冻结的候选发生变化")
         self.package, self.package_hash, self.action_seconds = (
             package,
             package_hash,
@@ -270,6 +289,7 @@ class RemotePolicy:
         )
         self.python, self.version, self.worker = python, version, None
         self.response_seconds = response_seconds
+        self.runtime = runtime
         self.pending_act = False
         self.stats = {"actions": 0, "timeouts": 0, "errors": 0, "elapsed_seconds": 0.0}
         self.stats.update(compute_seconds=0.0, ipc_seconds=0.0, fallback_actions=0)
@@ -277,7 +297,7 @@ class RemotePolicy:
         self.latencies = []
 
     def _start(self):
-        self.worker = CandidateProcess(self.package, self.python)
+        self.worker = CandidateProcess(self.package, self.python, runtime=self.runtime)
         self.worker.call({"op": "build"})
 
     def reset(self, seed):
@@ -305,14 +325,14 @@ class RemotePolicy:
         self.stats["actions"] += 1
         try:
             if self.worker is None:
-                raise ActionUnavailable("candidate process unavailable")
+                raise ActionUnavailable("候选进程不可用")
             # Keep a slow policy alive. Drain and discard its previous late reply
             # before sending another observation; replies cannot cross decisions.
             if self.pending_act:
                 self.worker.receive(max(0.001, end - time.monotonic()))
                 self.pending_act = False
             if time.monotonic() >= end:
-                raise TimeoutError("previous action still occupied the decision window")
+                raise TimeoutError("上一个动作仍占用决策窗口")
             request = {"op": "act", "observation": asdict(observation)}
             self.worker.send(request)
             self.pending_act = True
@@ -331,7 +351,7 @@ class RemotePolicy:
             if type(index) is not int or not 0 <= index < len(
                 observation.legal_actions
             ):
-                raise ValueError("invalid action index")
+                raise ValueError("动作下标不合法")
             return observation.legal_actions[index]
         except JobCancelled:
             self.close()
@@ -352,7 +372,7 @@ class RemotePolicy:
             if len(self.latencies) > 4096:
                 del self.latencies[:2048]
         self.stats["fallback_actions"] += 1
-        raise ActionUnavailable("candidate did not supply a valid action in time")
+        raise ActionUnavailable("候选未在时限内给出合法动作")
 
     def finish_round(self, result, seat):
         if self.worker:
@@ -409,11 +429,12 @@ def train_package(
     deadline,
     python=None,
     policy_seed=None,
+    runtime=None,
 ):
     """Candidate owns train(ctx); ctx.play(policy) delegates real games to this host."""
     from mahjong_ai.domain.engine import MahjongEngine, derive_seed
 
-    worker = CandidateProcess(package, python, output)
+    worker = CandidateProcess(package, python, output, runtime=runtime)
     records = []
     progress = Path(output).parent / "training-checkpoint.json"
     checkpoint = None
@@ -425,7 +446,7 @@ def train_package(
             shutil.rmtree(output)
             committed = Path(output).parent / checkpoint["directory"]
             if tree_hash(committed) != checkpoint["hash"]:
-                raise ValueError("training checkpoint corrupted")
+                raise ValueError("训练检查点损坏")
             shutil.copytree(committed, output)
         records = checkpoint["episodes"]
 
@@ -444,7 +465,7 @@ def train_package(
             )
             index = reply["index"]
             if type(index) is not int or not 0 <= index < len(obs.legal_actions):
-                raise ValueError("illegal training action")
+                raise ValueError("训练中出现非法动作")
             return obs.legal_actions[index]
 
         def finish_round(self, result, seat):
@@ -495,9 +516,7 @@ def train_package(
                     "reported_metrics": reply.get("metrics", {}),
                 }
             if reply.get("request") != "play" or len(records) >= episodes:
-                raise ValueError(
-                    "training episode allowance exceeded or invalid request"
-                )
+                raise ValueError("训练对局额度用尽或请求不合法")
             i = len(records)
             seat = i % 4
             chosen_opponents = opponents(i) if callable(opponents) else opponents
@@ -523,7 +542,7 @@ def train_package(
                     if hasattr(p, "close"):
                         p.close()
             if not result.completed:
-                raise ValueError("incomplete training settlement")
+                raise ValueError("训练结算不完整")
             records.append(
                 {
                     "episode": i,

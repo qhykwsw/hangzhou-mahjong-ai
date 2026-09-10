@@ -427,6 +427,7 @@ class PolicySpec:
     action_seconds: float = 3.0
     python_path: str | None = None
     response_seconds: float = 1.0
+    runtime_path: str | None = None
 
     def __post_init__(self):
         if not self.version or len(self.version) > 128:
@@ -482,6 +483,7 @@ class PolicySpec:
                 self.python_path,
                 self.version,
                 self.response_seconds,
+                self.runtime_path,
             )
         if self.family == "rule":
             return RulePolicy(
@@ -503,6 +505,7 @@ class PolicySpec:
                 "action_seconds",
                 "python_path",
                 "response_seconds",
+                "runtime_path",
             ):
                 data.pop(key)
         return data
@@ -516,14 +519,18 @@ class PolicySpec:
             import sys
 
             if tree_hash(self.package_path) != self.package_hash:
-                raise ValueError("frozen candidate changed")
+                raise ValueError("冻结的候选发生变化")
             d["package_path"] = self.package_hash
             # venv locations are not distinct experiments. The package content
             # includes locked wheel hashes; resolve the shared interpreter identity.
             d["python_path"] = str(Path(self.python_path or sys.executable).resolve())
         from mahjong_ai.persistence.artifacts import runtime_fingerprint
 
-        d["runtime"] = runtime_fingerprint()
+        if self.runtime_path:
+            d.pop("runtime_path", None)
+            d["runtime"] = tree_hash(self.runtime_path)
+        else:
+            d["runtime"] = runtime_fingerprint()
         if self.model_path:
             d["model_path"] = hashlib.sha256(
                 Path(self.model_path).read_bytes()

@@ -41,7 +41,7 @@ def application(project, tailscale_url=None):
                     await asyncio.to_thread(controller.tick)
                 except Exception:
                     traceback.print_exc()
-                    for s in arena.runs():
+                    for s in arena.states():
                         if s["status"] == "running":
                             arena.control(s["id"], "pause")
                 await asyncio.sleep(0.25)
@@ -68,13 +68,17 @@ def application(project, tailscale_url=None):
 
     async def state(request):
         return JSONResponse(
-            await asyncio.to_thread(arena.snapshot, request.query_params.get("run"))
+            await asyncio.to_thread(
+                arena.snapshot, request.query_params.get("experiment")
+            )
         )
 
     async def activity(request):
         try:
             return JSONResponse(
-                await asyncio.to_thread(arena.activity, request.query_params["run"])
+                await asyncio.to_thread(
+                    arena.activity, request.query_params.get("experiment")
+                )
             )
         except (KeyError, ValueError) as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
@@ -98,19 +102,28 @@ def application(project, tailscale_url=None):
             )
         try:
             value = await request.json()
-            if request.url.path == "/api/runs":
-                identity = await asyncio.to_thread(arena.create, value.get("config"))
+            if request.url.path == "/api/experiments":
+                identity = await asyncio.to_thread(
+                    arena.create,
+                    value.get("config"),
+                    value.get("targets"),
+                    value.get("opponents"),
+                )
                 result = await asyncio.to_thread(arena.control, identity, "resume")
             elif request.url.path == "/api/config":
                 result = await asyncio.to_thread(
-                    arena.configure, value["run"], value["patch"]
+                    arena.configure, value["experiment"], value["patch"]
+                )
+            elif request.url.path == "/api/branches":
+                result = await asyncio.to_thread(
+                    arena.archive, value["branch"], value["archived"]
                 )
             else:
                 result = await asyncio.to_thread(
                     arena.control,
-                    value["run"],
+                    value["experiment"],
                     value["action"],
-                    value.get("iterations", 0),
+                    value.get("rounds", 0),
                 )
             return JSONResponse(result)
         except (ValueError, KeyError, TypeError) as exc:
@@ -124,8 +137,9 @@ def application(project, tailscale_url=None):
             Route("/api/state", state),
             Route("/api/activity", activity),
             Route("/api/directions", directions),
-            Route("/api/runs", mutate, methods=["POST"]),
+            Route("/api/experiments", mutate, methods=["POST"]),
             Route("/api/config", mutate, methods=["POST"]),
+            Route("/api/branches", mutate, methods=["POST"]),
             Route("/api/control", mutate, methods=["POST"]),
         ],
     )
@@ -251,6 +265,9 @@ def start(project, open_browser=True):
             RunAtLoad=True,
             KeepAlive=False,
             ExitTimeOut=15,
+            # launchd defaults to adaptive QoS, which throttles candidate CPU
+            # time by ~1.7x against the same work run at user-interactive QoS.
+            ProcessType="Interactive",
             StandardOutPath=str(root / "service.log"),
             StandardErrorPath=str(root / "service.log"),
         )

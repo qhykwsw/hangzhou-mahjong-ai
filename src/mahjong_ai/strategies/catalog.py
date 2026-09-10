@@ -12,7 +12,11 @@ def baseline_source(combination, parameters=None, family=None):
     settings = {**defaults, **(parameters or {})}
     selector = settings.pop("algorithm", None)
     if family == "heuristic":
-        body = "from mahjong_ai.strategies.heuristic import HeuristicPolicy\ndef build(model_dir): return HeuristicPolicy(**PARAMETERS)\n"
+        if settings.get("style") == "unrestricted":
+            settings.pop("style")
+            body = "from mahjong_ai.strategies.common import RulePolicy\ndef build(model_dir): return RulePolicy(**PARAMETERS)\n"
+        else:
+            body = "from mahjong_ai.strategies.heuristic import HeuristicPolicy\ndef build(model_dir): return HeuristicPolicy(**PARAMETERS)\n"
     elif family == "search":
         settings["algorithm"] = selector
         body = "from mahjong_ai.strategies.search import SearchPolicy\ndef build(model_dir): return SearchPolicy(**PARAMETERS)\n"
@@ -38,15 +42,19 @@ def validate_capability(module, policy, combination, package, definition=None):
     else:
         family, _, defaults = COMBINATIONS[combination]
     if getattr(module, "COMBINATION", None) != combination:
-        raise ValueError("combination identity changed")
+        raise ValueError("COMBINATION 与组合身份不一致")
     if family == "heuristic":
-        if getattr(policy, "style", None) != defaults["style"]:
+        if (
+            defaults["style"] != "unrestricted"
+            and getattr(policy, "style", None) != defaults["style"]
+        ):
             raise ValueError(
-                f"policy.style must equal {defaults['style']!r}; set it on the object returned by build(model_dir), including wrapper classes"
+                f"policy.style 必须等于 {defaults['style']!r}；请设置在 build(model_dir) "
+                "返回的对象上，包装类也一样"
             )
         if not callable(getattr(policy, "utilities", None)):
             raise ValueError(
-                "policy.utilities(observation) must be callable for a heuristic combination"
+                "heuristic 组合的 policy.utilities(observation) 必须可调用"
             )
     if family in ("value", "ppo"):
         expected = defaults["algorithm"]
@@ -55,19 +63,21 @@ def validate_capability(module, policy, combination, package, definition=None):
             or getattr(policy, "algorithm", None) != expected
         ):
             raise ValueError(
-                f"strategy.train(ctx) must be callable and policy.algorithm must equal {expected!r} on the object returned by build(model_dir)"
+                f"strategy.train(ctx) 必须可调用，且 build(model_dir) 返回对象的 "
+                f"policy.algorithm 必须等于 {expected!r}"
             )
         evidence = Path(package) / "model/training.json"
         if not evidence.exists():
-            raise ValueError("missing actual training evidence")
+            raise ValueError("缺少实际训练的证据")
         row = json.loads(evidence.read_text())
         if row.get("algorithm") != expected or row.get("updates", 0) < 1:
-            raise ValueError("no completed algorithm update")
+            raise ValueError("没有完成任何算法更新")
     if (
         family == "search"
         and getattr(policy, "algorithm", None) != defaults["algorithm"]
     ):
         raise ValueError(
-            f"policy.algorithm must equal {defaults['algorithm']!r} on the object returned by build(model_dir)"
+            "build(model_dir) 返回对象的 policy.algorithm 必须等于 "
+            f"{defaults['algorithm']!r}"
         )
     return {"combination": combination, "family": family}

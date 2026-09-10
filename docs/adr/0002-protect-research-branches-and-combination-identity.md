@@ -1,8 +1,10 @@
 ---
-status: accepted
+status: partially superseded by ADR-0006
 ---
 
 # 保护持续研究分支及其策略组合身份
+
+> 周期屏障、保护淘汰或模型切换时机以 [ADR-0006](0006-decouple-strategy-history-from-experiments.md) 为准；本文保留当时取舍，组合身份、训练和分支隔离约束继续适用。
 
 研究对象划分为研究方向、策略组合、研究分支和候选策略。淘汰终止研究分支的后续迭代，组合最低存活数保护作用于分支；候选用于比赛评估，不能把多个同源候选当作多条独立探索分支。
 

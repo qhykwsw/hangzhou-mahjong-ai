@@ -1,6 +1,8 @@
-"""Frozen, balanced schedules; selection and protection use completed evidence only."""
+"""Frozen, balanced schedules; selection use completed evidence only."""
 
 import random
+from math import sqrt
+from statistics import variance
 from itertools import combinations
 from collections import Counter
 
@@ -40,29 +42,25 @@ def schedule(ids, matches, seed):
     return result
 
 
-def reference_groups(branches, own, seed, blocks):
+def reference_groups(pool, seed, blocks):
+    """Uniform independent draws with replacement, including own historical versions."""
+    if not pool:
+        raise ValueError("select at least one opponent")
     rng = random.Random(str(seed))
-    available = [b for b in branches if b["id"] != own]
-    usage = Counter()
-    out = []
-    if len(available) < 3:
-        raise ValueError("three other branches required")
-    for _ in range(blocks):
-        picked = []
-        for _ in range(3):
-            tie = {b["id"]: rng.random() for b in available}
-            row = min(
-                (b for b in available if b not in picked),
-                key=lambda b: (
-                    sum(x["combination"] == b["combination"] for x in picked),
-                    usage[b["id"]],
-                    tie[b["id"]],
-                ),
-            )
-            picked.append(row)
-            usage[row["id"]] += 1
-        out.append([b["representative"] for b in picked])
-    return out
+    return [rng.choices(list(pool), k=3) for _ in range(blocks)]
+
+
+def group_uncertainty(group_means):
+    """Estimated SE across four-seat groups, not across correlated games.
+
+    This descriptive sampling estimate is not a confidence bound on rank or
+    a selection criterion. The balanced opponent schedule is not IID sampling.
+    """
+    count = len(group_means)
+    return {
+        "evaluation_groups": count,
+        "standard_error": sqrt(variance(group_means) / count) if count >= 2 else None,
+    }
 
 
 def standings(roster, receipts):
@@ -98,18 +96,3 @@ def standings(roster, receipts):
             r["candidate_id"],
         ),
     )
-
-
-def eliminated(table, branches, fraction, minimum):
-    remaining = Counter(
-        b["combination"] for b in branches.values() if b["status"] != "eliminated"
-    )
-    count = int(len(table) * fraction)
-    removed = []
-    for row in list(reversed(table))[:count]:
-        bid = row["branch"]
-        group = branches[bid]["combination"]
-        if remaining[group] > minimum and sum(remaining.values()) > 4:
-            removed.append(bid)
-            remaining[group] -= 1
-    return removed

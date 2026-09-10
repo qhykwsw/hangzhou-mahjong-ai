@@ -18,7 +18,7 @@ class Controller:
         self.recover()
 
     def recover(self):
-        for run in self.research.runs():
+        for run in self.research.states():
             with self.research.edit(run["id"]) as (s, db):
                 self.consume(s, db)
                 for j in s["jobs"].values():
@@ -46,9 +46,9 @@ class Controller:
                                 if task.exists()
                                 else time.time()
                             )
-                            s["iterations"][j["iteration"]]["spent"] += max(
-                                0, ended - j.get("started_at", ended)
-                            )
+                            elapsed = max(0, ended - j.get("started_at", ended))
+                            j["spent"] += elapsed
+                            s["iterations"][j["iteration"]]["spent"] += elapsed
                         if (
                             j["kind"] == "agent"
                             and s["iterations"][j["iteration"]]["status"] == "submitted"
@@ -59,7 +59,7 @@ class Controller:
                 if s["status"] in ("running", "pausing"):
                     s.update(
                         status="paused",
-                        pause_reason="service restarted; resume to continue",
+                        pause_reason="服务已重启，继续实验以恢复",
                     )
 
     def stop(self, s, job, force=False):
@@ -80,7 +80,7 @@ class Controller:
             if (
                 file == "codex-process.json"
                 and "codex" in command
-                and s["id"] in command
+                and job["experiment"] in command
             ) or (str(root) in command and "mahjong_ai." in command):
                 try:
                     os.killpg(pid, signal.SIGKILL if force else signal.SIGTERM)
@@ -89,7 +89,7 @@ class Controller:
 
     def consume(self, s, db):
         for j in list(s["jobs"].values()):
-            if j["status"] == "completed":
+            if j["status"] == "completed" or j["experiment"] != s["id"]:
                 continue
             root = Path(s["root"]) / "jobs" / j["id"]
             receipt = root / "result.json"
@@ -126,7 +126,8 @@ class Controller:
         task = dict(
             kind=j["kind"],
             project=str(self.research.project),
-            run=s["id"],
+            experiment=s["id"],
+            runtime_path=j["runtime_path"],
             runtime=s["runtime"],
             config=cfg["game"],
             timeouts=cfg["timeouts"],
@@ -135,13 +136,26 @@ class Controller:
         )
         if j["kind"] == "agent":
             b = s["branches"][j["branch"]]
-            comb = next(c for c in cfg["combinations"] if c["id"] == b["combination"])
+            comb = s["definitions"][b["combination"]]
+            previous = next(
+                (
+                    i
+                    for i in reversed(list(s["iterations"].values()))
+                    if i["branch"] == b["id"] and i["status"] == "completed"
+                ),
+                None,
+            )
             task.update(
                 branch=b["id"],
                 thread_id=b["thread_id"],
                 model_config=b["model_config"],
                 brief=comb["name"] + ": " + str(comb["parameters"]),
                 iteration=it["number"],
+                handoff=self.research.handoff(s, b["id"]),
+                previous_plan=(previous or {}).get("plan"),
+                previous_iteration_feedback=(
+                    self.research.iteration_feedback(s, previous) if previous else None
+                ),
             )
         elif j["kind"] == "prepare":
             packages = {}
@@ -154,22 +168,33 @@ class Controller:
                         "mahjong_ai.execution.candidate_runtime", fromlist=["tree_hash"]
                     ).tree_hash(source),
                     requirements=c["requirements"],
+                    output=str(
+                        self.research.project
+                        / ".local/strategies"
+                        / c["combination"]
+                        / (c["branch"] or "baseline")
+                        / "versions"
+                        / cid
+                    ),
                 )
-            opponents = []
-            if it:
-                cycle = s["cycles"][it["cycle"] - 1]
-                opponents = [
-                    s["candidates"][cid]["spec"]
-                    for b, cid in cycle["reference"].items()
-                    if b != j["branch"]
-                ]
+            pool = (
+                s["cycles"][it["cycle"] - 1]["reference"]
+                if it
+                else s["experiments"][-1]["initial_opponents"]
+            )
+            opponents = [
+                {
+                    **s["candidates"][cid]["spec"],
+                    "action_seconds": cfg["timeouts"]["discard"],
+                    "response_seconds": cfg["timeouts"]["response"],
+                }
+                for cid in pool
+            ]
             task.update(
                 packages=packages,
                 dependency_root=str(root / "environments"),
                 combination=j["combination"],
-                definition=next(
-                    c for c in cfg["combinations"] if c["id"] == j["combination"]
-                ),
+                definition=s["definitions"][j["combination"]],
                 training_games=j["training_games"],
                 opponents=opponents,
             )
@@ -183,7 +208,11 @@ class Controller:
                 scope=j["scope"],
                 candidate=j.get("candidate"),
                 policies={
-                    cid: s["candidates"][cid]["spec"]
+                    cid: {
+                        **s["candidates"][cid]["spec"],
+                        "action_seconds": cfg["timeouts"]["discard"],
+                        "response_seconds": cfg["timeouts"]["response"],
+                    }
                     for a in j["assignments"]
                     for cid in a["players"]
                 },
@@ -225,7 +254,7 @@ class Controller:
         )
         env = dict(
             os.environ,
-            PYTHONPATH=str(Path(s["root"]) / "runtime"),
+            PYTHONPATH=j["runtime_path"],
             MAHJONG_MEMORY_MB=str(task["resources"]["memory_mb"]),
         )
         for key in (
@@ -251,7 +280,7 @@ class Controller:
 
     def tick(self):
         admissions = []
-        for run in self.research.runs(active_only=True):
+        for run in self.research.states(active_only=True):
             with self.research.edit(run["id"]) as (s, db):
                 self.consume(s, db)
                 for j in s["jobs"].values():
@@ -269,7 +298,7 @@ class Controller:
                                 "status": "paused"
                                 if s["status"] != "running"
                                 else "failed",
-                                "error": "worker exited without receipt",
+                                "error": "任务进程退出但没有留下回执",
                                 "usage": {
                                     "wall_seconds": max(
                                         0, time.time() - j["started_at"]
@@ -290,12 +319,15 @@ class Controller:
                         and (root / "task.json").exists()
                     ):
                         deadline = read_json(root / "task.json")["deadline"]
-                        if time.time() > deadline + 6:
+                        # Training that hits the iteration limit still needs a
+                        # window to freeze its last committed checkpoint.
+                        grace = 180 if j["kind"] == "prepare" else 6
+                        if time.time() > deadline + grace:
                             self.stop(s, j, force=True)
                             if not (root / "result.json").exists():
                                 result = {
                                     "status": "failed",
-                                    "error": "execution deadline exceeded",
+                                    "error": "执行超过时限",
                                     "usage": {
                                         "wall_seconds": max(
                                             0, deadline - j.get("started_at", deadline)
@@ -337,7 +369,12 @@ class Controller:
                         for j in s["jobs"].values()
                     )
                     ready = sorted(
-                        (b for b in s["branches"].values() if b["status"] == "ready"),
+                        (
+                            b
+                            for b in s["branches"].values()
+                            if b["status"] == "ready"
+                            and b["id"] in s["cycles"][-1]["targets"]
+                        ),
                         key=lambda b: (b["last_run"], b["id"]),
                     )
                     for b in ready[: max(0, limits["agent"] - active)]:
@@ -382,13 +419,13 @@ class Controller:
                 self.processes.pop(key)
 
     def close(self):
-        for s in self.research.runs(active_only=True):
+        for s in self.research.states(active_only=True):
             self.research.control(s["id"], "pause")
         end = time.monotonic() + 7
         while self.processes and time.monotonic() < end:
             self.tick()
             time.sleep(0.1)
-        for s in self.research.runs():
+        for s in self.research.states():
             for j in s["jobs"].values():
                 if j["status"] == "running":
                     self.stop(s, j, force=True)

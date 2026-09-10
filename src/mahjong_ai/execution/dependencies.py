@@ -190,7 +190,7 @@ def _prepare_environment(requirements, root, deadline):
         file_bytes=256 * 1024**2,
     )
     if download["status"] != "completed":
-        raise RuntimeError("wheel preparation failed: " + download["stderr"][-2000:])
+        raise RuntimeError("wheel 下载失败：" + download["stderr"][-2000:])
     venv = root / "venv"
     # venv/ensurepip may spawn trusted Python subprocesses; no private files are mounted.
     created = command(
@@ -203,10 +203,10 @@ def _prepare_environment(requirements, root, deadline):
         no_fork=False,
     )
     if created["status"] != "completed":
-        raise RuntimeError("environment creation failed")
+        raise RuntimeError("隔离环境创建失败")
     hashes = {p.name: file_hash(p) for p in wheels.glob("*.whl")}
     if not hashes:
-        raise ValueError("no wheel artifacts")
+        raise ValueError("没有下载到任何 wheel")
     python = str(venv / "bin/python")
     installed = command(
         pip_command(
@@ -224,9 +224,7 @@ def _prepare_environment(requirements, root, deadline):
         file_bytes=256 * 1024**2,
     )
     if installed["status"] != "completed":
-        raise RuntimeError(
-            "isolated wheel installation failed: " + installed["stderr"][-2000:]
-        )
+        raise RuntimeError("隔离环境安装 wheel 失败：" + installed["stderr"][-2000:])
     atomic_json(root / "dependencies.json", {"requirements": reqs, "wheels": hashes})
     return python, hashes
 
@@ -245,11 +243,11 @@ def prepare_environment(requirements, root, deadline):
         if manifest.exists() and python.exists():
             record = read_json(manifest)
             if not set(requirements).issubset(record["requirements"]):
-                raise ValueError("dependency cache key mismatch")
+                raise ValueError("依赖缓存键不一致")
             if any(
                 file_hash(root / "wheels" / name) != value
                 for name, value in record["wheels"].items()
             ):
-                raise ValueError("frozen dependency wheel changed")
+                raise ValueError("冻结的依赖 wheel 发生变化")
             return str(python), record["wheels"]
         return _prepare_environment(requirements, root, deadline)

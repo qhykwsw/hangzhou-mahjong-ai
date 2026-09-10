@@ -7,10 +7,9 @@ from mahjong_ai.strategies.common import PolicySpec
 from mahjong_ai.persistence.artifacts import atomic_json
 
 
-def export_candidate(root, candidate, output):
-    root = Path(root).resolve()
-    arena = Research(root.parents[2])
-    state = arena.read(root.name)
+def export_candidate(project, candidate, output):
+    arena = Research(project)
+    state = arena.read()
     row = state["candidates"].get(candidate)
     if not row or not row.get("spec"):
         raise ValueError("select a prepared candidate by its full ID")
@@ -21,15 +20,20 @@ def export_candidate(root, candidate, output):
         raise ValueError("export destination must be empty")
     destination.mkdir(parents=True, exist_ok=True)
     shutil.copytree(original.package_path, destination / "candidate")
-    shutil.copytree(root / "runtime", destination / "runtime")
-    value = original.as_dict() | {"package_path": "candidate", "python_path": None}
+    shutil.copytree(original.runtime_path, destination / "runtime")
+    value = original.as_dict() | {
+        "package_path": "candidate",
+        "python_path": None,
+        "runtime_path": "runtime",
+    }
     atomic_json(destination / "policy.json", value)
     atomic_json(
         destination / "manifest.json",
         {
             "candidate": candidate,
-            "run": root.name,
-            "runtime": state["runtime"],
+            "branch": row["branch"],
+            "experiment": row.get("experiment"),
+            "runtime": Path(original.runtime_path).name,
             "requirements": row.get("requirements", []),
             "scope": "local competition result; external platform has separate records",
         },

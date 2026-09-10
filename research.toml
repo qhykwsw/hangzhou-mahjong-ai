@@ -1,17 +1,70 @@
-total_iterations = 100
-first_cycle = 20
-cycle_iterations = 10
+total_rounds = 2
+iterations_per_round = 5
+opponent_limit = 7
 iteration_seconds = 3600
-agent_concurrency = 10
-training_workers = 2
-match_workers = 4
-candidate_limit = 4
-evaluation_games = 64
-competition_games_per_branch = 64
-elimination_fraction = 0.2
-minimum_branches = 2
-training_games = 64
+agent_concurrency = 14
+training_workers = 12
+match_workers = 12
+candidate_limit = 1
+evaluation_games = 128
+competition_games_per_branch = 256
+training_games = 128
 initialization_seconds = 3600
+
+[training_caps]
+heuristic = 0
+search = 0
+value = 256
+ppo = 256
+
+[[combinations]]
+id = "heuristic-balanced"
+branches = 1
+branch_ids = ["02"]
+models = ["deepseek"]
+parameters = { style = "balanced" }
+
+[[combinations]]
+id = "heuristic-adventurous"
+branches = 1
+branch_ids = ["02"]
+models = ["deepseek"]
+parameters = { style = "adventurous" }
+
+[[combinations]]
+id = "heuristic-conservative"
+branches = 1
+branch_ids = ["02"]
+models = ["deepseek"]
+parameters = { style = "conservative" }
+
+[[combinations]]
+id = "heuristic-unrestricted"
+branches = 1
+branch_ids = ["02"]
+models = ["deepseek"]
+parameters = { style = "unrestricted" }
+
+[[combinations]]
+id = "value-lightgbm"
+branches = 1
+branch_ids = ["02"]
+models = ["deepseek"]
+parameters = { algorithm = "lightgbm" }
+
+[[combinations]]
+id = "value-mlp"
+branches = 1
+branch_ids = ["02"]
+models = ["deepseek"]
+parameters = { algorithm = "mlp" }
+
+[[combinations]]
+id = "ppo"
+branches = 1
+branch_ids = ["02"]
+models = ["deepseek"]
+parameters = { algorithm = "ppo" }
 
 [game]
 rounds = 8

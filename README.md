@@ -1,6 +1,6 @@
 # 杭州麻将策略研究
 
-多种算法各自维护独立研究分支，由 Codex 编写候选，经过完整配对评估选出分支代表，再通过周期共同竞技排名和保护淘汰持续探索。
+多种算法各自维护独立研究分支，由 Codex 编写候选，经过完整配对评估选出分支代表，每轮再由全体分支代表进行大乱斗，前 K 名成为下一轮对比对象。策略历史按组合长期保留。
 
 ## 启动
 
@@ -12,7 +12,7 @@ python3 -m venv .venv
 .venv/bin/mahjong start
 ```
 
-启动只打开研究控制台。在网页「新建研究」中设置组合、分支、模型和轮数，再开始运行。默认八种组合、每组合三条独立分支（Astra、DeepSeek、Qwen 各一条），共二十四条，每条默认研究一百轮；首次二十轮淘汰，其后每十轮淘汰。每条分支单轮可提交一至四个候选。配置入口为 [research.toml](research.toml)，模型准备和配置生效规则见[研究手册](docs/reference/strategy-agent.md#配置)。
+启动打开研究控制台。对比对象由上一轮大乱斗前 K 名自动生成、不由用户挑选；在卡片列表勾选本轮要迭代的分支，设置研究总轮数、每轮分支迭代次数与并发后开始。本项目 [research.toml](research.toml) 当前注册七种组合各一条 DeepSeek 分支（共七条），跑 2 轮研究、每轮每支 5 次迭代，训练默认 128 场、上限 256 场；代码默认是每组合 DeepSeek、Qwen 各一条（共十四条）、十轮 × 每支十次。每轮结束后统一对比并更新前七名对手池，完整操作见[研究手册](docs/reference/strategy-agent.md)。
 
 ```bash
 .venv/bin/mahjong status
@@ -32,4 +32,4 @@ python3 -m venv .venv
 | 理解领域对象和架构取舍 | [术语表](CONTEXT.md) · [决策记录](docs/adr/) |
 | 查阅官方材料 | [原始资料](docs/sources/README.md) |
 
-`.local/service/research.sqlite` 保存研究状态，`.local/runs/` 保存冻结代码、候选、任务和报告，两者需要一并备份。新框架不读取旧研究协议。
+`.local/strategies/` 保存长期策略历史，`.local/research/` 保存冻结运行时、实验与任务，`.local/service/research.sqlite` 保存研究状态，三者需要一并备份。旧运行记录不兼容。
