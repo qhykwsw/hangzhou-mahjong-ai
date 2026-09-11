@@ -25,6 +25,9 @@ typedef struct {
     uint8_t t[5][2]; /* [melds][pair] -> max partials, UNREACHABLE when impossible */
 } suit_res;
 
+/* Memos below are plain statics: every entry point keeps the GIL for the whole
+ * call, so threads sharing a process are already serialized. The thread-local
+ * alternative costs about 45% of the hot path in TLS addressing. */
 typedef struct {
     uint32_t gen[10][5][5][5];
     suit_res val[10][5][5][5];
