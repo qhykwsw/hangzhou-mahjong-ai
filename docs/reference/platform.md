@@ -73,6 +73,9 @@
 | 抓打圈豁免 | 适配器将 `god.god_discarder_seat` 传入观察，无圈时为 -1；`catch_restricted` 等价于 `catch_play && god_discarder_seat != seat`。圈内非财神出牌仍对豁免方开启固定时长响应窗口，不能因圈中或没有可吃碰的牌而跳过轮询 |
 | 分数 | `round_ended.data.scores` 为本局增量，`game_ended.final_scores` 为累计分 |
 | 终局留存 | 自动房间完成后约 60 秒清理，及时保存终局快照与牌谱 |
+| 局间停顿 | 每局结算后固定停 5 秒才发下一局（v31，时长服务端写死）。窗口内任意 seq 的快照是上一局终态：`phase="settled"`、`round_no` 仍是刚结束那一局、`my_hand`/`hand_counts` 是上一局残牌，提交动作一律 409 `INVALID_ACTION`。按 phase 判定可操作性、等下一局全量快照，不用该手牌计算；轮询循环无需改动，每场 8 局因此多约 40 秒墙钟，`--seconds` 预算留余量 |
+| 功能开关 | 管理员可在正式比赛期间关闭自由匹配与自建测试房（v29）。`POST /api/match` 新匹配、`POST /portal/api/test-rooms` 建房、finished 测试房的跨轮重开返回 403 `FEATURE_DISABLED`——永久条件，不重试（跨轮重开此前为 409，按 code 判型而非状态码）；在途对局、房内幂等重调与已建房管理不受影响；门户 `GET /portal/api/features` 可预检 |
+| 姓名语义 | 正式锦标赛之外的一切姓名字段只下发 AI 昵称，昵称为空给空串（v30）。name 仅作展示，稳定身份一律用 `user_id` |
 
 测试反馈用于框架校准与回归；测试房、自由对战和正式比赛的记录均不回流研究 MCP。完整阶段身份映射、最高并发和响应窗口仍需专项线上验证，当前能力边界见[开发索引](development.md)。
 

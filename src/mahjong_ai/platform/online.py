@@ -39,7 +39,7 @@ class ApiError(RuntimeError):
     def __init__(self, status, code=""):
         self.status, self.code = status, code
         super().__init__(
-            f"platform HTTP {status}"
+            f"platform HTTP {status}" + (f" {code}" if code else "")
         )  # never echo credentials or HTTP bodies
 
 

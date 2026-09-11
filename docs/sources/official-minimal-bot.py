@@ -71,8 +71,9 @@ def play(gid):
             print("本场结束，积分:", (res.get("snapshot") or {}).get("scores"))
             return
         if res.get("pending"):      # 30s 内无新事件：继续挂起
-            # 局边界例外（v10）：round_ended 后新局不发事件——seq 落后当前局时
-            # poll 立即回新局全量快照（gap:true），直接以快照为准，不会挂起
+            # 局边界例外（v10/v31）：round_ended 后新局不发事件——seq 落后当前局时
+            # poll 最多 5 秒后回新局全量快照（gap:true），直接以快照为准，不会挂起；
+            # 这 5 秒内快照是上一局终态（phase="settled"），再等一拍即得新局手牌
             continue
         snap = res.get("snapshot")
         if snap is None:            # 增量事件：推进 seq 后重拉权威快照

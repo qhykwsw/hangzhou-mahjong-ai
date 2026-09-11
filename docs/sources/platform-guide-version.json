@@ -1,6 +1,34 @@
 {
   "changes": [
     {
+      "version": 31,
+      "date": "2026-09-11",
+      "type": "changed",
+      "summary": "局间暂停：每局结束到下一局发牌之间新增固定 5 秒停顿（此前立即发下一局）——局间窗口内 phase 为 settled、round_no 仍是刚结束那一局",
+      "detail": "玩家 API 面 changed（2026-09-11 用户裁定）。**字段集/错误码/三个超时/轮数一律未动**，变化只在「一局结束 → 下一局开始」这段时序：\n① 局间停顿：每局结算后固定停 5 秒再发下一局（此前是结算的同一瞬间立即发牌）。停顿时长服务端写死、不可配置，正式锦标赛/测试房/自由匹配房一律 5 秒。\n② 局间窗口内的快照（这 5 秒内用任意 seq 拉取，含 seq=0）：phase=\"settled\"、round_no 仍是**刚结束那一局**的局号、waited_seat=-1、手牌与牌河为上一局终态——即「本局已结算、下一局尚未开始」的诚实读数，可供展示上一局结果。窗口结束后照常进入新局（round_no+1、phase=\"draw\"；庄家为上一局胡家，流局则连庄）。\n③ **v10 的跨局承诺仍然成立**：round_ended 之后用上一局末的 seq 轮询，仍会收到新局全量快照（gap:true，含 my_hand/round_no/phase），**不会**挂起至庄家出牌超时被代打——只是时点由「立即」变为「最多 5 秒后」（服务端保证在发牌那一刻唤醒所有挂起中的轮询）。5 秒远小于 30 秒长轮询上限，任何超时预算都无需调整。\n④ bot 应对：照常轮询的 bot **零改动**。唯一要留意的是「收到 round_ended 后立刻用 seq=0 强制拉快照」这一姿势——局间窗口内拿到的是上一局终态而非新局手牌；若你的循环依赖「拉一次 seq=0 就必然是新局」，请把 phase=\"settled\" 当作「再等一拍」的信号（或直接改用上一局末的 seq 轮询，见③）。"
+    },
+    {
+      "version": 30,
+      "date": "2026-09-10",
+      "type": "changed",
+      "summary": "他人真名全面收口：除管理面建的正式锦标赛外，一切 API 的姓名字段不再下发他人的 users.name——一律优先 AI 昵称，昵称为空则空串（消费方回退 user_id）",
+      "detail": "玩家 API + 门户 API 面 changed（2026-09-10 用户裁定）。**契约 schema 逐字节不变**（无字段增删、无新错误码），变化只在 name 类字段的取值域：\n① 口径三档（此前是「test/auto 房走昵称链、其余恒真名」的二分，且昵称链在昵称为空时回退真名）——\n   • **正式锦标赛（管理面建的正式赛；DB 列 kind='normal'）**：不变，恒 users.name 真名（组织者视角）。\n   • **测试房（kind='test'）**：建房时自造的 4 个合成玩家出 owner 自命名的名字（存在 users.name 的 bot 标签，不是自然人真名）；**真人自行入席的席位只出 AI 昵称**。\n   • **其余一切**（自由匹配房 kind='auto'、三个排行榜、未知 kind）：只出 users.nickname。\n② 「昵称为空即真名」的回退**全部取消**：昵称为空现在返回**空串**，消费方按空串回退 user_id（门户前端既有回退逻辑不变）。此前无昵称的用户会在他人面暴露 OpenID 真名。\n③ 涉及端点：GET /api/test-rooms/{id}/games/{batch}/events 的 seats[].name；GET /portal/api/leaderboard、/leaderboard/huge-win、/leaderboard/best-game 的 top[].name / me.name / prev.top[].name；GET /portal/api/games/{id}/snapshot 与 /events 的 seats[].name；GET /portal/api/test-rooms/{id} 的 players[].name / ranking[].name；GET /portal/api/tournaments/{id} 与 /ranking 的 ranking[].name / stage.groups / advancement（这几条对正式赛仍是真名，仅 test 房参赛者视角变为昵称）。\n④ fail-safe 收口：所属锦标赛 kind 查库失败或行缺失时，此前会静默按「正式锦标赛」处理（= 把真名发出去）；现在一律按只出昵称的安全侧处理。属纵深防御加固，正常数据下不可见。\n⑤ 本人不受影响：GET /portal/api/me 顶层 name（当前登录者自己的展示名）仍是「昵称 → users.name 回退」；管理 API（/admin/*）真名语义完全不变。\n⑥ bot 应对：把 name 当展示串用、空则回退 user_id 的 bot 零改动即可；把 name 当**稳定身份**用的 bot 请改用 user_id（name 本就可变——用户可随时改昵称）。"
+    },
+    {
+      "version": 29,
+      "date": "2026-09-09",
+      "type": "breaking",
+      "summary": "新增全服功能开关：管理页「设置」Tab 可关闭自由匹配与自建测试房；关闭后 /api/match 新匹配、建测试房、test 房重开一律 403 FEATURE_DISABLED",
+      "detail": "玩家 API 面 breaking（管理面新增；bot 会遇到新的 403 分支）：\n① 自由匹配（match_enabled 关闭）：POST /api/match 的新匹配请求一律 403 FEATURE_DISABLED（永久条件，不要重试）。**在途照常**：已在房中的用户重调仍 200 返回原房（幂等路径不受影响）；进行中的对局与房间照常打完。向半满 registering auto 房的新入席同样被挡——该房在关闭窗口内不再增长。\n② 自建测试房（test_rooms_enabled 关闭）：POST /portal/api/test-rooms 一律 403 FEATURE_DISABLED；已有 finished 测试房的「重开下一轮」（4 令牌各 ready 一次）同样 403 FEATURE_DISABLED——注意该路径此前返回 409（房态类），现为 403（永久条件）。已有房间的列表/详情/关闭/删除/重发令牌、以及身份管理（查看/生成/轮换令牌、改昵称）全部照常。\n③ 门禁读库失败 → 500 INTERNAL（既不放行也不 403，与 v27 err 通道纪律同款）。\n④ 门户新增 GET /portal/api/features（免认证、每 IP 5/s、no-store）：返回 {match_enabled, test_rooms_enabled}，供门户渲染提示与置灰。旧 bot 忽略即可。\n⑤ 默认开启：开关未改动时全部行为与 v28 逐字节一致。"
+    },
+    {
+      "version": 28,
+      "date": "2026-09-09",
+      "type": "changed",
+      "summary": "胡大牌榜排序链去掉第 3 键「该牌型全史次数」：同番同分改为只按胡手时刻（后发生优先）排名——count 退为纯注记，不再影响名次",
+      "detail": "门户 API 面 changed（bot 玩家 API 契约零影响——v12/v14/v19/v23/v27 门户-only 先例；2026-09-09 用户裁定）：\n① 排序链由五级改四级：番数↓ → 得分↓ → 胡手时刻↓（后发生优先）→ user_id asc。原第 3 键「该牌型全史次数↓」（2026-09-07 W3 裁定）撤销——同番同分的手一律按时间近者优先，番型组合更稀有不再因全史次数少而被排到后面（例：同为 8 番 80 分的「平胡·双财飘·爆头」全史 4 次，不再排在「豪华七对×1·爆头」全史 33 次之后）。\n② 响应 schema 逐字节不变：行仍含 count（该牌型全史共胡出次数注记），仅不再参与排序；top 恒 32 行、me 三态（500 内精确 / 500 外 rank:null / 零记录 null）、限速、can_replay 门禁均不变。\n③ 名次变化：同 (fan, score) 段内的行序改变（越晚发生越靠前），榜内可见行集可能随之变化；me「本人全史最佳手」在两条路径（榜内命中 / 500 名外独立查询）口径自此完全一致。"
+    },
+    {
       "version": 27,
       "date": "2026-09-08",
       "type": "added",
@@ -357,6 +385,6 @@
       "detail": "4 白板倍率条件明确为「手留 + 链内飘出的白板 = 4 张」（白板共 4 张不可能超过），普通打出/杠出的不算。"
     }
   ],
-  "updated_at": "2026-09-08",
-  "version": 27
+  "updated_at": "2026-09-11",
+  "version": 31
 }

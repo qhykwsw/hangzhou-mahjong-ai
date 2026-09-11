@@ -1,13 +1,13 @@
 {
-  "runtime": "b780595b6a5ea5efe0e71a036099cf587a3e5048d381fc9d854da7371338fc1c",
+  "runtime": "e7433edf6f575fdc8e04b598f954efe16326b2ecab68d6ac82a24f7155ac2c57",
   "environment": {
     "python": "3.12.13 | packaged by Anaconda, Inc. | (main, Mar 19 2026, 20:12:32) [Clang 20.1.8 ]",
     "numpy": "2.5.1",
     "platform": "macOS-26.6.2-arm64-arm-64bit",
     "machine": "arm64"
   },
-  "guide_version": 27,
-  "updated_at": "2026-09-08",
+  "guide_version": 31,
+  "updated_at": "2026-09-11",
   "source": "https://10.240.169.190:18080/portal/api/tools/fan-calc",
   "samples": 32,
   "matched": 32,
@@ -1808,5 +1808,5 @@
       "matched": true
     }
   ],
-  "retrieved_at": "2026-09-09T03:29:29.210857+00:00"
+  "retrieved_at": "2026-09-11T11:17:07.085443+00:00"
 }

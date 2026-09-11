@@ -1,7 +1,7 @@
 {
   "source": "https://10.240.169.190:18080/portal/api/tools/fan-calc",
-  "retrieved_at": "2026-09-09T03:29:29.210857+00:00",
-  "guide_version": 27,
+  "retrieved_at": "2026-09-11T11:17:07.085443+00:00",
+  "guide_version": 31,
   "method": "POST",
   "endpoint_semantics": "pure stateless calculation",
   "request": {

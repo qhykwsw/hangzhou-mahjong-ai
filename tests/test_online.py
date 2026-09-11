@@ -279,6 +279,53 @@ def test_official_chi_window_can_open_without_a_new_event(tmp_path):
     assert client.snapshots == 2
 
 
+def test_v31_settled_window_snapshot_is_never_played(tmp_path):
+    from mahjong_ai.platform.official import OfficialAdapter
+
+    # v31: the 5-second inter-round window reports the previous round's own
+    # furniture (phase="settled"); acting on it would use stale tiles.
+    snap = {
+        "seat": 0,
+        "phase": "settled",
+        "round_no": 2,
+        "dealer": 0,
+        "turn": 0,
+        "responding_seats": [],
+        "wall_remaining": 0,
+        "discards": [["3w"], [], [], []],
+        "melds": [[], [], [], []],
+        "hand_counts": [13, 13, 13, 13],
+        "my_hand": ["1w"] * 13,
+        "last_discard": "3w",
+        "drawn_tile": "",
+        "scores": [8, -8, 0, 0],
+        "god": {"chain_count": 0, "baotou": False, "catch_play": False},
+    }
+
+    class Client:
+        def __init__(self):
+            self.posts = 0
+            self.polls = 0
+
+        def request(self, method, path, body=None):
+            if method == "POST":
+                self.posts += 1
+                return {"ok": True}
+            self.polls += 1
+            if self.polls > 3:
+                return {"finished": True, "snapshot": snap}
+            return {"seq": 1, "snapshot": snap}
+
+    client = Client()
+    runner = TournamentRunner(client, PolicySpec(), OfficialAdapter(), tmp_path)
+    runner.tournament = {
+        "config": {"Kind": "test", "Rounds": 8, "BaseScore": 1, "YouCaiBiKao": False}
+    }
+    runner._play("fixture")
+    assert client.posts == 0
+    assert client.polls == 4
+
+
 def test_actual_v25_dealer_snapshot_supports_empty_sentinel_and_missing_response_field():
     from mahjong_ai.platform.official import OfficialAdapter
     from mahjong_ai.persistence.artifacts import read_json
