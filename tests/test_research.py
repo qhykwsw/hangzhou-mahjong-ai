@@ -4,7 +4,11 @@ import pytest
 from starlette.testclient import TestClient
 from mahjong_ai.research.service import Research
 from mahjong_ai.research.config import COMBINATIONS, configuration
-from mahjong_ai.evaluation.schedule import schedule, reference_groups
+from mahjong_ai.evaluation.schedule import (
+    schedule,
+    reference_groups,
+    group_uncertainty,
+)
 from mahjong_ai.execution.controller import Controller
 from mahjong_ai.execution.jobs import prepare, play
 from mahjong_ai.interfaces.app import application
@@ -69,7 +73,7 @@ def test_defaults_and_model_validation(tmp_path):
     assert sum(c["branches"] for c in cfg["combinations"]) == 14
     assert all(c["models"] == ["deepseek", "qwen"] for c in cfg["combinations"])
     assert cfg["candidate_limit"] == 1
-    assert cfg["opponent_limit"] == 7
+    assert cfg["opponent_limit"] == 4
     assert cfg["agent_concurrency"] == 14
     assert cfg["training_caps"] == {
         "heuristic": 0,
@@ -901,6 +905,92 @@ def test_registry_does_not_train_unselected_combinations(tmp_path):
     assert set(state["baselines"]) == {"heuristic-balanced"}
     assert len(state["jobs"]) == 1
     assert state["branches"]["ppo--02"]["status"] == "uninitialized"
+
+
+def test_evaluation_shards_split_rotation_blocks_and_merge_into_one_result(tmp_path):
+    config = small_config() | {"evaluation_games": 8, "evaluation_shards": 2}
+    r, experiment, controller = start_research(tmp_path, config)
+    branch = next(iter(r.read(experiment)["branches"]))
+    with r.edit(experiment) as (s, db):
+        agent = r.start_iteration(s, branch)
+    r.declare_plan(experiment, branch, "shards", "split evaluation", "parallel")
+    candidate = r.fork(experiment, branch, "sharded", "split work")["candidate_id"]
+    r.submit(experiment, branch, [candidate])
+    with r.edit(experiment) as (s, db):
+        r.accept(s, db, s["jobs"][agent["id"]], {"status": "completed"})
+        r.advance(s, db)
+        it = s["iterations"][s["branches"][branch]["iteration"]]
+        preparation = next(
+            j
+            for j in s["jobs"].values()
+            if j.get("iteration") == it["id"] and j["kind"] == "prepare"
+        )
+        spec = {**s["candidates"][it["incumbent"]]["spec"], "version": candidate}
+        r.accept(
+            s,
+            db,
+            preparation,
+            {
+                "status": "completed",
+                "candidates": {candidate: {"status": "ready", "spec": spec}},
+            },
+        )
+        matches = [
+            j
+            for j in s["jobs"].values()
+            if j.get("iteration") == it["id"] and j["kind"] == "match"
+        ]
+        assert len(matches) == 4  # 两个候选 × 两个分片
+        for cid in (it["incumbent"], candidate):
+            shards = [j for j in matches if j["candidate"] == cid]
+            assert sorted(j["shard"] for j in shards) == [0, 1]
+            assert all(j["shards"] == 2 for j in shards)
+            assert sorted(
+                (a["block"], a["focal"]) for j in shards for a in j["assignments"]
+            ) == [(block, seat) for block in (0, 1) for seat in range(4)]
+        assert len({controller.task(s, j)["seed"] for j in matches}) == 1
+
+        def focal(job, mean):
+            return dict(
+                candidate_id=job["candidate"],
+                appearances=4,
+                utility_sum=mean * 4,
+                mean_utility=mean,
+                errors=0,
+                timeouts=0,
+                fallback_actions=0,
+                group_means=[mean],
+            )
+
+        first = matches[0]
+        r.accept(
+            s,
+            db,
+            first,
+            {"status": "completed", "summary": [], "focal": focal(first, 1.0)},
+        )
+        partial = s["iterations"][it["id"]]["results"][first["candidate"]]
+        assert partial["appearances"] == 4 and partial["evaluation_groups"] == 1
+        for job in matches:
+            if job["id"] == first["id"]:
+                continue
+            r.accept(
+                s,
+                db,
+                job,
+                {"status": "completed", "summary": [], "focal": focal(job, 2.0)},
+            )
+        assert s["iterations"][it["id"]]["results"][first["candidate"]] == {
+            "candidate_id": first["candidate"],
+            "appearances": 8,
+            "utility_sum": 12.0,
+            "errors": 0,
+            "timeouts": 0,
+            "fallback_actions": 0,
+            "mean_utility": 1.5,
+            **group_uncertainty([1.0, 2.0]),
+        }
+        assert s["branches"][branch]["completed"] == 1
 
 
 def test_focal_scoring_excludes_same_version_in_opponent_seats(tmp_path):

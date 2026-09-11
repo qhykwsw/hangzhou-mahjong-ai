@@ -1288,30 +1288,38 @@ class Research:
                     digest([key, "opponents", it["id"]]),
                     cycle["config"]["evaluation_games"] // 4,
                 )
+                # 一次评估按四座轮换组切成若干分片任务并行跑；对手、种子与
+                # 计分口径都由 block 决定，分片不改变任何一局。
+                shards = max(
+                    1, min(int(cycle["config"]["evaluation_shards"]), len(groups))
+                )
                 for cid in [it["incumbent"], *ready]:
-                    assignments = []
+                    blocks = []
                     for block, opponents in enumerate(groups):
+                        seats = []
                         for seat in range(4):
                             players = list(opponents)
                             players.insert(seat, cid)
-                            assignments.append(
-                                dict(
-                                    index=len(assignments),
-                                    block=block,
-                                    players=players,
-                                    focal=seat,
-                                )
-                            )
-                    self.queue(
-                        s,
-                        "match",
-                        scope="paired",
-                        branch=it["branch"],
-                        iteration=it["id"],
-                        cycle=cycle["id"],
-                        candidate=cid,
-                        assignments=assignments,
-                    )
+                            seats.append(dict(block=block, players=players, focal=seat))
+                        blocks.append(seats)
+                    per = -(-len(blocks) // shards)
+                    for shard, start in enumerate(range(0, len(blocks), per)):
+                        part = []
+                        for seats in blocks[start : start + per]:
+                            for seat in seats:
+                                part.append(dict(index=len(part), **seat))
+                        self.queue(
+                            s,
+                            "match",
+                            scope="paired",
+                            branch=it["branch"],
+                            iteration=it["id"],
+                            cycle=cycle["id"],
+                            candidate=cid,
+                            shard=shard,
+                            shards=shards,
+                            assignments=part,
+                        )
         elif job["kind"] == "match":
             if result["status"] != "completed":
                 job["status"] = "paused"
@@ -1322,15 +1330,51 @@ class Research:
                 return
             job["summary"] = result["summary"]
             if job["scope"] == "paired":
-                it["results"][job["candidate"]] = result["focal"]
-                s["candidates"][job["candidate"]]["last_result"] = result["focal"]
+                job["focal"] = result["focal"]
                 jobs = [
                     j
                     for j in s["jobs"].values()
                     if j.get("iteration") == it["id"] and j["kind"] == "match"
                 ]
+                for cid in sorted({j["candidate"] for j in jobs}):
+                    parts = [
+                        j["focal"]
+                        for j in jobs
+                        if j["candidate"] == cid and j.get("focal")
+                    ]
+                    if not parts:
+                        continue
+                    merged = self.merge_focal(parts)
+                    it["results"][cid] = merged
+                    s["candidates"][cid]["last_result"] = merged
                 if all(j["status"] == "completed" for j in jobs):
                     self.complete_iteration(s, db, it)
+
+    @staticmethod
+    def merge_focal(parts):
+        """把同一候选的评估分片合成一份读数；口径等于一次跑完整批。"""
+        merged = {
+            key: sum(part.get(key, 0) for part in parts)
+            for key in (
+                "appearances",
+                "utility_sum",
+                "errors",
+                "timeouts",
+                "fallback_actions",
+            )
+        }
+        merged["candidate_id"] = parts[-1]["candidate_id"]
+        merged["mean_utility"] = (
+            merged["utility_sum"] / merged["appearances"]
+            if merged["appearances"]
+            else None
+        )
+        merged.update(
+            group_uncertainty(
+                [mean for part in parts for mean in part.get("group_means") or []]
+            )
+        )
+        return merged
 
     @staticmethod
     def competition_table(s, cycle):

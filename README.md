@@ -12,7 +12,7 @@ python3 -m venv .venv
 .venv/bin/mahjong start
 ```
 
-启动打开研究控制台。对比对象由上一轮大乱斗前 K 名自动生成；在卡片列表勾选本轮要迭代的分支，设置研究总轮数、每轮分支迭代次数与并发后开始。当前自动研究项目的配置在 [projects/agent-research/research.toml](projects/agent-research/research.toml)，注册七种组合各一条 DeepSeek 分支（共七条），共 20 轮、每轮每支 5 次迭代，训练默认 128 场、上限 256 场。每轮结束后统一对比并更新前七名对手池，完整操作见[研究手册](docs/reference/strategy-agent.md)。
+启动打开研究控制台。对比对象由上一轮大乱斗前 K 名自动生成；在卡片列表勾选本轮要迭代的分支，设置研究总轮数、每轮分支迭代次数与并发后开始。当前自动研究项目的配置在 [projects/agent-research/research.toml](projects/agent-research/research.toml)，注册四种启发式组合各两条 DeepSeek 分支（共八条），共 20 轮、每轮每支 5 次迭代，单次评估默认 128 场、分四片并行。每轮结束后统一对比并更新前四名对手池，完整操作见[研究手册](docs/reference/strategy-agent.md)。
 
 ```bash
 .venv/bin/mahjong status

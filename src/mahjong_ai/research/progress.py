@@ -128,25 +128,27 @@ def branch_progress(state):
             ("incumbent", iteration["incumbent"]),
             *[("candidate", c) for c in iteration["candidates"]],
         ]:
-            job = next(
-                (
-                    j
-                    for j in owned_jobs
-                    if j["kind"] == "match" and j.get("candidate") == cid
-                ),
-                None,
-            )
+            shards = [
+                j
+                for j in owned_jobs
+                if j["kind"] == "match" and j.get("candidate") == cid
+            ]
             result = iteration["results"].get(cid)
             completed = 0
             hand = None
             if result:
                 completed = result["appearances"]
-            elif job:
-                folder = root / job["id"]
-                completed = sum(1 for _ in (folder / "matches").glob("*.json"))
-                progress = folder / "progress.json"
-                if job["status"] == "running" and progress.exists():
-                    hand = read_json(progress).get("hand")
+            else:
+                for job in shards:
+                    folder = root / job["id"]
+                    completed += sum(1 for _ in (folder / "matches").glob("*.json"))
+                    progress = folder / "progress.json"
+                    if (
+                        hand is None
+                        and job["status"] == "running"
+                        and progress.exists()
+                    ):
+                        hand = read_json(progress).get("hand")
             item["evaluation"].append(
                 dict(
                     role=role,
@@ -154,9 +156,11 @@ def branch_progress(state):
                     status="completed"
                     if result
                     else "cancelled"
-                    if job and job.get("cancelled")
-                    else job["status"]
-                    if job
+                    if any(job.get("cancelled") for job in shards)
+                    else "running"
+                    if any(job["status"] == "running" for job in shards)
+                    else shards[0]["status"]
+                    if shards
                     else "waiting",
                     completed_games=completed,
                     total_games=cycle["config"]["evaluation_games"],

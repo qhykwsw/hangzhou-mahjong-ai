@@ -260,9 +260,10 @@ def play(task, root):
             groups.setdefault(assignment["block"], []).append(
                 4 - receipt["ranks"][assignment["focal"]]
             )
-        result["focal"].update(
-            group_uncertainty([sum(values) / len(values) for values in groups.values()])
-        )
+        # 逐组效用随回执返回：评估分片合并时按同一口径重算组间标准误。
+        means = [sum(values) / len(values) for values in groups.values()]
+        result["focal"].update(group_uncertainty(means))
+        result["focal"]["group_means"] = means
     return result
 
 

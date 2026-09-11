@@ -1,12 +1,13 @@
 total_rounds = 20
 iterations_per_round = 5
-opponent_limit = 7
+opponent_limit = 4
 iteration_seconds = 3600
 agent_concurrency = 8
 training_workers = 12
 match_workers = 12
 candidate_limit = 1
 evaluation_games = 128
+evaluation_shards = 4
 competition_games_per_branch = 256
 training_games = 128
 initialization_seconds = 3600
@@ -19,52 +20,31 @@ ppo = 256
 
 [[combinations]]
 id = "heuristic-balanced"
-branches = 1
-branch_ids = ["01"]
-models = ["deepseek"]
+branches = 2
+branch_ids = ["01", "02"]
+models = ["deepseek", "deepseek"]
 parameters = { style = "balanced" }
 
 [[combinations]]
 id = "heuristic-adventurous"
-branches = 1
-branch_ids = ["01"]
-models = ["deepseek"]
+branches = 2
+branch_ids = ["01", "02"]
+models = ["deepseek", "deepseek"]
 parameters = { style = "adventurous" }
 
 [[combinations]]
 id = "heuristic-conservative"
-branches = 1
-branch_ids = ["01"]
-models = ["deepseek"]
+branches = 2
+branch_ids = ["01", "02"]
+models = ["deepseek", "deepseek"]
 parameters = { style = "conservative" }
 
 [[combinations]]
 id = "heuristic-unrestricted"
-branches = 1
-branch_ids = ["01"]
-models = ["deepseek"]
+branches = 2
+branch_ids = ["01", "02"]
+models = ["deepseek", "deepseek"]
 parameters = { style = "unrestricted" }
-
-[[combinations]]
-id = "value-lightgbm"
-branches = 1
-branch_ids = ["01"]
-models = ["deepseek"]
-parameters = { algorithm = "lightgbm" }
-
-[[combinations]]
-id = "value-mlp"
-branches = 1
-branch_ids = ["01"]
-models = ["deepseek"]
-parameters = { algorithm = "mlp" }
-
-[[combinations]]
-id = "ppo"
-branches = 1
-branch_ids = ["01"]
-models = ["deepseek"]
-parameters = { algorithm = "ppo" }
 
 [game]
 rounds = 8
