@@ -107,7 +107,7 @@ class Research:
                         status="idle",
                         phase="idle",
                         pause_reason="",
-                        pause_after_round=False,
+                        stop_plan=None,
                         created_at=time.time(),
                         config=config,
                         revisions=[],
@@ -419,7 +419,7 @@ class Research:
         s["jobs"][jid] = job
         return job
 
-    def control(self, experiment, action, rounds=0, reason=""):
+    def control(self, experiment, action, rounds=0, options=None, reason=""):
         with self.edit(experiment) as (s, db):
             if not s["id"]:
                 raise ValueError("请先开始实验")
@@ -429,12 +429,34 @@ class Research:
                     status="pausing" if s["status"] == "running" else "paused",
                     pause_reason=reason or "user paused",
                 )
-            elif action == "pause_after_round":
+            elif action == "pause_after":
                 if s["phase"] == "closed":
-                    raise ValueError("已关闭的实验不能安排轮末暂停")
+                    raise ValueError("已关闭的实验不能安排停止方式")
                 if s["status"] != "running":
-                    raise ValueError("只有运行中的实验可以安排轮末暂停")
-                s["pause_after_round"] = not s.get("pause_after_round", False)
+                    raise ValueError("只有运行中的实验可以安排停止方式")
+                self.arrange_stop(s, options or {})
+            elif action == "stop_now":
+                if s["phase"] == "closed":
+                    raise ValueError("已关闭的实验不能结束当前迭代")
+                if s["status"] != "running":
+                    raise ValueError("只有运行中的实验可以直接结束当前迭代")
+                competition = bool((options or {}).get("competition", True))
+                if s["phase"] == "researching":
+                    discarded = self.discard_iterations(s, db)
+                    self.arrange_stop(s, {"scope": "now", "competition": competition})
+                else:
+                    # 大乱斗已经在跑，直接结束只表示停在轮末。
+                    discarded = []
+                    self.arrange_stop(s, {"scope": "round", "competition": True})
+                self.event(
+                    db,
+                    s,
+                    "stop_now",
+                    {"discarded": discarded, "competition": competition},
+                )
+            elif action == "clear_stop":
+                self.restore_targets(s)
+                s["stop_plan"] = None
             elif action == "resume":
                 if s["status"] == "pausing":
                     raise ValueError("请等待暂停完成")
@@ -501,6 +523,74 @@ class Research:
             )
             self.event(db, s, action, {"rounds": rounds})
         return self.snapshot(experiment)
+
+    def arrange_stop(self, s, options):
+        """记录停止安排；默认先跑完大乱斗，除非显式不要。"""
+        scope = options.get("scope", "round")
+        if scope not in ("round", "iteration", "now"):
+            raise ValueError("停止范围必须是本轮、本次迭代或立即结束")
+        competition = bool(options.get("competition", True))
+        self.restore_targets(s)
+        cycle = self.current_cycle(s)
+        plan = {"scope": scope, "competition": competition}
+        if scope == "iteration" and s["phase"] == "researching" and cycle:
+            # 本轮迭代只收当前这一拍：在跑的收尾，没在跑的立即收工。
+            plan["targets"] = deepcopy(cycle["targets"])
+            for bid in list(cycle["targets"]):
+                branch = s["branches"][bid]
+                iteration = s["iterations"].get(branch.get("iteration"))
+                inflight = bool(iteration) and iteration["status"] != "completed"
+                cycle["targets"][bid] = branch["completed"] + (1 if inflight else 0)
+        s["stop_plan"] = plan
+        s.pop("pause_after_round", None)
+
+    @staticmethod
+    def current_cycle(s):
+        cycles = s["cycles"]
+        if cycles and cycles[-1]["experiment"] == s["id"]:
+            return cycles[-1]
+        return None
+
+    def restore_targets(self, s):
+        """撤销「本次迭代后停」留下的目标收缩，安排可以随时改主意。"""
+        plan = s.get("stop_plan") or {}
+        saved = plan.get("targets")
+        cycle = self.current_cycle(s)
+        if saved and cycle is not None:
+            cycle["targets"] = deepcopy(saved)
+
+    def discard_iterations(self, s, db):
+        """结束当前迭代并删除未完成的迭代记录，让分支回到就绪状态。"""
+        cycle = (
+            s["cycles"][-1]
+            if s["cycles"] and s["cycles"][-1]["experiment"] == s["id"]
+            else None
+        )
+        if cycle is None:
+            return []
+        discarded = []
+        for bid in list(cycle["targets"]):
+            branch = s["branches"][bid]
+            cycle["targets"][bid] = branch["completed"]
+            iteration = s["iterations"].get(branch.get("iteration"))
+            if iteration is None or iteration["status"] == "completed":
+                continue
+            for job in s["jobs"].values():
+                if job.get("iteration") == iteration["id"] and job["status"] != (
+                    "completed"
+                ):
+                    job.update(status="completed", cancelled=True)
+            for cid in iteration["candidates"]:
+                s["candidates"].pop(cid, None)
+            for cid, candidate in list(s["candidates"].items()):
+                if candidate.get("iteration") == iteration["id"]:
+                    s["candidates"].pop(cid, None)
+            s["iterations"].pop(iteration["id"], None)
+            branch.update(status="ready", iteration=None)
+            discarded.append(iteration["id"])
+        if discarded:
+            self.event(db, s, "iterations_discarded", {"iterations": discarded})
+        return discarded
 
     def configure(self, experiment, patch):
         with self.edit(experiment) as (s, db):
@@ -672,6 +762,7 @@ class Research:
                 requirements=list(previous["requirements"]),
                 runtime_path=s["runtime_path"],
                 experiment=s["id"],
+                iteration=b.get("iteration"),
             )
         return {"candidate_id": cid, "status": "draft", "existing": False}
 
@@ -1090,6 +1181,15 @@ class Research:
             if all(
                 s["branches"][bid]["status"] == "waiting" for bid in cycle["targets"]
             ):
+                plan = s.get("stop_plan") or {}
+                if plan and not plan.get("competition", True):
+                    s.update(
+                        status="paused",
+                        pause_reason="迭代阶段结束，按安排暂停（未跑大乱斗）",
+                        stop_plan=None,
+                    )
+                    s["experiments"][-1]["status"] = "paused"
+                    return
                 cycle["status"] = "competing"
                 s["phase"] = "competing"
                 cycle["roster"] = {
@@ -1178,13 +1278,14 @@ class Research:
             self.event(
                 db, s, "round_completed", {"round": cycle["number"], "ranking": table}
             )
-            # 轮末暂停：本轮结果落盘后再停，不在下一轮调度任何任务。
-            if s.get("pause_after_round"):
-                s.update(
-                    status="paused",
-                    pause_reason="本轮结束后暂停",
-                    pause_after_round=False,
-                )
+            # 停止安排：本轮结果落盘后再停，不在下一轮调度任何任务。
+            plan = s.get("stop_plan") or {}
+            if plan:
+                reason = {
+                    "iteration": "本次迭代结束后暂停",
+                    "now": "已结束当前迭代并暂停",
+                }.get(plan.get("scope"), "本轮结束后暂停")
+                s.update(status="paused", pause_reason=reason, stop_plan=None)
                 s["experiments"][-1]["status"] = "paused"
                 return
             self.begin_cycle(s, db)
@@ -1665,7 +1766,7 @@ class Research:
                     "status": s["status"],
                     "phase": s["phase"],
                     "pause_reason": s["pause_reason"],
-                    "pause_after_round": s.get("pause_after_round", False),
+                    "stop_plan": s.get("stop_plan"),
                 }
             )
             if current

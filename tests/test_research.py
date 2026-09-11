@@ -866,7 +866,7 @@ def test_selective_iterations_all_eligible_compete_and_top_k_automatically_refre
     assert len(s["last_ranking"]) == 2
 
 
-def test_pause_after_round_stops_at_the_boundary(research):
+def test_stop_plan_round_pauses_at_the_boundary(research):
     r, experiment, controller = research
     ids = list(r.read(experiment)["branches"])
     with r.edit(experiment) as (s, db):
@@ -878,11 +878,14 @@ def test_pause_after_round_stops_at_the_boundary(research):
     config = small_config() | {"total_rounds": 2, "opponent_limit": 1}
     experiment = r.create(config, targets=[ids[0]], opponents=[ids[1] + "--initial"])
     r.control(experiment, "resume")
-    r.control(experiment, "pause_after_round")
-    assert r.read(experiment)["pause_after_round"] is True
-    r.control(experiment, "pause_after_round")
-    assert r.read(experiment)["pause_after_round"] is False
-    r.control(experiment, "pause_after_round")
+    r.control(experiment, "pause_after", options={"scope": "round"})
+    assert r.read(experiment)["stop_plan"] == {
+        "scope": "round",
+        "competition": True,
+    }
+    r.control(experiment, "clear_stop")
+    assert r.read(experiment)["stop_plan"] is None
+    r.control(experiment, "pause_after", options={"scope": "round"})
     with r.edit(experiment) as (s, db):
         r.advance(s, db)
         assert s["cycles"][-1]["number"] == 1
@@ -891,10 +894,10 @@ def test_pause_after_round_stops_at_the_boundary(research):
     s = r.read(experiment)
     assert s["status"] == "paused" and s["phase"] == "boundary"
     assert s["pause_reason"] == "本轮结束后暂停"
-    assert s["pause_after_round"] is False
+    assert s["stop_plan"] is None
     assert s["experiments"][-1]["completed_rounds"] == 1
     assert [c["number"] for c in s["cycles"] if c["experiment"] == experiment] == [1]
-    assert r.snapshot(experiment)["experiment"]["pause_after_round"] is False
+    assert r.snapshot(experiment)["experiment"]["stop_plan"] is None
     # 继续后才开始下一轮，并且不会再次自动暂停。
     r.control(experiment, "resume")
     with r.edit(experiment) as (s, db):
@@ -904,14 +907,87 @@ def test_pause_after_round_stops_at_the_boundary(research):
     assert s["cycles"][-1]["number"] == 2
 
 
-def test_pause_keeps_round_boundary_arrangement(research):
+def test_pause_keeps_stop_plan(research):
     r, experiment, _ = research
     with r.edit(experiment) as (s, db):
-        s["pause_after_round"] = True
+        s["stop_plan"] = {"scope": "round", "competition": True}
     r.control(experiment, "pause")
     state = r.read(experiment)
     assert state["status"] == "pausing"
-    assert state["pause_after_round"] is True
+    assert state["stop_plan"] == {"scope": "round", "competition": True}
+
+
+def test_stop_after_iteration_shortens_cycle_and_pause_without_competition(research):
+    r, experiment, controller = research
+    ids = list(r.read(experiment)["branches"])
+    r.control(experiment, "pause")
+    controller.tick()
+    r.control(experiment, "close")
+    config = small_config() | {"total_rounds": 3, "iterations_per_round": 3}
+    experiment = r.create(config, targets=ids)
+    r.control(experiment, "resume")
+    with r.edit(experiment) as (s, db):
+        r.advance(s, db)
+        cycle = s["cycles"][-1]
+        assert set(cycle["targets"].values()) == {3}
+        r.start_iteration(s, ids[0])
+    r.control(experiment, "pause_after", options={"scope": "iteration"})
+    state = r.read(experiment)
+    plan = state["stop_plan"]
+    assert plan["scope"] == "iteration" and plan["competition"] is True
+    assert set(plan["targets"].values()) == {3}
+    with r.edit(experiment) as (s, db):
+        cycle = s["cycles"][-1]
+        assert cycle["targets"][ids[0]] == 1  # 在跑的那一拍收尾
+        assert cycle["targets"][ids[1]] == 0  # 没在跑的立即收工
+    # 取消安排要把目标还原，否则「本轮跑满」的打算会被静默改掉。
+    r.control(experiment, "clear_stop")
+    state = r.read(experiment)
+    assert state["stop_plan"] is None
+    with r.edit(experiment) as (s, db):
+        assert set(s["cycles"][-1]["targets"].values()) == {3}
+    r.control(experiment, "pause_after", options={"scope": "iteration"})
+    with r.edit(experiment) as (s, db):
+        cycle = s["cycles"][-1]
+        assert cycle["targets"][ids[0]] == 1
+        for bid in cycle["targets"]:
+            s["branches"][bid]["status"] = "waiting"
+        s["stop_plan"] = {"scope": "iteration", "competition": False}
+        r.advance(s, db)
+        assert s["status"] == "paused"
+        assert s["pause_reason"] == "迭代阶段结束，按安排暂停（未跑大乱斗）"
+        assert s["phase"] == "researching"
+        assert s["stop_plan"] is None
+    r.control(experiment, "resume")
+    with r.edit(experiment) as (s, db):
+        r.advance(s, db)
+        assert s["phase"] == "competing"
+
+
+def test_stop_now_discards_unfinished_iteration(research):
+    r, experiment, controller = research
+    ids = list(r.read(experiment)["branches"])
+    with r.edit(experiment) as (s, db):
+        agent = r.start_iteration(s, ids[0])
+        iteration = s["iterations"][agent["iteration"]]
+    r.declare_plan(experiment, ids[0], "stop now", "discard", "test")
+    candidate = r.fork(experiment, ids[0], "doomed", "discard")["candidate_id"]
+    r.control(experiment, "stop_now")
+    state = r.read(experiment)
+    assert state["stop_plan"] == {"scope": "now", "competition": True}
+    assert iteration["id"] not in state["iterations"]
+    assert candidate not in state["candidates"]
+    assert state["branches"][ids[0]]["iteration"] is None
+    assert state["branches"][ids[0]]["status"] == "ready"
+    assert state["jobs"][agent["id"]]["cancelled"] is True
+    assert state["cycles"][-1]["targets"][ids[0]] == 0
+    with r.edit(experiment) as (s, db):
+        r.advance(s, db)
+        assert s["phase"] == "competing"
+    assert any(
+        event["kind"] == "iterations_discarded"
+        for event in r.snapshot(experiment)["events"]
+    )
 
 
 def test_new_experiment_preserves_branch_history_and_rejects_old_sessions(research):

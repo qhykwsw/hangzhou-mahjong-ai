@@ -197,6 +197,13 @@ const progressStates = {
   waiting: "等待准备", queued: "排队", admitted: "即将开始", running: "进行中",
   completed: "完成", paused: "已暂停", cancelled: "已取消", failed: "失败",
 };
+function stopPlanLabel(plan) {
+  if (!plan) return "停止安排…";
+  const text =
+    { round: "本轮后停", iteration: "迭代后停", now: "已结束当前迭代" }[plan.scope] ||
+    "停止安排";
+  return `${text}${plan.competition ? "" : "（不跟大乱斗）"} ✓`;
+}
 function progressRow(label, value, completed = null, total = null, note = "") {
   const bar = completed != null && total > 0
     ? `<progress aria-label="${esc(label)}" value="${completed}" max="${total}"></progress>` : "";
@@ -468,10 +475,8 @@ function render() {
     experiment?.phase === "competing",
   );
   $("pause").disabled = experiment?.status !== "running";
-  $("pauseAfterRound").disabled = experiment?.status !== "running";
-  $("pauseAfterRound").textContent = experiment?.pause_after_round
-    ? "本轮后暂停 ✓"
-    : "本轮后暂停";
+  $("stopPlan").disabled = experiment?.status !== "running";
+  $("stopPlan").textContent = stopPlanLabel(experiment?.stop_plan);
   $("resume").disabled =
     !experiment ||
     experiment.status !== "paused" ||
@@ -567,7 +572,6 @@ $("experimentForm").onsubmit = async (event) => {
 };
 for (const [id, action] of [
   ["pause", "pause"],
-  ["pauseAfterRound", "pause_after_round"],
   ["resume", "resume"],
   ["extend", "extend"],
   ["closeExperiment", "close"],
@@ -591,6 +595,47 @@ for (const [id, action] of [
       notice(e.message);
     }
   };
+$("stopPlan").onclick = () => {
+  const plan = state.experiment?.stop_plan;
+  const scope = plan?.scope === "now" ? "round" : plan?.scope || "round";
+  document.querySelector(
+    `input[name="stopScope"][value="${scope}"]`,
+  ).checked = true;
+  $("stopCompetition").checked = plan ? Boolean(plan.competition) : true;
+  $("stopDialog").showModal();
+};
+$("closeStop").onclick = () => $("stopDialog").close();
+$("stopForm").onsubmit = async (event) => {
+  event.preventDefault();
+  try {
+    const scope =
+      document.querySelector('input[name="stopScope"]:checked')?.value || "round";
+    const competition = $("stopCompetition").checked;
+    state = await api("/api/control", {
+      experiment: state.experiment.id,
+      action: scope === "now" ? "stop_now" : "pause_after",
+      options: scope === "now" ? { competition } : { scope, competition },
+    });
+    $("stopDialog").close();
+    notice(scope === "now" ? "已结束当前迭代，未完成的迭代记录已删除" : "");
+    render();
+  } catch (e) {
+    notice(e.message);
+  }
+};
+$("clearStop").onclick = async () => {
+  try {
+    state = await api("/api/control", {
+      experiment: state.experiment.id,
+      action: "clear_stop",
+    });
+    $("stopDialog").close();
+    notice("");
+    render();
+  } catch (e) {
+    notice(e.message);
+  }
+};
 $("resources").onclick = () => {
   $("resourceFields").innerHTML = concurrency
     .map(

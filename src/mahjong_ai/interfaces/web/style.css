@@ -265,6 +265,16 @@ pre {
 .fields small {
   color: var(--muted);
 }
+.stop-options {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0;
+}
+.stop-options label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
 .combo {
   display: grid;
   grid-template-columns: 1fr repeat(3, 80px);

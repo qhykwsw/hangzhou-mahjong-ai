@@ -347,7 +347,16 @@ class Controller:
                                         if (root / cid / "artifact.json").exists()
                                     }
                                 atomic_json(root / "result.json", result)
-                    if j["status"] == "running" and s["status"] != "running":
+                    # 作业已离开运行态（被取消/暂停）或整台实验不再运行时，
+                    # 都要真正收掉还在跑的进程，否则迭代删了进程还在算。
+                    if (
+                        process is not None
+                        and process.poll() is None
+                        and (
+                            j["status"] not in ("running", "admitted")
+                            or s["status"] != "running"
+                        )
+                    ):
                         self.stop(
                             s,
                             j,

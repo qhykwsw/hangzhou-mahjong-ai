@@ -126,6 +126,7 @@ def application(project, tailscale_url=None):
                     value["experiment"],
                     value["action"],
                     value.get("rounds", 0),
+                    value.get("options") or {},
                 )
             return JSONResponse(result)
         except (ValueError, KeyError, TypeError) as exc:

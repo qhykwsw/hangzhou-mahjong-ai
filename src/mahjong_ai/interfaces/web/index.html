@@ -17,7 +17,7 @@
       </div>
       <div class="toolbar">
         <button id="pause">暂停</button><button id="resume">继续</button
-        ><button id="pauseAfterRound">本轮后暂停</button
+        ><button id="stopPlan">停止安排…</button
         ><button id="extend">追加轮数</button
         ><button id="closeExperiment">结束本次实验</button>
       </div>
@@ -199,6 +199,37 @@
           <div class="dialogfoot">
             <button type="button" id="closeResources">取消</button
             ><button class="primary">保存并发</button>
+          </div>
+        </form>
+      </dialog>
+      <dialog id="stopDialog">
+        <form id="stopForm">
+          <h2>停止安排</h2>
+          <p class="muted">
+            默认先跑完大乱斗再停；取消勾选则停在迭代阶段末尾，继续时再补大乱斗。
+          </p>
+          <div class="stop-options">
+            <label
+              ><input type="radio" name="stopScope" value="round" checked />
+              本轮结束后（跑完本轮迭代与大乱斗）</label
+            >
+            <label
+              ><input type="radio" name="stopScope" value="iteration" />
+              本次迭代结束后（各分支跑完当前这一拍就收工）</label
+            >
+            <label
+              ><input type="radio" name="stopScope" value="now" />
+              立即结束当前迭代（删除未完成的迭代记录，重新继续下一拍）</label
+            >
+            <label
+              ><input type="checkbox" id="stopCompetition" checked />
+              先跑大乱斗</label
+            >
+          </div>
+          <div class="dialogfoot">
+            <button type="button" id="clearStop">取消安排</button
+            ><button type="button" id="closeStop">关闭</button
+            ><button class="primary">确定</button>
           </div>
         </form>
       </dialog>
