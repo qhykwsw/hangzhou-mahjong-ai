@@ -8,6 +8,11 @@ from __future__ import annotations
 from functools import lru_cache
 from dataclasses import dataclass
 
+try:  # Optional C accelerator; the pure-Python reference below stays authoritative.
+    from mahjong_ai import _fast
+except ImportError:  # pragma: no cover - exercised by running without the extension
+    _fast = None
+
 WHITE = 33
 CODES = tuple(f"{n}{s}" for s in "wbt" for n in range(1, 10)) + tuple("东南西北中发白")
 CODE_TO_TILE = {s: i for i, s in enumerate(CODES)}
@@ -23,7 +28,8 @@ def tile_id(s: str) -> int:
     return CODE_TO_TILE[s]
 
 
-def counts(hand):
+@lru_cache(maxsize=200000)
+def _counts(hand: tuple[int, ...]) -> tuple[int, ...]:
     result = [0] * 34
     for t in hand:
         if not isinstance(t, int) or not 0 <= t < 34:
@@ -32,7 +38,19 @@ def counts(hand):
     return tuple(result)
 
 
-@lru_cache(maxsize=100000)
+def counts(hand):
+    # 手牌在搜索里反复出现：元组直接走缓存，列表仍逐张校验。
+    if type(hand) is tuple:
+        return _counts(hand)
+    result = [0] * 34
+    for t in hand:
+        if not isinstance(t, int) or not 0 <= t < 34:
+            raise ValueError(f"invalid tile: {t}")
+        result[t] += 1
+    return tuple(result)
+
+
+@lru_cache(maxsize=300000)
 def _meldable(c: tuple[int, ...], jokers: int) -> bool:
     try:
         first = next(i for i, n in enumerate(c) if n)
@@ -61,8 +79,20 @@ def _meldable(c: tuple[int, ...], jokers: int) -> bool:
     return False
 
 
-@lru_cache(maxsize=60000)
+@lru_cache(maxsize=200000)
+def _shape_accel(c: tuple[int, ...], open_melds: int) -> bool:
+    return _fast.can_hu(c, open_melds)
+
+
 def _shape(c: tuple[int, ...], open_melds: int) -> bool:
+    """Reference winning-shape test; the accelerator mirrors it exactly."""
+    if _fast is not None:
+        return _shape_accel(c, open_melds)
+    return _shape_reference(c, open_melds)
+
+
+@lru_cache(maxsize=200000)
+def _shape_reference(c: tuple[int, ...], open_melds: int) -> bool:
     if not 0 <= open_melds <= 4 or sum(c) != 14 - 3 * open_melds:
         return False
     j = c[WHITE]
@@ -86,7 +116,7 @@ def can_hu(hand, open_melds=0) -> bool:
     return _shape(counts(hand), open_melds)
 
 
-@lru_cache(maxsize=50000)
+@lru_cache(maxsize=100000)
 def _baotou(c: tuple[int, ...], open_melds: int) -> bool:
     if sum(c) != 13 - 3 * open_melds or c[WHITE] == 0:
         return False
@@ -163,7 +193,7 @@ def payments(winner: int, dealer: int, fan: int, base=1) -> tuple[int, ...]:
     return tuple(scores)
 
 
-@lru_cache(maxsize=50000)
+@lru_cache(maxsize=200000)
 def hand_potential(hand: tuple[int, ...], open_melds=0) -> float:
     """Cheap public-information heuristic, NOT a hu/shanten oracle."""
     c = counts(hand)

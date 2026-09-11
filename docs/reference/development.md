@@ -28,9 +28,15 @@
 
 ```bash
 .venv/bin/python -m pytest -q
+.venv/bin/python setup.py build_ext --inplace   # 可选：构建牌形 C 加速器
 ruff check src tests scripts --select F401,F821,F822,F823
 ruff format --check src tests scripts
 ```
+
+`src/mahjong_ai/_fast.c` 是可选的牌形加速器：`sdk/shape.py` 的向听/进张与
+`domain/rules.py` 的胡牌形状在它存在时走 C，负数（和牌边界）结果仍由 Python 参考实现裁决；
+没有构建扩展时自动回退到同一套 Python 实现。`tests/test_shape_fast.py` 用参考实现核对两者一致，
+修改任一侧都要重跑该测试。冻结运行时按整棵包树复制，指纹覆盖同一集合。
 
 引擎与平台事实优先核对 `tests/fixtures/official-v25-*` 官方快照与牌谱。抓打圈的豁免、吃碰后续飘与断链有合成契约回归，四白板使用 `docs/sources/fan-calc-four-whites.json` 原始响应。合成用例不能证明完整线上阶段等价。
 

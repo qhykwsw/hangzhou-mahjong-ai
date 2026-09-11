@@ -4,8 +4,13 @@ from functools import lru_cache
 from collections import Counter
 from mahjong_ai.domain.rules import WHITE, counts, can_hu, calculate_fan
 
+try:  # Optional C accelerator; the pure-Python reference below stays authoritative.
+    from mahjong_ai import _fast
+except ImportError:  # pragma: no cover - exercised by running without the extension
+    _fast = None
 
-@lru_cache(maxsize=100000)
+
+@lru_cache(maxsize=300000)
 def _normal(c, melds, pairs, partial):
     try:
         i = next(i for i, n in enumerate(c) if n)
@@ -41,7 +46,7 @@ def _normal(c, melds, pairs, partial):
     return best
 
 
-@lru_cache(maxsize=30000)
+@lru_cache(maxsize=200000)
 def shanten(hand, open_melds=0):
     """-1 is a complete structural hand; 0 is one draw from completion.
 
@@ -54,8 +59,19 @@ def shanten(hand, open_melds=0):
         14 - 3 * open_melds,
     ):
         raise ValueError("shanten expects a draw or discard hand")
-    if any(n > 4 for n in c):
+    if max(c) > 4:
         raise ValueError("more than four copies")
+    if _fast is not None:
+        value = _fast.shanten_raw(c, open_melds)
+        # Every winning boundary defers to the reference implementation, so the
+        # accelerator only has to agree on non-negative distances.
+        if value >= 0:
+            return value
+    return _shanten_reference(hand, open_melds)
+
+
+def _shanten_reference(hand, open_melds):
+    c = counts(hand)
     j = c[WHITE]
     natural = c[:WHITE] + (0,)
     normal = _normal(natural, open_melds, 0, 0) - j
@@ -70,6 +86,23 @@ def shanten(hand, open_melds=0):
     return max(-1, normal)
 
 
+def _improving_reference(hand, open_melds, available, distance):
+    """Reference scan of every legal draw; used without the accelerator and at
+    winning boundaries where the guarded distance can move."""
+    hand_counts = counts(hand)
+    improving, candidates = [], []
+    for tile in range(34):
+        if available[tile] <= 0 or hand_counts[tile] >= 4:
+            continue
+        drawn = tuple(sorted((*hand, tile)))
+        drawn_distance = shanten(drawn, open_melds)
+        if drawn_distance < distance:
+            improving.append(tile)
+        if drawn_distance == -1:
+            candidates.append(tile)
+    return improving, candidates
+
+
 def remaining_tiles(obs):
     visible = Counter(obs.hand)
     for row in obs.discards:
@@ -82,20 +115,43 @@ def remaining_tiles(obs):
 
 def analyze(hand, open_melds=0, remaining=None, chain=0, piao=0, you_cai_bi_kao=False):
     hand = tuple(sorted(hand))
+    hand_counts = counts(hand)
     distance = shanten(hand, open_melds)
     available = (
-        remaining if remaining is not None else tuple(4 - n for n in counts(hand))
+        remaining if remaining is not None else tuple(4 - n for n in hand_counts)
     )
     improving = []
     wins = []
     fans = {}
     if len(hand) == 13 - 3 * open_melds:
-        for tile in range(34):
-            if available[tile] <= 0 or hand.count(tile) >= 4:
-                continue
+        candidates = None
+        if _fast is not None:
+            raw, fast_improving, negatives = _fast.improving(
+                hand_counts, open_melds, available
+            )
+            if raw >= 0:
+                distance = raw
+                improving = list(fast_improving)
+                # 只有能和的牌才需要算番：shanten == -1 与 can_hu 等价（含白板补位），
+                # 逐张算番会把 can_hu 的递归分解放大成 34 倍的主要开销。
+                candidates = [
+                    tile
+                    for tile in negatives
+                    if can_hu(tuple(sorted((*hand, tile))), open_melds)
+                ]
+                if distance == 0:
+                    # 未通过胡牌边界的摸牌，其受保护的距离是 0 而不是负数，
+                    # 听牌手上这些摸牌不是进张。
+                    boundary = set(negatives) - set(candidates)
+                    improving = [
+                        tile for tile in improving if tile not in boundary
+                    ]
+        if candidates is None:
+            improving, candidates = _improving_reference(
+                hand, open_melds, available, distance
+            )
+        for tile in candidates:
             drawn = tuple(sorted((*hand, tile)))
-            if shanten(drawn, open_melds) < distance:
-                improving.append(tile)
             fan = calculate_fan(drawn, tile, open_melds, chain, piao, you_cai_bi_kao)
             if fan:
                 wins.append(tile)

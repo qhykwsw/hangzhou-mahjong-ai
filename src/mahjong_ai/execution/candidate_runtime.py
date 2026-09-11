@@ -12,7 +12,7 @@ import sys
 import tempfile
 import time
 import threading
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from pathlib import Path
 
 from mahjong_ai.persistence.artifacts import atomic_json, digest, file_hash, read_json
@@ -53,6 +53,75 @@ def check_cancelled():
     cancel = os.environ.get("MAHJONG_JOB_CANCEL")
     if cancel and Path(cancel).exists():
         raise JobCancelled("任务已取消")
+
+
+_MEMORY_LOCK = threading.Lock()
+_MEMORY_WATCHED = {}
+_MEMORY_THREAD = None
+_MEMORY_INTERVAL = 0.5
+
+
+def _watch_memory(owner, limit_kb):
+    """Register a candidate process with the single shared memory watcher.
+
+    One poller for the whole job replaces one `ps` fork per process per 200ms:
+    at twelve concurrent matches that fork storm dominated host CPU. The
+    watcher still kills a runaway candidate at the same RSS limit.
+    """
+    global _MEMORY_THREAD
+    with _MEMORY_LOCK:
+        _MEMORY_WATCHED[owner.process.pid] = (owner, limit_kb)
+        if _MEMORY_THREAD is None or not _MEMORY_THREAD.is_alive():
+            _MEMORY_THREAD = threading.Thread(target=_memory_watch_loop, daemon=True)
+            _MEMORY_THREAD.start()
+
+
+def _unwatch_memory(pid):
+    with _MEMORY_LOCK:
+        _MEMORY_WATCHED.pop(pid, None)
+
+
+def _memory_watch_loop():
+    while True:
+        with _MEMORY_LOCK:
+            targets = {
+                pid: entry
+                for pid, entry in list(_MEMORY_WATCHED.items())
+                if entry[0].process is not None and entry[0].process.poll() is None
+            }
+            _MEMORY_WATCHED.clear()
+            _MEMORY_WATCHED.update(targets)
+            if not targets:
+                return
+        rows = subprocess.run(
+            [
+                "/bin/ps",
+                "-o",
+                "pid=,rss=",
+                "-p",
+                ",".join(str(pid) for pid in sorted(targets)),
+            ],
+            capture_output=True,
+            text=True,
+        ).stdout.split("\n")
+        usage = {}
+        for row in rows:
+            fields = row.split()
+            if len(fields) == 2 and fields[0].isdigit() and fields[1].isdigit():
+                usage[int(fields[0])] = int(fields[1])
+        for pid, (owner, limit) in targets.items():
+            rss = usage.get(pid)
+            if rss is None:
+                continue
+            if rss > owner.peak_rss_kb:
+                owner.peak_rss_kb = rss
+            if rss > limit:
+                owner.memory_exceeded = True
+                try:
+                    owner.process.kill()
+                except (OSError, ProcessLookupError):
+                    pass
+        time.sleep(_MEMORY_INTERVAL)
 
 
 def tree_hash(root):
@@ -185,28 +254,7 @@ class CandidateProcess:
         limit = int(os.environ.get("MAHJONG_MEMORY_MB", "4096")) * 1024
         self.peak_rss_kb = 0
         self.memory_exceeded = False
-
-        def monitor_memory():
-            process = self.process
-            while process is not None and process.poll() is None:
-                row = subprocess.run(
-                    ["/bin/ps", "-p", str(process.pid), "-o", "rss="],
-                    capture_output=True,
-                    text=True,
-                ).stdout.strip()
-                if row.isdigit():
-                    self.peak_rss_kb = max(self.peak_rss_kb, int(row))
-                    if int(row) > limit:
-                        self.memory_exceeded = True
-                        try:
-                            process.kill()
-                        except ProcessLookupError:
-                            pass
-                        break
-                time.sleep(0.2)
-
-        self.memory_thread = threading.Thread(target=monitor_memory, daemon=True)
-        self.memory_thread.start()
+        _watch_memory(self, limit)
 
     def send(self, data):
         self.process.stdin.write((json.dumps(data, allow_nan=False) + "\n").encode())
@@ -244,6 +292,7 @@ class CandidateProcess:
 
     def close(self):
         if getattr(self, "process", None):
+            _unwatch_memory(self.process.pid)
             if self.process.poll() is None:
                 try:
                     os.killpg(self.process.pid, signal.SIGKILL)
@@ -251,7 +300,6 @@ class CandidateProcess:
                     pass
             self.process.wait()
             self.stderr_thread.join(timeout=1)
-            self.memory_thread.join(timeout=1)
             for pipe in (self.process.stdin, self.process.stdout, self.process.stderr):
                 pipe.close()
             self.selector.close()
@@ -291,6 +339,7 @@ class RemotePolicy:
         self.response_seconds = response_seconds
         self.runtime = runtime
         self.pending_act = False
+        self.sent_events = None
         self.stats = {"actions": 0, "timeouts": 0, "errors": 0, "elapsed_seconds": 0.0}
         self.stats.update(compute_seconds=0.0, ipc_seconds=0.0, fallback_actions=0)
         self.last_error = None
@@ -299,6 +348,7 @@ class RemotePolicy:
     def _start(self):
         self.worker = CandidateProcess(self.package, self.python, runtime=self.runtime)
         self.worker.call({"op": "build"})
+        self.sent_events = None
 
     def reset(self, seed):
         try:
@@ -307,6 +357,7 @@ class RemotePolicy:
             if self.worker is None:
                 self._start()
             self.worker.call({"op": "reset", "seed": seed})
+            self.sent_events = None
         except JobCancelled:
             self.close()
             raise
@@ -333,7 +384,7 @@ class RemotePolicy:
                 self.pending_act = False
             if time.monotonic() >= end:
                 raise TimeoutError("上一个动作仍占用决策窗口")
-            request = {"op": "act", "observation": asdict(observation)}
+            request = {"op": "act", "observation": self._payload(observation)}
             self.worker.send(request)
             self.pending_act = True
             reply = self.worker.receive(max(0.001, end - time.monotonic()))
@@ -373,6 +424,40 @@ class RemotePolicy:
                 del self.latencies[:2048]
         self.stats["fallback_actions"] += 1
         raise ActionUnavailable("候选未在时限内给出合法动作")
+
+    def _payload(self, observation):
+        """Full observation, with public events sent as an append-only delta.
+
+        The event log only grows inside one game and the worker rebuilds it once,
+        so a round trip carries the newly published events instead of the whole
+        history (26KB per action on average in the fast pools).
+        """
+        events = observation.public_events
+        data = {}
+        for field in fields(observation):
+            if field.name == "public_events":
+                continue
+            value = getattr(observation, field.name)
+            if field.name == "legal_actions":
+                data[field.name] = [asdict(action) for action in value]
+            elif field.name == "melds":
+                data[field.name] = [[asdict(meld) for meld in row] for row in value]
+            elif field.name == "stage":
+                data[field.name] = asdict(value)
+            else:
+                data[field.name] = value
+        previous = self.sent_events
+        if (
+            previous is not None
+            and len(events) > len(previous)
+            and events[: len(previous)] == previous
+        ):
+            data["events_from"] = len(previous)
+            data["events"] = [asdict(event) for event in events[len(previous) :]]
+        else:
+            data["public_events"] = [asdict(event) for event in events]
+        self.sent_events = events
+        return data
 
     def finish_round(self, result, seat):
         if self.worker:

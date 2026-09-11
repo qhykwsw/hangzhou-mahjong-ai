@@ -19,13 +19,16 @@ from mahjong_ai.domain.types import (
 )
 
 
-def observation(data):
+def observation(data, events=None):
     d = dict(data)
     d["stage"] = StageContext(**d["stage"])
     d["legal_actions"] = tuple(
         Action(**(a | {"tiles": tuple(a.get("tiles", []))})) for a in d["legal_actions"]
     )
-    d["public_events"] = tuple(PublicEvent(**e) for e in d["public_events"])
+    if events is None:
+        d["public_events"] = tuple(PublicEvent(**e) for e in d["public_events"])
+    else:
+        d["public_events"] = events
     d["melds"] = tuple(tuple(Meld(**m) for m in row) for row in d["melds"])
     for key in ("hand", "hand_sizes"):
         d[key] = tuple(d[key])
@@ -58,10 +61,26 @@ def main():
             raise EOFError()
         return json.loads(line)
 
+    # 公开事件在一局内只追加：宿主只发增量，worker 缓存已重建的对象。
+    # 这条路径占了快策略近四成时间（全量事件平均 26KB/动作）。
+    state = {"events": [], "objects": []}
+
     def dispatch(policy, request):
         op = request["op"]
         if op == "act":
-            obs = observation(request["observation"])
+            data = dict(request["observation"])
+            if "events_from" in data:
+                base = data.pop("events_from")
+                fresh = data.pop("events")
+                if base != len(state["events"]):
+                    raise ValueError("公开事件增量与缓存不匹配")
+                state["events"].extend(fresh)
+                state["objects"].extend(PublicEvent(**e) for e in fresh)
+            else:
+                events = data.pop("public_events")
+                state["events"] = list(events)
+                state["objects"] = [PublicEvent(**e) for e in events]
+            obs = observation(data, tuple(state["objects"]))
             started = time.perf_counter()
             action = policy.act(obs)
             elapsed = time.perf_counter() - started
@@ -70,6 +89,8 @@ def main():
                 "compute_seconds": elapsed,
             }
         if op == "reset":
+            state["events"] = []
+            state["objects"] = []
             policy.reset(request["seed"])
         elif op == "finish":
             policy.finish_round(RoundResult(**request["result"]), request["seat"])

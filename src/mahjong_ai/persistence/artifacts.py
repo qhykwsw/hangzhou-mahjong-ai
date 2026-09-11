@@ -68,10 +68,13 @@ def environment_info():
 
 
 def runtime_fingerprint():
+    # 冻结运行时按整棵树复制（只跳过 __pycache__），指纹必须覆盖同一集合：
+    # 只认 *.py 会让重建的 C 加速器复用到旧目录。
     source = {
         str(p.relative_to(Path(__file__).parents[1])): hashlib.sha256(
             p.read_bytes()
         ).hexdigest()
-        for p in sorted(Path(__file__).parents[1].rglob("*.py"))
+        for p in sorted(Path(__file__).parents[1].rglob("*"))
+        if p.is_file() and "__pycache__" not in p.parts
     }
     return digest({"source": source, "environment": environment_info()})

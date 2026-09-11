@@ -9,6 +9,7 @@ import signal
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from mahjong_ai.execution.candidate_runtime import (
     CandidateProcess,
@@ -39,6 +40,26 @@ def _block_means(values_by_block):
         for _, values in sorted(values_by_block.items())
         if values
     ]
+
+
+def _stats_snapshot(policy):
+    """一次性统计基线：复用进程时回执里只能记本场的增量。"""
+    return {
+        key: value
+        for key, value in getattr(policy, "stats", {}).items()
+        if isinstance(value, (int, float))
+    }
+
+
+def _stats_delta(policy, snapshot):
+    stats = getattr(policy, "stats", {})
+    return {
+        key: round(value - snapshot.get(key, 0), 6)
+        if isinstance(value, float)
+        else value - snapshot.get(key, 0)
+        for key, value in stats.items()
+        if isinstance(value, (int, float))
+    }
 
 
 def frozen_checkpoint(out):
@@ -207,26 +228,47 @@ def play(task, root):
         standings,
     )
 
+    # 同一策略在同一任务里反复上场：进程按“策略 + 场上第几次出现”复用，
+    # 只在任务结束时收掉。每场重新 build 会按场付出 sandbox 启动与解释器
+    # 导入成本（每场约 0.2s×4），对快策略是主要开销。
+    pool = {}
     receipts = []
-    for assignment in task["assignments"]:
-        check_cancelled()
-        path = root / "matches" / f"{assignment['index']:06d}.json"
-        if path.exists():
-            receipts.append(read_json(path))
-            continue
-        players = [
-            PolicySpec(**task["policies"][cid]).build() for cid in assignment["players"]
-        ]
-        engine = MahjongEngine(record_events=False)
-        engine.progress = lambda progress: atomic_json(
-            root / "progress.json",
-            dict(
-                completed_matches=len(receipts),
-                total_matches=len(task["assignments"]),
-                hand=progress,
-            ),
-        )
-        try:
+    engine = MahjongEngine(record_events=False)
+    try:
+        for assignment in task["assignments"]:
+            check_cancelled()
+            path = root / "matches" / f"{assignment['index']:06d}.json"
+            if path.exists():
+                receipts.append(read_json(path))
+                continue
+            keys, occurrences = [], {}
+            for cid in assignment["players"]:
+                slot = occurrences.get(cid, 0)
+                occurrences[cid] = slot + 1
+                keys.append((cid, slot))
+            missing = [key for key in keys if key not in pool]
+            if missing:
+                # 首次上场要付 sandbox 启动与解释器导入成本，四个进程并行建。
+                with ThreadPoolExecutor(max_workers=len(missing)) as executor:
+                    built = list(
+                        executor.map(
+                            lambda key: PolicySpec(
+                                **task["policies"][key[0]]
+                            ).build(),
+                            missing,
+                        )
+                    )
+                pool.update(zip(missing, built))
+            players = [pool[key] for key in keys]
+            engine.progress = lambda progress: atomic_json(
+                root / "progress.json",
+                dict(
+                    completed_matches=len(receipts),
+                    total_matches=len(task["assignments"]),
+                    hand=progress,
+                ),
+            )
+            before = [_stats_snapshot(p) for p in players]
             seed = derive_seed(task["seed"], "wall", assignment["block"])
             seeds = [
                 derive_seed(task["seed"], "policy", assignment["block"], seat)
@@ -247,7 +289,9 @@ def play(task, root):
                 hand_deltas=[
                     list(hand["delta"]) for hand in result.metadata.get("hands", [])
                 ],
-                execution=[dict(p.stats) for p in players],
+                execution=[
+                    _stats_delta(p, snapshot) for p, snapshot in zip(players, before)
+                ],
                 diagnostics=[
                     dict(candidate_id=cid, error=p.last_error)
                     for cid, p in zip(assignment["players"], players)
@@ -256,9 +300,9 @@ def play(task, root):
             )
             atomic_json(path, receipt)
             receipts.append(receipt)
-        finally:
-            for p in players:
-                p.close()
+    finally:
+        with ThreadPoolExecutor(max_workers=max(1, len(pool))) as executor:
+            list(executor.map(lambda policy: policy.close(), pool.values()))
     roster = list(task["policies"])
     summary = standings(roster, receipts)
     result = {"status": "completed", "summary": summary, "matches": len(receipts)}
