@@ -904,6 +904,16 @@ def test_pause_after_round_stops_at_the_boundary(research):
     assert s["cycles"][-1]["number"] == 2
 
 
+def test_pause_keeps_round_boundary_arrangement(research):
+    r, experiment, _ = research
+    with r.edit(experiment) as (s, db):
+        s["pause_after_round"] = True
+    r.control(experiment, "pause")
+    state = r.read(experiment)
+    assert state["status"] == "pausing"
+    assert state["pause_after_round"] is True
+
+
 def test_new_experiment_preserves_branch_history_and_rejects_old_sessions(research):
     r, experiment, controller = research
     branch = next(iter(r.read(experiment)["branches"]))
@@ -1001,14 +1011,31 @@ def test_evaluation_shards_split_rotation_blocks_and_merge_into_one_result(tmp_p
             )
 
         first = matches[0]
+        sibling = next(
+            j
+            for j in matches
+            if j["candidate"] == first["candidate"] and j["id"] != first["id"]
+        )
+        sibling["status"] = "running"
         r.accept(
             s,
             db,
             first,
             {"status": "completed", "summary": [], "focal": focal(first, 1.0)},
         )
-        partial = s["iterations"][it["id"]]["results"][first["candidate"]]
-        assert partial["appearances"] == 4 and partial["evaluation_groups"] == 1
+        # 分片没到齐就不发布读数：卡片保持「进行中」，不显示半程均分。
+        assert s["iterations"][it["id"]]["results"] == {}
+        assert "last_result" not in s["candidates"][first["candidate"]]
+        folder = Path(s["root"]) / "jobs" / first["id"] / "matches"
+        folder.mkdir(parents=True)
+        for index in range(4):
+            (folder / f"{index:06d}.json").write_text("{}")
+        from mahjong_ai.research.progress import branch_progress
+
+        partial = branch_progress(s)[branch]["evaluation"][0]
+        assert partial["status"] == "running"
+        assert partial["mean_utility"] is None
+        assert partial["completed_games"] == 4
         for job in matches:
             if job["id"] == first["id"]:
                 continue

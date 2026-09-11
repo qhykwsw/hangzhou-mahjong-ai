@@ -133,7 +133,26 @@ def branch_progress(state):
                 for j in owned_jobs
                 if j["kind"] == "match" and j.get("candidate") == cid
             ]
-            result = iteration["results"].get(cid)
+            # 只有全部分片完成才算这个候选的评估结果；进行中的半程均值既不
+            # 属于选优口径，也不应该在卡片上显示成「完成 · 均分」。
+            settled = bool(shards) and all(
+                job["status"] == "completed" for job in shards
+            )
+            result = iteration["results"].get(cid) if settled else None
+            if result:
+                status = "completed"
+            elif any(job.get("cancelled") for job in shards):
+                status = "cancelled"
+            elif any(job["status"] == "paused" for job in shards):
+                status = "paused"
+            elif any(job["status"] == "running" for job in shards):
+                status = "running"
+            elif any(job["status"] in ("queued", "admitted") for job in shards):
+                status = "queued"
+            elif shards and all(job["status"] == "completed" for job in shards):
+                status = "completed"
+            else:
+                status = shards[-1]["status"] if shards else "waiting"
             completed = 0
             hand = None
             if result:
@@ -153,15 +172,7 @@ def branch_progress(state):
                 dict(
                     role=role,
                     candidate_id=cid,
-                    status="completed"
-                    if result
-                    else "cancelled"
-                    if any(job.get("cancelled") for job in shards)
-                    else "running"
-                    if any(job["status"] == "running" for job in shards)
-                    else shards[0]["status"]
-                    if shards
-                    else "waiting",
+                    status=status,
                     completed_games=completed,
                     total_games=cycle["config"]["evaluation_games"],
                     mean_utility=result["mean_utility"] if result else None,

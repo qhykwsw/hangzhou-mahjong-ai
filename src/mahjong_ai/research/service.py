@@ -419,7 +419,7 @@ class Research:
         s["jobs"][jid] = job
         return job
 
-    def control(self, experiment, action, rounds=0):
+    def control(self, experiment, action, rounds=0, reason=""):
         with self.edit(experiment) as (s, db):
             if not s["id"]:
                 raise ValueError("请先开始实验")
@@ -427,9 +427,8 @@ class Research:
             if action == "pause":
                 s.update(
                     status="pausing" if s["status"] == "running" else "paused",
-                    pause_reason="user paused",
+                    pause_reason=reason or "user paused",
                 )
-                s["pause_after_round"] = False
             elif action == "pause_after_round":
                 if s["phase"] == "closed":
                     raise ValueError("已关闭的实验不能安排轮末暂停")
@@ -1354,14 +1353,12 @@ class Research:
                     if j.get("iteration") == it["id"] and j["kind"] == "match"
                 ]
                 for cid in sorted({j["candidate"] for j in jobs}):
-                    parts = [
-                        j["focal"]
-                        for j in jobs
-                        if j["candidate"] == cid and j.get("focal")
-                    ]
-                    if not parts:
+                    shards = [j for j in jobs if j["candidate"] == cid]
+                    # 分支未到齐前不发布读数：半程均值既不是选优口径，也会让
+                    # 卡片把进行中的评估显示成完成。
+                    if any(j["status"] != "completed" for j in shards):
                         continue
-                    merged = self.merge_focal(parts)
+                    merged = self.merge_focal([j["focal"] for j in shards])
                     it["results"][cid] = merged
                     s["candidates"][cid]["last_result"] = merged
                 if all(j["status"] == "completed" for j in jobs):

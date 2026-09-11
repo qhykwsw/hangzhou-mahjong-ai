@@ -43,7 +43,9 @@ def application(project, tailscale_url=None):
                     traceback.print_exc()
                     for s in arena.states():
                         if s["status"] == "running":
-                            arena.control(s["id"], "pause")
+                            arena.control(
+                                s["id"], "pause", reason="执行循环异常，已自动暂停"
+                            )
                 await asyncio.sleep(0.25)
 
         worker = asyncio.create_task(loop())
