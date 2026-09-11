@@ -289,8 +289,8 @@ def play(task, root):
         field_means = _block_means(groups)
         hand_means = _block_means(hand_groups)
         score_means = _block_means(score_groups)
-        result["focal"].update(group_uncertainty(hand_means or field_means))
-        result["focal"].update(metric_uncertainty(field_means, prefix="field_"))
+        result["focal"].update(group_uncertainty(field_means))
+        result["focal"].update(metric_uncertainty(hand_means, prefix="hand_"))
         result["focal"].update(metric_uncertainty(score_means, prefix="score_"))
         result["focal"]["group_blocks"] = blocks
         result["focal"]["group_means"] = field_means

@@ -145,12 +145,12 @@ def test_paired_evaluation_reports_hand_level_readout(tmp_path):
         {"assignments": assignments, "policies": {"self": {}}, "candidate": "self"},
         tmp_path,
     )["focal"]
-    # 场口径：两个轮换组各 3.0 与 0.0；局口径：每局第 1 或第 4。
+    # 主口径（场）：两个轮换组各 3.0 与 0.0；辅助口径（局）：每局第 1 或第 4。
     assert focal["appearances"] == 8
-    assert focal["mean_utility"] == focal["field_standard_error"] == 1.5
+    assert focal["mean_utility"] == focal["standard_error"] == 1.5
     assert focal["hand_appearances"] == 16
     assert focal["hand_mean_utility"] == 1.5
-    assert focal["standard_error"] == 0.0  # 两组局均分相同，无组间波动
+    assert focal["hand_standard_error"] == 0.0  # 两组局均分相同，无组间波动
     assert focal["hand_mean_score"] == 0.0
     assert focal["score_standard_error"] == 0.0
     assert focal["group_means"] == [3.0, 0.0]
@@ -159,7 +159,7 @@ def test_paired_evaluation_reports_hand_level_readout(tmp_path):
     assert focal["group_blocks"] == [0, 1]
 
 
-def test_competition_ranks_by_hand_metric_when_it_disagrees_with_the_field():
+def test_competition_ranks_by_field_metric_and_keeps_hand_readout():
     def row(cid, utility, hand_utility):
         return dict(
             candidate_id=cid,
@@ -167,7 +167,9 @@ def test_competition_ranks_by_hand_metric_when_it_disagrees_with_the_field():
             utility_sum=utility * 4,
             hand_appearances=32,
             hand_utility_sum=hand_utility * 32,
-            hand_score_sum=hand_utility,  # 未使用，仅保持回执字段完整
+            hand_score_sum=0.0,
+            hand_mean_utility=hand_utility,
+            hand_mean_score=0.0,
             errors=0,
             timeouts=0,
             fallback_actions=0,
@@ -194,13 +196,14 @@ def test_competition_ranks_by_hand_metric_when_it_disagrees_with_the_field():
         }
     }
     table = Research.competition_table(state, cycle)
-    # 场口径下 steady 更高，但逐局口径 variable 更高；排名按主口径（逐局）。
-    assert [r["branch"] for r in table] == ["variable", "steady"]
-    assert table[0]["hand_mean_utility"] == 2.0
-    assert table[0]["mean_utility"] == 1.0
+    # 场口径下 steady 更高；逐局口径只作辅助，不改变排名。
+    assert [r["branch"] for r in table] == ["steady", "variable"]
+    assert table[0]["mean_utility"] == 2.0
+    assert table[0]["hand_mean_utility"] == 1.0
+    assert table[1]["hand_mean_utility"] == 2.0
     assert table[0]["evaluation_groups"] == 2
     assert table[0]["standard_error"] == 0.0
-    assert table[0]["field_standard_error"] == 0.0
+    assert table[0]["hand_standard_error"] == 0.0
 
 
 def test_merge_focal_aligns_blocks_by_id_and_pairs_candidate_with_baseline():
@@ -229,8 +232,18 @@ def test_merge_focal_aligns_blocks_by_id_and_pairs_candidate_with_baseline():
     assert merged["group_blocks"] == [0, 1, 2, 3]
     assert merged["hand_group_means"] == [0.0, 2.0, 1.0, 3.0]
     assert merged["hand_mean_utility"] == merged["mean_utility"] == 1.5
-    baseline = dict(shard([0, 1, 2, 3], [0.0] * 4, [0.0] * 4))
+    baseline = dict(
+        shard([0, 1, 2, 3], [0.0] * 4, [0.0] * 4),
+        field_group_means=[0.0] * 4,
+        hand_group_means=[0.0] * 4,
+    )
     paired = paired_readout(baseline, merged)
     assert paired["blocks"] == 4
     assert paired["delta"] == 1.5
     assert paired["standard_error"] == pytest.approx(math.sqrt(5 / 3) / 2)
+    # 主口径是场：把两套读数调开，配对差跟随场口径而不是逐局口径。
+    lookup = {"field_group_means": [0.0] * 4, "hand_group_means": [3.0] * 4}
+    baseline.update(lookup)
+    merged.update({"field_group_means": [1.0] * 4, "hand_group_means": [3.0] * 4})
+    assert paired_readout(baseline, merged)["delta"] == 1.0
+    assert paired_readout(baseline, merged, metric="hand")["delta"] == 0.0

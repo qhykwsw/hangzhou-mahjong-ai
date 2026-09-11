@@ -129,8 +129,8 @@ def standings(roster, receipts):
     return sorted(
         rows.values(),
         key=lambda r: (
-            -(r["hand_mean_utility"] if r["hand_mean_utility"] is not None else -1),
             -(r["mean_utility"] if r["mean_utility"] is not None else -1),
+            -(r["hand_mean_utility"] if r["hand_mean_utility"] is not None else -1),
             -r["appearances"],
             r["candidate_id"],
         ),

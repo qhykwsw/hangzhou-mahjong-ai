@@ -1135,7 +1135,9 @@ def test_evaluation_shards_split_rotation_blocks_and_merge_into_one_result(tmp_p
         assert s["branches"][branch]["completed"] == 1
 
 
-def test_iteration_selection_uses_the_hand_level_metric(research):
+def test_iteration_selection_follows_the_field_metric_and_reports_hand_pairing(
+    research,
+):
     r, run, _ = research
     with r.edit(run) as (s, db):
         branch = next(b for b in s["branches"].values() if b["status"] != "archived")
@@ -1145,7 +1147,7 @@ def test_iteration_selection_uses_the_hand_level_metric(research):
             s["candidates"][incumbent], candidate_id=candidate, status="evaluated"
         )
         iteration = dict(
-            id="iteration-hand-level",
+            id="iteration-metric-split",
             experiment=s["id"],
             branch=branch["id"],
             cycle=1,
@@ -1160,6 +1162,7 @@ def test_iteration_selection_uses_the_hand_level_metric(research):
                     mean_utility=2.5,
                     hand_mean_utility=1.0,
                     group_blocks=[0, 1, 2, 3],
+                    field_group_means=[2.0, 2.0, 2.0, 4.0],
                     hand_group_means=[1.0, 1.0, 1.0, 1.0],
                 ),
                 candidate: dict(
@@ -1168,20 +1171,24 @@ def test_iteration_selection_uses_the_hand_level_metric(research):
                     mean_utility=1.0,
                     hand_mean_utility=2.0,
                     group_blocks=[0, 1, 2, 3],
+                    field_group_means=[1.0, 1.0, 1.0, 1.0],
                     hand_group_means=[2.0, 2.0, 2.0, 1.0],
                 ),
             },
         )
         s["iterations"][iteration["id"]] = iteration
         r.complete_iteration(s, db, iteration)
-        # 场口径下旧基线更高，逐局口径下新候选更高：选优跟随主口径（逐局）。
-        assert branch["representative"] == candidate
-        assert iteration["improved"] is True
-        # 同一份赛程逐块配对：Δ = (1+1+1+0)/4，标准误按 4 个块估计。
+        # 逐局口径下新候选更高，但选优主口径是场，保留旧基线。
+        assert branch["representative"] == incumbent
+        assert iteration["improved"] is False
+        # 场口径配对差 = (−1−1−1−3)/4；逐局配对差 = (1+1+1+0)/4。
         paired = iteration["results"][candidate]["paired"]
         assert paired["blocks"] == 4
-        assert paired["delta"] == 0.75
-        assert paired["standard_error"] == 0.25
+        assert paired["delta"] == -1.5
+        assert paired["standard_error"] == 0.5
+        hand_paired = iteration["results"][candidate]["hand_paired"]
+        assert hand_paired["delta"] == 0.75
+        assert hand_paired["standard_error"] == 0.25
 
 
 def test_focal_scoring_excludes_same_version_in_opponent_seats(tmp_path):

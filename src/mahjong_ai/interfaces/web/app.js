@@ -236,16 +236,16 @@ function cardProgress(branch) {
   if (!p.preparation.length && p.research !== "not_selected") html += progressRow("训练 / 准备", "等待候选提交");
   for (const [index, evaluation] of p.evaluation.entries()) {
     const label = evaluation.role === "incumbent" ? "旧基线评测" : p.evaluation.length > 2 ? `候选 ${index} 评测` : "新候选评测";
-    const hand = evaluation.hand ? ` · 当前场 ${evaluation.hand.hands_completed}/${evaluation.hand.hands_total} 局` : "";
-    const primary = evaluation.hand_mean_utility ?? evaluation.mean_utility;
-    const score = primary == null
+    const live = evaluation.hand ? ` · 当前场 ${evaluation.hand.hands_completed}/${evaluation.hand.hands_total} 局` : "";
+    const score = evaluation.mean_utility == null ? "" : ` · 场均分 ${evaluation.mean_utility.toFixed(3)}`;
+    const hands = evaluation.hand_mean_utility == null
       ? ""
-      : ` · 均分 ${primary.toFixed(3)}${evaluation.hand_mean_utility == null ? "" : `（${evaluation.hand_appearances} 局）`}`;
+      : ` · 局均分 ${evaluation.hand_mean_utility.toFixed(3)}（${evaluation.hand_appearances} 局）`;
     const paired = evaluation.paired == null
       ? ""
-      : ` · 配对 Δ ${evaluation.paired.delta >= 0 ? "+" : ""}${evaluation.paired.delta.toFixed(3)}${evaluation.paired.standard_error == null ? "" : ` ± ${evaluation.paired.standard_error.toFixed(3)}`}`;
+      : ` · 场配对 Δ ${evaluation.paired.delta >= 0 ? "+" : ""}${evaluation.paired.delta.toFixed(3)}${evaluation.paired.standard_error == null ? "" : ` ± ${evaluation.paired.standard_error.toFixed(3)}`}`;
     html += progressRow(label, `${evaluation.completed_games}/${evaluation.total_games} 场`, evaluation.completed_games,
-      evaluation.total_games, (progressStates[evaluation.status] || evaluation.status) + hand + score + paired);
+      evaluation.total_games, (progressStates[evaluation.status] || evaluation.status) + live + score + hands + paired);
   }
   if (p.outcome) {
     const outcome = {improved: "新版晋级为基线", retained: "保留原基线", failed: "本次迭代失败", cancelled: "本次迭代已取消"};
@@ -449,11 +449,10 @@ function renderRanking() {
   $("ranking").innerHTML =
     ranking
       .map((r, i) => {
-        const primary = r.hand_mean_utility ?? r.mean_utility;
-        const hands = r.hand_appearances == null ? "" : `${r.hand_appearances} 局`;
-        const games = r.hand_appearances == null ? `${r.appearances} 场` : `${r.appearances} 场`;
-        const field = r.hand_mean_utility == null ? "" : `<div class="muted">场均 ${r.mean_utility.toFixed(3)}</div>`;
-        return `<tr><td class="number">${r.rank || i + 1}</td><td>${r.rank_change > 0 ? "↑ " + r.rank_change : r.rank_change < 0 ? "↓ " + -r.rank_change : "—"}</td><td>${esc(combinationName(r.combination))}<div class="muted">${esc(r.branch)}</div></td><td>${esc(r.model)} / ${esc(r.effort)}</td><td>${esc(r.candidate_id.split("--").at(-1))}</td><td class="number">${primary.toFixed(3)}${field}</td><td class="number">${r.standard_error == null ? "样本不足" : "± " + r.standard_error.toFixed(3)}<div class="muted">${r.evaluation_groups == null ? "" : r.evaluation_groups + " 个轮换组"}</div></td><td class="number">${hands}<div class="muted">${games}</div></td></tr>`;
+        const hand = r.hand_mean_utility == null
+          ? ""
+          : `<div class="muted">局均分 ${r.hand_mean_utility.toFixed(3)}（${r.hand_appearances} 局）</div>`;
+        return `<tr><td class="number">${r.rank || i + 1}</td><td>${r.rank_change > 0 ? "↑ " + r.rank_change : r.rank_change < 0 ? "↓ " + -r.rank_change : "—"}</td><td>${esc(combinationName(r.combination))}<div class="muted">${esc(r.branch)}</div></td><td>${esc(r.model)} / ${esc(r.effort)}</td><td>${esc(r.candidate_id.split("--").at(-1))}</td><td class="number">${r.mean_utility.toFixed(3)}${hand}</td><td class="number">${r.standard_error == null ? "样本不足" : "± " + r.standard_error.toFixed(3)}<div class="muted">${r.evaluation_groups == null ? "" : r.evaluation_groups + " 个轮换组"}</div></td><td class="number">${r.appearances} 场${r.hand_appearances == null ? "" : `<div class="muted">${r.hand_appearances} 局</div>`}</td></tr>`;
       })
       .join("") ||
     '<tr><td colspan="8" class="empty">完成分支迭代后，全体代表将在这里产生统一排名。</td></tr>';

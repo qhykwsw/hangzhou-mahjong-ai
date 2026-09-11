@@ -43,26 +43,15 @@ def _competition_registry(research):
         return None
 
 
-def primary_utility(row):
-    """选优与排名的主口径：逐局均分（4−局名次）；旧回执退回场均分。"""
-    row = row or {}
-    value = row.get("hand_mean_utility")
-    return row.get("mean_utility") if value is None else value
+def paired_readout(reference, candidate, metric="field"):
+    """同一副牌、同一对手下的配对数：逐块差值的均值与聚类标准误。
 
-
-def paired_readout(reference, candidate):
-    """同一副牌、同一对手下的配对数：逐块差值的均值与聚类标准误。"""
+    主口径是场（平台按场结算，场内局与局不对等）；逐局配对读数只作辅助。
+    """
     if not reference or not candidate:
         return None
-    key = (
-        "hand_group_means" if candidate.get("hand_group_means") else "field_group_means"
-    )
-    ref_key = (
-        "hand_group_means" if reference.get("hand_group_means") else "field_group_means"
-    )
-    lookup = dict(
-        zip(reference.get("group_blocks") or [], reference.get(ref_key) or [])
-    )
+    key = "hand_group_means" if metric == "hand" else "field_group_means"
+    lookup = dict(zip(reference.get("group_blocks") or [], reference.get(key) or []))
     diffs = [
         value - lookup[block]
         for block, value in zip(
@@ -1345,19 +1334,20 @@ class Research:
             winner = max(
                 valid,
                 key=lambda cid: (
-                    primary_utility(it["results"][cid]),
+                    it["results"][cid]["mean_utility"],
                     cid == it["incumbent"],
                     -choices.index(cid),
                 ),
             )
-            # 候选与基线共用同一份赛程：记录逐块配对差，供页面对照选优是否
-            # 落在噪声以内（配对差与逐块均值差同值，标准误更小）。
+            # 候选与基线共用同一份赛程：场口径配对差供页面对照选优是否落在
+            # 噪声以内；逐局配对只作辅助读数。
             for cid in it["candidates"]:
-                paired = paired_readout(
-                    it["results"].get(it["incumbent"]), it["results"].get(cid)
-                )
-                if paired:
-                    it["results"][cid]["paired"] = paired
+                reference = it["results"].get(it["incumbent"])
+                result = it["results"].get(cid)
+                for metric, field in (("field", "paired"), ("hand", "hand_paired")):
+                    paired = paired_readout(reference, result, metric)
+                    if paired and result is not None:
+                        result[field] = paired
             for cid in it["candidates"]:
                 s["candidates"][cid]["status"] = (
                     "evaluated"
@@ -1551,8 +1541,8 @@ class Research:
         # 分片按 block 升序拼接，块编号与均值一一对齐：候选与基线共用同一
         # 份赛程，配对比较靠这份编号对齐，不靠数组位置猜测。
         metrics = (
-            ("field_", "group_means", "field_group_means"),
-            ("", "hand_group_means", "hand_group_means"),
+            ("", "group_means", "field_group_means"),
+            ("hand_", "hand_group_means", "hand_group_means"),
             ("score_", "score_group_means", "score_group_means"),
         )
         if all(not (part.get("group_blocks") or []) for part in parts):
@@ -1584,10 +1574,6 @@ class Research:
                 merged.update(metric_uncertainty(means, prefix=prefix))
                 merged[dest] = means
         merged["group_means"] = merged["field_group_means"]
-        # 主口径是逐局；没有逐局读数（旧回执）时退回场口径。
-        if not merged["hand_group_means"]:
-            merged["standard_error"] = merged["field_standard_error"]
-            merged["evaluation_groups"] = merged["field_evaluation_groups"]
         return merged
 
     @staticmethod
@@ -1638,8 +1624,10 @@ class Research:
                 result.append(
                     dict(
                         **r,
-                        **metric_uncertainty(hand_groups.get(cid) or groups[cid]),
-                        **metric_uncertainty(groups[cid], prefix="field_"),
+                        **metric_uncertainty(groups[cid]),
+                        **metric_uncertainty(
+                            hand_groups.get(cid) or [], prefix="hand_"
+                        ),
                         **metric_uncertainty(
                             score_groups.get(cid) or [], prefix="score_"
                         ),
@@ -1667,7 +1655,7 @@ class Research:
         return sorted(
             result,
             key=lambda r: (
-                -primary_utility(r),
+                -r["mean_utility"],
                 -r["appearances"],
                 r.get("branch") or r.get("entrant_id") or r["candidate_id"],
             ),

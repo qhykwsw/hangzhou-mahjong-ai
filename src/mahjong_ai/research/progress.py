@@ -185,6 +185,11 @@ def branch_progress(state):
                     paired=(
                         result.get("paired") if result and role == "candidate" else None
                     ),
+                    hand_paired=(
+                        result.get("hand_paired")
+                        if result and role == "candidate"
+                        else None
+                    ),
                     hand=hand,
                 )
             )
