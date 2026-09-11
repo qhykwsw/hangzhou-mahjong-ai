@@ -21,6 +21,7 @@ from mahjong_ai.execution.candidate_runtime import (
 )
 from mahjong_ai.execution.dependencies import prepare_environment
 from mahjong_ai.domain.engine import MahjongEngine, derive_seed
+from mahjong_ai.domain.settlement import score_ranks
 from mahjong_ai.strategies.common import PolicySpec
 from mahjong_ai.persistence.artifacts import (
     digest,
@@ -29,6 +30,15 @@ from mahjong_ai.persistence.artifacts import (
     runtime_fingerprint,
 )
 from mahjong_ai.domain.types import RoundConfig
+
+
+def _block_means(values_by_block):
+    """按 block 求均值；block 是同一副牌、同一批对手的四座轮换组。"""
+    return [
+        sum(values) / len(values)
+        for _, values in sorted(values_by_block.items())
+        if values
+    ]
 
 
 def frozen_checkpoint(out):
@@ -191,7 +201,11 @@ def prepare(task, root, deadline):
 
 
 def play(task, root):
-    from mahjong_ai.evaluation.schedule import group_uncertainty, standings
+    from mahjong_ai.evaluation.schedule import (
+        group_uncertainty,
+        metric_uncertainty,
+        standings,
+    )
 
     receipts = []
     for assignment in task["assignments"]:
@@ -228,6 +242,11 @@ def play(task, root):
                 ranks=result.rank_by_seat,
                 scores=result.total_score_by_seat,
                 hands=result.rounds_played,
+                # 逐局增量分按座位保存：场排名只用了 8 局的总分，逐局读数
+                # 让每一局都参与评估，不再把 7/8 的对局信息丢掉。
+                hand_deltas=[
+                    list(hand["delta"]) for hand in result.metadata.get("hands", [])
+                ],
                 execution=[dict(p.stats) for p in players],
                 diagnostics=[
                     dict(candidate_id=cid, error=p.last_error)
@@ -255,15 +274,28 @@ def play(task, root):
             for assignment, receipt in zip(task["assignments"], receipts)
         ]
         result["focal"] = standings([task["candidate"]], focal_receipts)[0]
-        groups = {}
+        group_blocks = set()
+        groups, hand_groups, score_groups = {}, {}, {}
         for assignment, receipt in zip(task["assignments"], receipts):
-            groups.setdefault(assignment["block"], []).append(
-                4 - receipt["ranks"][assignment["focal"]]
-            )
-        # 逐组效用随回执返回：评估分片合并时按同一口径重算组间标准误。
-        means = [sum(values) / len(values) for values in groups.values()]
-        result["focal"].update(group_uncertainty(means))
-        result["focal"]["group_means"] = means
+            block, seat = assignment["block"], assignment["focal"]
+            group_blocks.add(block)
+            groups.setdefault(block, []).append(4 - receipt["ranks"][seat])
+            for delta in receipt.get("hand_deltas") or ():
+                ranks = score_ranks(tuple(delta))
+                hand_groups.setdefault(block, []).append(4 - ranks[seat])
+                score_groups.setdefault(block, []).append(delta[seat])
+        # 逐组读数随回执返回：评估分片合并时按同一口径重算组间标准误。
+        blocks = sorted(group_blocks)
+        field_means = _block_means(groups)
+        hand_means = _block_means(hand_groups)
+        score_means = _block_means(score_groups)
+        result["focal"].update(group_uncertainty(hand_means or field_means))
+        result["focal"].update(metric_uncertainty(field_means, prefix="field_"))
+        result["focal"].update(metric_uncertainty(score_means, prefix="score_"))
+        result["focal"]["group_blocks"] = blocks
+        result["focal"]["group_means"] = field_means
+        result["focal"]["hand_group_means"] = hand_means
+        result["focal"]["score_group_means"] = score_means
     return result
 
 

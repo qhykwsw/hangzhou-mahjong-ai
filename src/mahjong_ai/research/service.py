@@ -7,6 +7,8 @@ import re
 import secrets
 import shutil
 import time
+from math import sqrt
+from statistics import variance
 from mahjong_ai.persistence.store import Store
 from mahjong_ai.project import ProjectDescriptor
 from mahjong_ai.persistence.artifacts import (
@@ -23,7 +25,11 @@ from mahjong_ai.research.config import (
     validate,
     IMMEDIATE,
 )
-from mahjong_ai.evaluation.schedule import schedule, reference_groups, group_uncertainty
+from mahjong_ai.evaluation.schedule import (
+    schedule,
+    reference_groups,
+    metric_uncertainty,
+)
 
 
 def _competition_registry(research):
@@ -35,6 +41,43 @@ def _competition_registry(research):
         return CompetitionRegistry(root)
     except (ImportError, AttributeError):
         return None
+
+
+def primary_utility(row):
+    """选优与排名的主口径：逐局均分（4−局名次）；旧回执退回场均分。"""
+    row = row or {}
+    value = row.get("hand_mean_utility")
+    return row.get("mean_utility") if value is None else value
+
+
+def paired_readout(reference, candidate):
+    """同一副牌、同一对手下的配对数：逐块差值的均值与聚类标准误。"""
+    if not reference or not candidate:
+        return None
+    key = (
+        "hand_group_means" if candidate.get("hand_group_means") else "field_group_means"
+    )
+    ref_key = (
+        "hand_group_means" if reference.get("hand_group_means") else "field_group_means"
+    )
+    lookup = dict(
+        zip(reference.get("group_blocks") or [], reference.get(ref_key) or [])
+    )
+    diffs = [
+        value - lookup[block]
+        for block, value in zip(
+            candidate.get("group_blocks") or [], candidate.get(key) or []
+        )
+        if block in lookup
+    ]
+    if not diffs:
+        return None
+    count = len(diffs)
+    return dict(
+        blocks=count,
+        delta=sum(diffs) / count,
+        standard_error=sqrt(variance(diffs) / count) if count >= 2 else None,
+    )
 
 
 class Research:
@@ -1302,11 +1345,19 @@ class Research:
             winner = max(
                 valid,
                 key=lambda cid: (
-                    it["results"][cid]["mean_utility"],
+                    primary_utility(it["results"][cid]),
                     cid == it["incumbent"],
                     -choices.index(cid),
                 ),
             )
+            # 候选与基线共用同一份赛程：记录逐块配对差，供页面对照选优是否
+            # 落在噪声以内（配对差与逐块均值差同值，标准误更小）。
+            for cid in it["candidates"]:
+                paired = paired_readout(
+                    it["results"].get(it["incumbent"]), it["results"].get(cid)
+                )
+                if paired:
+                    it["results"][cid]["paired"] = paired
             for cid in it["candidates"]:
                 s["candidates"][cid]["status"] = (
                     "evaluated"
@@ -1473,6 +1524,9 @@ class Research:
             for key in (
                 "appearances",
                 "utility_sum",
+                "hand_appearances",
+                "hand_utility_sum",
+                "hand_score_sum",
                 "errors",
                 "timeouts",
                 "fallback_actions",
@@ -1484,17 +1538,62 @@ class Research:
             if merged["appearances"]
             else None
         )
-        merged.update(
-            group_uncertainty(
-                [mean for part in parts for mean in part.get("group_means") or []]
-            )
+        merged["hand_mean_utility"] = (
+            merged["hand_utility_sum"] / merged["hand_appearances"]
+            if merged["hand_appearances"]
+            else None
         )
+        merged["hand_mean_score"] = (
+            merged["hand_score_sum"] / merged["hand_appearances"]
+            if merged["hand_appearances"]
+            else None
+        )
+        # 分片按 block 升序拼接，块编号与均值一一对齐：候选与基线共用同一
+        # 份赛程，配对比较靠这份编号对齐，不靠数组位置猜测。
+        metrics = (
+            ("field_", "group_means", "field_group_means"),
+            ("", "hand_group_means", "hand_group_means"),
+            ("score_", "score_group_means", "score_group_means"),
+        )
+        if all(not (part.get("group_blocks") or []) for part in parts):
+            # 旧回执没有块编号：按分片顺序拼接，只报每条分片的合计口径。
+            merged["group_blocks"] = []
+            for prefix, key, dest in metrics:
+                means = [mean for part in parts for mean in part.get(key) or []]
+                merged.update(metric_uncertainty(means, prefix=prefix))
+                merged[dest] = means
+        else:
+            blocks = []
+            aligned = {key: [] for _, key, _ in metrics}
+            for part in parts:
+                part_blocks = part.get("group_blocks") or []
+                part_values = {key: part.get(key) or [] for key in aligned}
+                for index, block in enumerate(part_blocks):
+                    if block in blocks:
+                        continue
+                    blocks.append(block)
+                    for key in aligned:
+                        values = part_values[key]
+                        aligned[key].append(
+                            values[index] if index < len(values) else None
+                        )
+            order = sorted(range(len(blocks)), key=lambda i: blocks[i])
+            merged["group_blocks"] = [blocks[i] for i in order]
+            for prefix, key, dest in metrics:
+                means = [aligned[key][i] for i in order if aligned[key][i] is not None]
+                merged.update(metric_uncertainty(means, prefix=prefix))
+                merged[dest] = means
+        merged["group_means"] = merged["field_group_means"]
+        # 主口径是逐局；没有逐局读数（旧回执）时退回场口径。
+        if not merged["hand_group_means"]:
+            merged["standard_error"] = merged["field_standard_error"]
+            merged["evaluation_groups"] = merged["field_evaluation_groups"]
         return merged
 
     @staticmethod
     def competition_table(s, cycle):
         rows = {}
-        groups = {}
+        groups, hand_groups, score_groups = {}, {}, {}
         for j in s["jobs"].values():
             if (
                 j.get("scope") != "competition"
@@ -1507,6 +1606,11 @@ class Research:
                 if r["appearances"] != 4:
                     raise ValueError("共同竞技回执必须是完整的四座轮换组")
                 groups.setdefault(r["candidate_id"], []).append(r["utility_sum"] / 4)
+                hand_mean = r.get("hand_mean_utility")
+                score_mean = r.get("hand_mean_score")
+                if hand_mean is not None:
+                    hand_groups.setdefault(r["candidate_id"], []).append(hand_mean)
+                    score_groups.setdefault(r["candidate_id"], []).append(score_mean)
                 dst = rows.setdefault(
                     r["candidate_id"],
                     {
@@ -1514,6 +1618,9 @@ class Research:
                         for k in (
                             "appearances",
                             "utility_sum",
+                            "hand_appearances",
+                            "hand_utility_sum",
+                            "hand_score_sum",
                             "errors",
                             "timeouts",
                             "fallback_actions",
@@ -1521,16 +1628,21 @@ class Research:
                     },
                 )
                 for k in dst:
-                    dst[k] += r[k]
+                    dst[k] += r.get(k, 0)
         result = []
         for bid, b in cycle["roster"].items():
             cid = b["candidate_id"]
             if cid in rows:
                 r = rows[cid]
+                hand_appearances = r["hand_appearances"]
                 result.append(
                     dict(
                         **r,
-                        **group_uncertainty(groups[cid]),
+                        **metric_uncertainty(hand_groups.get(cid) or groups[cid]),
+                        **metric_uncertainty(groups[cid], prefix="field_"),
+                        **metric_uncertainty(
+                            score_groups.get(cid) or [], prefix="score_"
+                        ),
                         candidate_id=cid,
                         branch=None if b.get("external") else bid,
                         entrant_id=b.get("entrant_id"),
@@ -1540,12 +1652,22 @@ class Research:
                         model=b["model"],
                         effort=b["effort"],
                         mean_utility=r["utility_sum"] / r["appearances"],
+                        hand_mean_utility=(
+                            r["hand_utility_sum"] / hand_appearances
+                            if hand_appearances
+                            else None
+                        ),
+                        hand_mean_score=(
+                            r["hand_score_sum"] / hand_appearances
+                            if hand_appearances
+                            else None
+                        ),
                     )
                 )
         return sorted(
             result,
             key=lambda r: (
-                -r["mean_utility"],
+                -primary_utility(r),
                 -r["appearances"],
                 r.get("branch") or r.get("entrant_id") or r["candidate_id"],
             ),
@@ -1581,12 +1703,23 @@ class Research:
                 row["paired"] = {
                     cid: {
                         "mean_utility": round(v["mean_utility"], 3),
+                        "hand_mean_utility": (
+                            None
+                            if v.get("hand_mean_utility") is None
+                            else round(v["hand_mean_utility"], 3)
+                        ),
+                        "hand_mean_score": (
+                            None
+                            if v.get("hand_mean_score") is None
+                            else round(v["hand_mean_score"], 3)
+                        ),
                         "standard_error": (
                             None
                             if v.get("standard_error") is None
                             else round(v["standard_error"], 3)
                         ),
                         "appearances": v["appearances"],
+                        "hand_appearances": v.get("hand_appearances"),
                     }
                     for cid, v in it["results"].items()
                 }
@@ -1597,6 +1730,11 @@ class Research:
                 rank=index + 1,
                 branch=row["branch"],
                 mean_utility=round(row["mean_utility"], 3),
+                hand_mean_utility=(
+                    None
+                    if row.get("hand_mean_utility") is None
+                    else round(row["hand_mean_utility"], 3)
+                ),
             )
             for index, row in enumerate(s["last_ranking"][:8])
         ]

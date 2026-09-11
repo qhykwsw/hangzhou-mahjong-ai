@@ -7,7 +7,6 @@ from mahjong_ai.research.config import COMBINATIONS, configuration
 from mahjong_ai.evaluation.schedule import (
     schedule,
     reference_groups,
-    group_uncertainty,
 )
 from mahjong_ai.execution.controller import Controller
 from mahjong_ai.execution.jobs import prepare, play
@@ -1121,17 +1120,68 @@ def test_evaluation_shards_split_rotation_blocks_and_merge_into_one_result(tmp_p
                 job,
                 {"status": "completed", "summary": [], "focal": focal(job, 2.0)},
             )
-        assert s["iterations"][it["id"]]["results"][first["candidate"]] == {
-            "candidate_id": first["candidate"],
-            "appearances": 8,
-            "utility_sum": 12.0,
-            "errors": 0,
-            "timeouts": 0,
-            "fallback_actions": 0,
-            "mean_utility": 1.5,
-            **group_uncertainty([1.0, 2.0]),
-        }
+        merged = s["iterations"][it["id"]]["results"][first["candidate"]]
+        assert merged["candidate_id"] == first["candidate"]
+        assert merged["appearances"] == 8  # 两个分片各 4 场
+        assert merged["utility_sum"] == 12.0
+        assert merged["mean_utility"] == 1.5
+        assert merged["errors"] == merged["timeouts"] == 0
+        assert merged["group_means"] == [1.0, 2.0]
+        assert merged["standard_error"] == 0.5
+        assert merged["evaluation_groups"] == 2
+        # 现场口径缺失（旧回执）时主口径退回场口径，不显示半真半假的局读数。
+        assert merged["hand_mean_utility"] is None
+        assert merged["hand_group_means"] == []
         assert s["branches"][branch]["completed"] == 1
+
+
+def test_iteration_selection_uses_the_hand_level_metric(research):
+    r, run, _ = research
+    with r.edit(run) as (s, db):
+        branch = next(b for b in s["branches"].values() if b["status"] != "archived")
+        incumbent = branch["representative"]
+        candidate = incumbent + "--hand-level"
+        s["candidates"][candidate] = dict(
+            s["candidates"][incumbent], candidate_id=candidate, status="evaluated"
+        )
+        iteration = dict(
+            id="iteration-hand-level",
+            experiment=s["id"],
+            branch=branch["id"],
+            cycle=1,
+            number=branch["completed"] + 1,
+            status="evaluating",
+            incumbent=incumbent,
+            candidates=[candidate],
+            results={
+                incumbent: dict(
+                    candidate_id=incumbent,
+                    appearances=8,
+                    mean_utility=2.5,
+                    hand_mean_utility=1.0,
+                    group_blocks=[0, 1, 2, 3],
+                    hand_group_means=[1.0, 1.0, 1.0, 1.0],
+                ),
+                candidate: dict(
+                    candidate_id=candidate,
+                    appearances=8,
+                    mean_utility=1.0,
+                    hand_mean_utility=2.0,
+                    group_blocks=[0, 1, 2, 3],
+                    hand_group_means=[2.0, 2.0, 2.0, 1.0],
+                ),
+            },
+        )
+        s["iterations"][iteration["id"]] = iteration
+        r.complete_iteration(s, db, iteration)
+        # 场口径下旧基线更高，逐局口径下新候选更高：选优跟随主口径（逐局）。
+        assert branch["representative"] == candidate
+        assert iteration["improved"] is True
+        # 同一份赛程逐块配对：Δ = (1+1+1+0)/4，标准误按 4 个块估计。
+        paired = iteration["results"][candidate]["paired"]
+        assert paired["blocks"] == 4
+        assert paired["delta"] == 0.75
+        assert paired["standard_error"] == 0.25
 
 
 def test_focal_scoring_excludes_same_version_in_opponent_seats(tmp_path):

@@ -6,10 +6,10 @@ agent_concurrency = 8
 training_workers = 12
 match_workers = 12
 candidate_limit = 1
-evaluation_games = 128
+evaluation_games = 16
 evaluation_shards = 4
-competition_games_per_branch = 256
-training_games = 128
+competition_games_per_branch = 32
+training_games = 16
 initialization_seconds = 3600
 
 [training_caps]

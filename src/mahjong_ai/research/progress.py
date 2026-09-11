@@ -176,6 +176,15 @@ def branch_progress(state):
                     completed_games=completed,
                     total_games=cycle["config"]["evaluation_games"],
                     mean_utility=result["mean_utility"] if result else None,
+                    hand_mean_utility=(
+                        result.get("hand_mean_utility") if result else None
+                    ),
+                    hand_appearances=(
+                        result.get("hand_appearances") if result else None
+                    ),
+                    paired=(
+                        result.get("paired") if result and role == "candidate" else None
+                    ),
                     hand=hand,
                 )
             )
