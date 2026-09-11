@@ -441,6 +441,10 @@ class PolicySpec:
                 raise ValueError(
                     "code policy requires a content hash and finite action budget"
                 )
+            if self.python_path:
+                interpreter = Path(self.python_path).expanduser()
+                if not interpreter.is_file() or not os.access(interpreter, os.X_OK):
+                    raise ValueError(f"candidate interpreter is unavailable: {interpreter}")
             return
         if self.family not in ("rule", "rl"):
             raise ValueError("unknown builtin policy family")

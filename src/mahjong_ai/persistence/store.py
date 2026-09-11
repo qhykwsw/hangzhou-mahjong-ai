@@ -64,16 +64,25 @@ class Store:
             (state["id"], time.time(), kind, json.dumps(payload, ensure_ascii=False)),
         )
 
-    def receipt(self, db, experiment, job, payload):
+    def receipt(self, db, experiment, job, payload, attempt=0):
+        """Commit one immutable result for one execution attempt.
+
+        A retried job keeps its durable job id, but each retry is a new
+        execution attempt.  The first attempt deliberately keeps the legacy
+        key so existing databases remain readable; later attempts use a
+        namespaced key and cannot collide with an earlier result.
+        """
+        receipt_job = job if not attempt else f"{job}#attempt-{attempt}"
         encoded = json.dumps(payload, sort_keys=True)
         old = db.execute(
             "SELECT payload FROM receipts WHERE experiment=? AND job=?",
-            (experiment, job),
+            (experiment, receipt_job),
         ).fetchone()
         if old and old[0] != encoded:
             raise ValueError("不可变回执发生变化")
         db.execute(
-            "INSERT OR IGNORE INTO receipts VALUES(?,?,?)", (experiment, job, encoded)
+            "INSERT OR IGNORE INTO receipts VALUES(?,?,?)",
+            (experiment, receipt_job, encoded),
         )
 
     def events(self, experiment, after=0):

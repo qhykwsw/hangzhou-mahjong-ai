@@ -110,6 +110,7 @@ def application(project, tailscale_url=None):
                     value.get("config"),
                     value.get("targets"),
                     value.get("opponents"),
+                    value.get("candidate_runtime_path"),
                 )
                 result = await asyncio.to_thread(arena.control, identity, "resume")
             elif request.url.path == "/api/config":

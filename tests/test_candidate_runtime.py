@@ -16,6 +16,7 @@ from mahjong_ai.domain.engine import HandState
 from mahjong_ai.execution.agent import codex_command
 from mahjong_ai.persistence.artifacts import read_json
 from mahjong_ai.domain.types import RoundConfig
+from mahjong_ai.strategies.common import PolicySpec
 
 
 def test_candidate_cannot_read_host_files_or_network(tmp_path):
@@ -38,9 +39,108 @@ def build(model):
     (package / "strategy.py").write_text(source)
     worker = CandidateProcess(package)
     try:
-        assert worker.call({"op": "build"}) == {"ok": True}
+        assert worker.call({"op": "build"}) == {
+            "ok": True,
+            "reuse_process": True,
+        }
     finally:
         worker.close()
+
+
+def test_candidate_process_rejects_missing_interpreter_before_spawn(tmp_path):
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "strategy.py").write_text("def build(model): return None\n")
+    with pytest.raises(FileNotFoundError, match="候选解释器不可用"):
+        CandidateProcess(package, str(tmp_path / "missing-python"))
+
+
+def test_reset_start_failure_is_not_converted_to_fallback(tmp_path):
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "strategy.py").write_text("def build(model): return None\n")
+    policy = RemotePolicy(
+        package,
+        tree_hash(package),
+        python=str(tmp_path / "missing-python"),
+    )
+    with pytest.raises(RuntimeError, match="候选启动或 reset 失败"):
+        policy.reset(1)
+
+
+def test_policy_spec_rejects_stale_candidate_interpreter(tmp_path):
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "strategy.py").write_text("def build(model): return None\n")
+    with pytest.raises(ValueError, match="interpreter is unavailable"):
+        PolicySpec(
+            family="code",
+            package_path=str(package),
+            package_hash=tree_hash(package),
+            python_path=str(tmp_path / "missing-python"),
+        )
+
+
+def test_candidate_can_opt_out_of_process_reuse(tmp_path):
+    (tmp_path / "strategy.py").write_text(
+        "PROCESS_REUSE = False\n"
+        "class Policy:\n"
+        " def reset(self, seed): pass\n"
+        " def act(self, obs): return obs.legal_actions[0]\n"
+        " def finish_round(self, result, seat): pass\n"
+        "def build(model): return Policy()\n"
+    )
+    p = RemotePolicy(tmp_path, tree_hash(tmp_path), action_seconds=0.2)
+    try:
+        p.start()
+        p.reset(1)
+        first = p.worker.process.pid
+        p.reset(2)
+        assert p.worker.process.pid != first
+    finally:
+        p.close()
+
+
+def test_memory_watcher_uses_snapshot_process_after_owner_closes(monkeypatch):
+    """A close racing the RSS poll must not dereference owner.process=None."""
+
+    class Process:
+        def __init__(self):
+            self.killed = False
+
+        def poll(self):
+            return None
+
+        def kill(self):
+            self.killed = True
+
+    owner = SimpleNamespace(process=Process(), peak_rss_kb=0, memory_exceeded=False)
+    process = owner.process
+    candidate_runtime._MEMORY_WATCHED.clear()
+    candidate_runtime._MEMORY_WATCHED[123] = (owner, 1)
+
+    class Ps:
+        stdout = "123 2\n"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(candidate_runtime.subprocess, "run", lambda *a, **k: Ps())
+
+    # Simulate close() detaching the owner immediately after the locked snapshot.
+    def sleep(_seconds):
+        owner.process = None
+        raise StopIteration
+
+    monkeypatch.setattr(candidate_runtime.time, "sleep", sleep)
+    with pytest.raises(StopIteration):
+        candidate_runtime._memory_watch_loop()
+    assert process.killed
+    assert owner.memory_exceeded
+    candidate_runtime._MEMORY_WATCHED.clear()
 
 
 def test_slow_policy_times_out_and_falls_back(tmp_path):

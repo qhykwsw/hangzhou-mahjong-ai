@@ -86,7 +86,10 @@ def _shape_accel(c: tuple[int, ...], open_melds: int) -> bool:
 
 def _shape(c: tuple[int, ...], open_melds: int) -> bool:
     """Reference winning-shape test; the accelerator mirrors it exactly."""
-    if _fast is not None:
+    # The reference path treats overfull physical hands as ordinary input and
+    # returns a boolean.  Keep that public behavior instead of leaking the C
+    # parser's stricter 0..4 count error for malformed callers.
+    if _fast is not None and max(c, default=0) <= 4:
         return _shape_accel(c, open_melds)
     return _shape_reference(c, open_melds)
 
@@ -143,6 +146,29 @@ class Fan:
 
 
 def calculate_fan(
+    hand,
+    drawn_tile,
+    open_melds=0,
+    chain_count=0,
+    piao_count=0,
+    you_cai_bi_kao=False,
+    kong_draw=False,
+):
+    # Fan calculation is requested repeatedly while a policy prices waits.
+    # Normalize list callers at this boundary, then cache the immutable core.
+    return _calculate_fan_cached(
+        tuple(hand),
+        drawn_tile,
+        open_melds,
+        chain_count,
+        piao_count,
+        you_cai_bi_kao,
+        kong_draw,
+    )
+
+
+@lru_cache(maxsize=200000)
+def _calculate_fan_cached(
     hand,
     drawn_tile,
     open_melds=0,

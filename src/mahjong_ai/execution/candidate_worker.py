@@ -156,7 +156,15 @@ def main():
                         package,
                         request.get("definition"),
                     )
-                send({"ok": True})
+                # Existing candidates are expected to make reset() a complete
+                # game boundary. A candidate may opt out when it deliberately
+                # keeps process-global state that reset cannot clear.
+                send(
+                    {
+                        "ok": True,
+                        "reuse_process": bool(getattr(module, "PROCESS_REUSE", True)),
+                    }
+                )
             elif request["op"] == "describe":
                 send({"train": callable(getattr(module, "train", None))})
             elif request["op"] == "train":

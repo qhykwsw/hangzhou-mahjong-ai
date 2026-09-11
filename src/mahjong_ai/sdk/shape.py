@@ -143,19 +143,32 @@ def analyze(hand, open_melds=0, remaining=None, chain=0, piao=0, you_cai_bi_kao=
                     # 未通过胡牌边界的摸牌，其受保护的距离是 0 而不是负数，
                     # 听牌手上这些摸牌不是进张。
                     boundary = set(negatives) - set(candidates)
-                    improving = [
-                        tile for tile in improving if tile not in boundary
-                    ]
+                    improving = [tile for tile in improving if tile not in boundary]
         if candidates is None:
             improving, candidates = _improving_reference(
                 hand, open_melds, available, distance
             )
         for tile in candidates:
             drawn = tuple(sorted((*hand, tile)))
-            fan = calculate_fan(drawn, tile, open_melds, chain, piao, you_cai_bi_kao)
-            if fan:
+            numeric_fan = None
+            if _fast is not None and hasattr(_fast, "fan_value"):
+                numeric_fan = _fast.fan_value(
+                    counts(drawn),
+                    tile,
+                    open_melds,
+                    chain,
+                    piao,
+                    you_cai_bi_kao,
+                    False,
+                )
+            fan = (
+                calculate_fan(drawn, tile, open_melds, chain, piao, you_cai_bi_kao)
+                if numeric_fan is None
+                else None
+            )
+            if numeric_fan or fan:
                 wins.append(tile)
-                fans[tile] = fan.fan
+                fans[tile] = numeric_fan if numeric_fan is not None else fan.fan
     return {
         "shanten": distance,
         "improving": improving,

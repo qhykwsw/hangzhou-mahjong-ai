@@ -85,13 +85,21 @@ def _memory_watch_loop():
     while True:
         with _MEMORY_LOCK:
             targets = {
-                pid: entry
+                pid: (entry[0], entry[1], entry[0].process)
                 for pid, entry in list(_MEMORY_WATCHED.items())
                 if entry[0].process is not None and entry[0].process.poll() is None
             }
             _MEMORY_WATCHED.clear()
-            _MEMORY_WATCHED.update(targets)
+            _MEMORY_WATCHED.update(
+                (pid, (owner, limit))
+                for pid, (owner, limit, _process) in targets.items()
+            )
             if not targets:
+                # A new registration can race the final empty poll. Clear the
+                # sentinel while holding the same lock used by _watch_memory so
+                # that it will start a fresh watcher instead of going unpolled.
+                global _MEMORY_THREAD
+                _MEMORY_THREAD = None
                 return
         rows = subprocess.run(
             [
@@ -109,7 +117,7 @@ def _memory_watch_loop():
             fields = row.split()
             if len(fields) == 2 and fields[0].isdigit() and fields[1].isdigit():
                 usage[int(fields[0])] = int(fields[1])
-        for pid, (owner, limit) in targets.items():
+        for pid, (owner, limit, process) in targets.items():
             rss = usage.get(pid)
             if rss is None:
                 continue
@@ -118,7 +126,10 @@ def _memory_watch_loop():
             if rss > limit:
                 owner.memory_exceeded = True
                 try:
-                    owner.process.kill()
+                    # close() may have detached the owner after the snapshot;
+                    # kill the captured process object, if it is still alive.
+                    if process.poll() is None:
+                        process.kill()
                 except (OSError, ProcessLookupError):
                     pass
         time.sleep(_MEMORY_INTERVAL)
@@ -198,6 +209,10 @@ def public_result(result):
 class CandidateProcess:
     def __init__(self, package, python=None, output=None, runtime=None):
         self.package = Path(package).resolve()
+        if python is not None:
+            interpreter = Path(python).expanduser()
+            if not interpreter.is_file() or not os.access(interpreter, os.X_OK):
+                raise FileNotFoundError(f"候选解释器不可用：{interpreter}")
         self.temp = tempfile.TemporaryDirectory(prefix="mahjong-candidate-")
         self.output = (
             Path(output).resolve() if output else Path(self.temp.name) / "output"
@@ -313,6 +328,34 @@ class CandidateProcess:
             pass
 
 
+def observation_payload(observation, previous_events=None):
+    """Serialize an observation and append only newly published public events."""
+    events = observation.public_events
+    data = {}
+    for field in fields(observation):
+        if field.name == "public_events":
+            continue
+        value = getattr(observation, field.name)
+        if field.name == "legal_actions":
+            data[field.name] = [asdict(action) for action in value]
+        elif field.name == "melds":
+            data[field.name] = [[asdict(meld) for meld in row] for row in value]
+        elif field.name == "stage":
+            data[field.name] = asdict(value)
+        else:
+            data[field.name] = value
+    if (
+        previous_events is not None
+        and len(events) > len(previous_events)
+        and events[: len(previous_events)] == previous_events
+    ):
+        data["events_from"] = len(previous_events)
+        data["events"] = [asdict(event) for event in events[len(previous_events) :]]
+    else:
+        data["public_events"] = [asdict(event) for event in events]
+    return data, events
+
+
 class RemotePolicy:
     """Never imports candidate code in the engine process; validates action indices."""
 
@@ -338,6 +381,8 @@ class RemotePolicy:
         self.python, self.version, self.worker = python, version, None
         self.response_seconds = response_seconds
         self.runtime = runtime
+        self.reuse_process = True
+        self.reset_count = 0
         self.pending_act = False
         self.sent_events = None
         self.stats = {"actions": 0, "timeouts": 0, "errors": 0, "elapsed_seconds": 0.0}
@@ -347,17 +392,32 @@ class RemotePolicy:
 
     def _start(self):
         self.worker = CandidateProcess(self.package, self.python, runtime=self.runtime)
-        self.worker.call({"op": "build"})
+        try:
+            response = self.worker.call({"op": "build"})
+            self.reuse_process = bool(response.get("reuse_process", True))
+        except Exception:
+            self.close()
+            raise
         self.sent_events = None
+
+    def start(self):
+        """Eagerly start the sandbox so several policies can start in parallel."""
+        if self.worker is None:
+            self._start()
 
     def reset(self, seed):
         try:
             if self.pending_act:
                 self.close()
+            elif (
+                self.worker is not None and self.reset_count and not self.reuse_process
+            ):
+                self.close()
             if self.worker is None:
                 self._start()
             self.worker.call({"op": "reset", "seed": seed})
             self.sent_events = None
+            self.reset_count += 1
         except JobCancelled:
             self.close()
             raise
@@ -365,6 +425,10 @@ class RemotePolicy:
             self._error(exc)
             self.stats["errors"] += 1
             self.close()
+            # A reset/build failure means this seat is not an evaluable policy.
+            # Let the enclosing task fail instead of silently converting an
+            # entire candidate into timeout fallback actions.
+            raise RuntimeError(f"候选启动或 reset 失败：{exc}") from exc
 
     def act(self, observation):
         started = time.monotonic()
@@ -432,30 +496,7 @@ class RemotePolicy:
         so a round trip carries the newly published events instead of the whole
         history (26KB per action on average in the fast pools).
         """
-        events = observation.public_events
-        data = {}
-        for field in fields(observation):
-            if field.name == "public_events":
-                continue
-            value = getattr(observation, field.name)
-            if field.name == "legal_actions":
-                data[field.name] = [asdict(action) for action in value]
-            elif field.name == "melds":
-                data[field.name] = [[asdict(meld) for meld in row] for row in value]
-            elif field.name == "stage":
-                data[field.name] = asdict(value)
-            else:
-                data[field.name] = value
-        previous = self.sent_events
-        if (
-            previous is not None
-            and len(events) > len(previous)
-            and events[: len(previous)] == previous
-        ):
-            data["events_from"] = len(previous)
-            data["events"] = [asdict(event) for event in events[len(previous) :]]
-        else:
-            data["public_events"] = [asdict(event) for event in events]
+        data, events = observation_payload(observation, self.sent_events)
         self.sent_events = events
         return data
 
@@ -538,14 +579,19 @@ def train_package(
     class Bridge:
         name, version = "training", "code"
 
+        def __init__(self):
+            self.sent_events = None
+
         def reset(self, seed):
+            self.sent_events = None
             worker.call(
                 {"op": "reset", "seed": seed}, max(0.001, deadline - time.monotonic())
             )
 
         def act(self, obs):
+            payload, self.sent_events = observation_payload(obs, self.sent_events)
             reply = worker.call(
-                {"op": "act", "observation": asdict(obs)},
+                {"op": "act", "observation": payload},
                 max(0.001, deadline - time.monotonic()),
             )
             index = reply["index"]

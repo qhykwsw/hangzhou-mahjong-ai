@@ -160,7 +160,7 @@ static int shape_value(const int *c, int open_melds) {
 /* Raw shape distance exactly like sdk/shape.py::shanten before the hu guard. */
 static int shanten_uncached(const int *counts, int open_melds);
 
-#define SHANTEN_CACHE_BITS 15
+#define SHANTEN_CACHE_BITS 18
 #define SHANTEN_CACHE_SIZE (1 << SHANTEN_CACHE_BITS)
 
 typedef struct {
@@ -219,7 +219,7 @@ static int shanten_uncached(const int *counts, int open_melds) {
 /* ---------- winning shape with white-tile completion ---------- */
 
 /* Direct-mapped memo for the meld search: key is the 34 counts plus jokers. */
-#define MELD_CACHE_BITS 15
+#define MELD_CACHE_BITS 17
 #define MELD_CACHE_SIZE (1 << MELD_CACHE_BITS)
 
 typedef struct {
@@ -331,6 +331,57 @@ static int hu_shape(const int *counts, int open_melds) {
     return 0;
 }
 
+/* The SDK's calculate_fan only needs the numeric fan while analyze() is
+ * enumerating waits. Keep the detailed Python Fan object on the reference
+ * path, but calculate this hot numeric projection without crossing Python for
+ * every candidate tile. */
+static int baotou_shape(const int *waiting, int open_melds) {
+    if (waiting[WHITE] == 0) return 0;
+    int total = 0;
+    for (int i = 0; i < NTILES; i++) total += waiting[i];
+    if (total != 13 - 3 * open_melds) return 0;
+    int draw[NTILES];
+    memcpy(draw, waiting, sizeof(draw));
+    for (int t = 0; t < NTILES; t++) {
+        if (draw[t] >= 4) continue;
+        draw[t]++;
+        int ok = hu_shape(draw, open_melds);
+        draw[t]--;
+        if (!ok) return 0;
+    }
+    return 1;
+}
+
+static long fan_value(const int *counts, int drawn_tile, int open_melds,
+                      int chain_count, int piao_count, int you_cai_bi_kao,
+                      int kong_draw) {
+    if (drawn_tile < 0 || drawn_tile >= NTILES || counts[drawn_tile] <= 0 ||
+        !hu_shape(counts, open_melds))
+        return 0;
+    int waiting[NTILES];
+    memcpy(waiting, counts, sizeof(waiting));
+    waiting[drawn_tile]--;
+    int bt = baotou_shape(waiting, open_melds);
+    if (you_cai_bi_kao && counts[WHITE] && !(bt || kong_draw)) return 0;
+
+    long fan = 1;
+    if (open_melds == 0) {
+        int odd = 0, luxury = 0;
+        for (int i = 0; i < WHITE; i++) {
+            odd += counts[i] % 2;
+            if (counts[i] == 4) luxury++;
+        }
+        if (odd <= counts[WHITE]) {
+            if (counts[WHITE] == 4 && odd == 0) luxury++;
+            fan = 1L << (1 + luxury);
+        }
+    }
+    if (chain_count > 0) fan *= 1L << chain_count;
+    if (counts[WHITE] + piao_count == 4) fan *= 2;
+    if (bt) fan *= 2;
+    return fan;
+}
+
 static int parse_vector(PyObject *obj, int *out, int max_value, const char *what) {
     PyObject *fast = PySequence_Fast(obj, "expected a sequence of 34 ints");
     if (!fast) return -1;
@@ -396,6 +447,21 @@ static PyObject *py_can_hu(PyObject *self, PyObject *args) {
         Py_RETURN_TRUE;
     }
     Py_RETURN_FALSE;
+}
+
+static PyObject *py_fan_value(PyObject *self, PyObject *args) {
+    PyObject *obj;
+    int drawn_tile, open_melds, chain_count, piao_count, you_cai_bi_kao,
+        kong_draw;
+    if (!PyArg_ParseTuple(args, "Oiiiiii", &obj, &drawn_tile, &open_melds,
+                          &chain_count, &piao_count, &you_cai_bi_kao,
+                          &kong_draw))
+        return NULL;
+    int counts[NTILES];
+    if (parse_counts(obj, counts) < 0) return NULL;
+    return PyLong_FromLong(fan_value(counts, drawn_tile, open_melds,
+                                     chain_count, piao_count,
+                                     you_cai_bi_kao, kong_draw));
 }
 
 /* Raw shanten of the hand plus every legal draw, in one C call. */
@@ -465,6 +531,8 @@ static PyMethodDef fast_methods[] = {
      "shanten before the winning-boundary guard (white completes, seven pairs)"},
     {"can_hu", py_can_hu, METH_VARARGS,
      "winning shape: 4 - open_melds melds plus a pair, white completing gaps"},
+    {"fan_value", py_fan_value, METH_VARARGS,
+     "numeric fan for a winning draw, without constructing detail strings"},
     {"improving", py_improving, METH_VARARGS,
      "raw shanten and (improving, winning-candidate) tiles for every legal draw"},
     {NULL, NULL, 0, NULL},

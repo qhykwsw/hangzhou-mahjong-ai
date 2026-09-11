@@ -128,6 +128,20 @@ class Controller:
         key = read_json(root / "private/random.json")["key"]
         it = s["iterations"].get(j.get("iteration"))
         cfg = it["config"] if it else s["config"]
+
+        def policy_spec(cid, config):
+            spec = {
+                **s["candidates"][cid]["spec"],
+                "action_seconds": config["timeouts"]["discard"],
+                "response_seconds": config["timeouts"]["response"],
+            }
+            # An explicit new experiment may evaluate frozen packages against
+            # a freshly frozen framework runtime. Older experiments keep their
+            # own runtime path exactly as recorded.
+            if s.get("candidate_runtime_path"):
+                spec["runtime_path"] = s["candidate_runtime_path"]
+            return spec
+
         task = dict(
             kind=j["kind"],
             project=str(self.research.project),
@@ -186,14 +200,7 @@ class Controller:
                 if it
                 else s["experiments"][-1]["initial_opponents"]
             )
-            opponents = [
-                {
-                    **s["candidates"][cid]["spec"],
-                    "action_seconds": cfg["timeouts"]["discard"],
-                    "response_seconds": cfg["timeouts"]["response"],
-                }
-                for cid in pool
-            ]
+            opponents = [policy_spec(cid, cfg) for cid in pool]
             task.update(
                 packages=packages,
                 dependency_root=str(root / "environments"),
@@ -212,11 +219,7 @@ class Controller:
                 scope=j["scope"],
                 candidate=j.get("candidate"),
                 policies={
-                    cid: {
-                        **s["candidates"][cid]["spec"],
-                        "action_seconds": cfg["timeouts"]["discard"],
-                        "response_seconds": cfg["timeouts"]["response"],
-                    }
+                    cid: policy_spec(cid, cfg)
                     for a in j["assignments"]
                     for cid in a["players"]
                 },
@@ -233,7 +236,13 @@ class Controller:
         if (root / "result.json").exists():
             attempts = root / "attempts"
             attempts.mkdir(exist_ok=True)
-            (root / "result.json").rename(attempts / f"{time.time_ns()}.json")
+            j["attempt"] = int(j.get("attempt", 0)) + 1
+            archive = attempts / str(time.time_ns())
+            archive.mkdir()
+            for name in ("result.json", "progress.json", "matches"):
+                path = root / name
+                if path.exists():
+                    path.rename(archive / name)
         (root / "cancel.flag").unlink(missing_ok=True)
         task = (
             read_json(root / "task.json")

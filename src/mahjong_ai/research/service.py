@@ -290,13 +290,24 @@ class Research:
                 last_run=0.0,
             )
 
-    def create(self, overrides=None, targets=None, opponents=None):
+    def create(
+        self,
+        overrides=None,
+        targets=None,
+        opponents=None,
+        candidate_runtime_path=None,
+    ):
         config = configuration(self.project, overrides)
         current = self.store.read()
         if current and current["id"] and current["phase"] not in ("finished", "closed"):
             raise ValueError("开始新实验前先结束或关闭当前实验")
         self.register(overrides)
         fingerprint, runtime = self.freeze_runtime()
+        if candidate_runtime_path is not None:
+            candidate_runtime = Path(candidate_runtime_path).expanduser().resolve()
+            if not (candidate_runtime / "mahjong_ai").is_dir():
+                raise ValueError("候选运行时必须包含 mahjong_ai 包目录")
+            candidate_runtime_path = str(candidate_runtime)
         with self.edit() as (s, db):
             if s["id"] and s["phase"] not in ("finished", "closed"):
                 raise ValueError("已存在未完成的实验")
@@ -347,6 +358,7 @@ class Research:
                 config=deepcopy(config),
                 runtime=fingerprint,
                 runtime_path=runtime,
+                candidate_runtime_path=candidate_runtime_path,
             )
             s["experiments"].append(experiment)
             s.update(
@@ -357,6 +369,7 @@ class Research:
                 config=config,
                 runtime=fingerprint,
                 runtime_path=runtime,
+                candidate_runtime_path=candidate_runtime_path,
             )
             for b in s["branches"].values():
                 b["status"] = "ready" if b["representative"] else "uninitialized"
@@ -444,6 +457,7 @@ class Research:
             status="queued",
             created_at=time.time(),
             spent=0.0,
+            attempt=0,
             experiment=s["id"],
             runtime_path=s["runtime_path"],
             **fields,
@@ -1399,7 +1413,9 @@ class Research:
             job["status"] = "paused"
             return
         if not (job["kind"] == "match" and result["status"] != "completed"):
-            self.store.receipt(db, s["id"], job["id"], result)
+            self.store.receipt(
+                db, s["id"], job["id"], result, int(job.get("attempt", 0))
+            )
         job.update(
             status="completed", error=result.get("error"), usage=result.get("usage", {})
         )

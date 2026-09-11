@@ -11,6 +11,7 @@ from mahjong_ai.evaluation.schedule import (
 from mahjong_ai.execution.controller import Controller
 from mahjong_ai.execution.jobs import prepare, play
 from mahjong_ai.interfaces.app import application
+from mahjong_ai.persistence.store import Store
 
 
 def small_config():
@@ -88,6 +89,15 @@ def test_defaults_and_model_validation(tmp_path):
         configuration(tmp_path, {"evaluation_games": 5})
     with pytest.raises(ValueError, match="training_caps"):
         configuration(tmp_path, {"training_caps": {"heuristic": -1}})
+
+
+def test_job_receipts_are_immutable_per_execution_attempt(tmp_path):
+    store = Store(tmp_path)
+    with store.connect() as db:
+        store.receipt(db, "experiment", "match-1", {"value": 1})
+        with pytest.raises(ValueError, match="不可变回执"):
+            store.receipt(db, "experiment", "match-1", {"value": 2})
+        store.receipt(db, "experiment", "match-1", {"value": 2}, attempt=1)
 
 
 def test_reduced_model_roster_preserves_branch_histories(tmp_path):
@@ -1272,6 +1282,27 @@ def test_old_opponents_obey_current_experiment_action_windows(research):
                 for p in controller.task(s, job)["policies"].values()
             )
         assert s["candidates"][initial]["spec"]["action_seconds"] == 3
+
+
+def test_explicit_runtime_override_is_scoped_to_new_experiment_tasks(research):
+    r, experiment, controller = research
+    override = str(Path(r.read(experiment)["root"]) / "new-runtime")
+    with r.edit(experiment) as (s, db):
+        s["candidate_runtime_path"] = override
+        branch = next(iter(s["branches"]))
+        cid = s["branches"][branch]["representative"]
+        job = r.queue(
+            s,
+            "match",
+            scope="paired",
+            cycle=s["cycles"][-1]["id"],
+            assignments=[dict(index=0, block=0, focal=0, players=[cid] * 4)],
+            candidate=cid,
+        )
+        policy = s["candidates"][cid]
+        if policy.get("spec") and policy["spec"].get("package_path"):
+            task = controller.task(s, job)
+            assert task["policies"][policy["id"]]["runtime_path"] == override
 
 
 def test_all_failed_branches_use_bootstrap_comparison_and_finish_round(research):

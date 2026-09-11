@@ -40,6 +40,8 @@ COMBINATION 必须保持为精确的组合 ID。无论你替换基线还是包�
 行为；光有名字或字段不能证明它。
 
 build(model_dir) 返回的对象实现 reset(seed)、act(observation)、finish_round(result,seat)。
+候选模块可选声明 `PROCESS_REUSE = False`，表示 reset 无法清空进程级状态；省略时默认为 True，
+框架会在每局之间复用同一进程以摊平启动成本。
 动作必须从 observation.legal_actions 里选。可选的 train(ctx) 在 ctx.output 里生成模型文件。
 每个草稿都必须先真正跑通再提交：调用 research_check_candidate，它会在冻结运行时里导入包、用
 完整能力校验器执行 build，有 train 时再打一场训练。提交会重跑同一套检查；失败的草稿会带着原始

@@ -92,3 +92,36 @@ def test_can_hu_matches_the_reference_shape_test():
         assert fast.can_hu(vector, open_melds) == rules._shape_reference(
             vector, open_melds
         )
+
+
+def test_can_hu_preserves_reference_behavior_for_overfull_invalid_input():
+    hand = (0,) * 5 + (1,) * 3 + (2,) * 3 + (3,) * 3
+    assert rules.can_hu(hand) == rules._shape_reference(
+        tuple(hand.count(tile) for tile in range(34)), 0
+    )
+
+
+def test_numeric_fan_matches_reference_details():
+    rng = random.Random(20260912)
+    for _ in range(20000):
+        open_melds = rng.choice([0, 0, 0, 1, 2, 3])
+        size = 14 - 3 * open_melds
+        hand = random_hand(rng, size, white_bias=0.25)
+        drawn = rng.choice(hand)
+        chain = rng.randint(0, 3)
+        piao = rng.randint(0, 3)
+        you_cai = bool(rng.randint(0, 1))
+        kong_draw = bool(rng.randint(0, 1))
+        expected = rules.calculate_fan(
+            hand, drawn, open_melds, chain, piao, you_cai, kong_draw
+        )
+        actual = fast.fan_value(
+            tuple(hand.count(tile) for tile in range(34)),
+            drawn,
+            open_melds,
+            chain,
+            piao,
+            you_cai,
+            kong_draw,
+        )
+        assert actual == (expected.fan if expected else 0)

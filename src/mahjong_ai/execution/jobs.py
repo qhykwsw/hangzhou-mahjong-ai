@@ -9,7 +9,7 @@ import signal
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from mahjong_ai.execution.candidate_runtime import (
     CandidateProcess,
@@ -60,6 +60,12 @@ def _stats_delta(policy, snapshot):
         for key, value in stats.items()
         if isinstance(value, (int, float))
     }
+
+
+def _build_started_policy(task, key):
+    policy = PolicySpec(**task["policies"][key[0]]).build()
+    policy.start()
+    return policy
 
 
 def frozen_checkpoint(out):
@@ -120,7 +126,7 @@ def prepare(task, root, deadline):
             python, wheels = prepare_environment(
                 item["requirements"], environment, deadline
             )
-            probe = CandidateProcess(source, python)
+            probe = CandidateProcess(source, python, runtime=task.get("runtime_path"))
             try:
                 capabilities = probe.call(
                     {"op": "describe"}, min(10, max(0.01, deadline - time.monotonic()))
@@ -153,6 +159,7 @@ def prepare(task, root, deadline):
                         deadline,
                         python,
                         policy_seed=derive_seed(task["seed"], "policy", cid),
+                        runtime=task.get("runtime_path"),
                     )
                 except (JobCancelled, TimeoutError) as exc:
                     # The deadline ends training but not the version: freeze the
@@ -184,7 +191,7 @@ def prepare(task, root, deadline):
             finalize = (
                 time.monotonic() + 120 if time.time() >= wall_deadline else deadline
             )
-            probe = CandidateProcess(package, python)
+            probe = CandidateProcess(package, python, runtime=task.get("runtime_path"))
             try:
                 probe.call(
                     {
@@ -250,15 +257,26 @@ def play(task, root):
             if missing:
                 # 首次上场要付 sandbox 启动与解释器导入成本，四个进程并行建。
                 with ThreadPoolExecutor(max_workers=len(missing)) as executor:
-                    built = list(
-                        executor.map(
-                            lambda key: PolicySpec(
-                                **task["policies"][key[0]]
-                            ).build(),
-                            missing,
-                        )
-                    )
-                pool.update(zip(missing, built))
+                    futures = {
+                        executor.submit(_build_started_policy, task, key): key
+                        for key in missing
+                    }
+                    built = {}
+                    try:
+                        for future in as_completed(futures):
+                            built[futures[future]] = future.result()
+                    except BaseException:
+                        # A failed parallel startup must not strand the other
+                        # already-started sandboxes before the task fails.
+                        for future in futures:
+                            if future.done() and not future.cancelled():
+                                try:
+                                    policy = future.result()
+                                except BaseException:
+                                    continue
+                                policy.close()
+                        raise
+                pool.update(built)
             players = [pool[key] for key in keys]
             engine.progress = lambda progress: atomic_json(
                 root / "progress.json",
