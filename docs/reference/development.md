@@ -16,7 +16,7 @@
 
 研究入口为 `mahjong`，独立引擎、训练、吞吐测试、导出与平台命令为 `mahjong-ai`。以 `--help` 为准。
 
-策略项目的组织、冻结发布包、跨项目注册和自动研究迁移见[策略项目](projects.md)。默认自动研究根目录是 `projects/agent-research/`；根目录 `.local/` 只作为迁移前回滚备份保留。
+策略项目的组织、冻结发布包和跨项目注册见[策略项目](projects.md)。默认自动研究根目录是 `projects/agent-research/`。
 
 独立 CLI 的 `rule`、`rl` 是基础策略入口；多方向研究的组合基线由 `strategies/catalog.py` 提供。CLI 的基础吞吐测试不替代各研究组合在冻结对手池上的实际训练和评估测量。
 

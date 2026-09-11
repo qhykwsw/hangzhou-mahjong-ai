@@ -9,9 +9,8 @@ import tomllib
 class ProjectDescriptor:
     """The identity and stable storage roots of one strategy project.
 
-    Existing research projects without a manifest remain valid.  The descriptor
-    deliberately keeps their `.local` layout so migration can introduce a
-    manifest before moving any state.
+    Every active project has an explicit manifest. The descriptor owns the
+    project-local `.local` layout used by research and training.
     """
 
     root: Path
@@ -25,7 +24,7 @@ class ProjectDescriptor:
         path = Path(root).resolve()
         manifest = path / "project.toml"
         if not manifest.exists():
-            return cls(path, path.name, "legacy")
+            raise ValueError(f"project manifest not found: {manifest}")
         with manifest.open("rb") as stream:
             data = tomllib.load(stream)
         project = data.get("project", data)

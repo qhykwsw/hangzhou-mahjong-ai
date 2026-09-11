@@ -32,6 +32,6 @@ python3 -m venv .venv
 | 理解领域对象和架构取舍 | [术语表](CONTEXT.md) · [决策记录](docs/adr/) |
 | 查阅官方材料 | [原始资料](docs/sources/README.md) |
 
-自动研究项目的 `projects/agent-research/.local/strategies/`、`projects/agent-research/.local/research/` 和 `projects/agent-research/.local/service/research.sqlite` 需要一并备份。仓库根目录下的同名目录是迁移前的回滚备份，不再作为默认研究运行区。
+自动研究项目的 `projects/agent-research/.local/strategies/`、`projects/agent-research/.local/research/` 和 `projects/agent-research/.local/service/research.sqlite` 需要一并备份。
 
 自动研究迁移后的数据保存在 `projects/agent-research/.local/`；人工维护的 PPO、规则或搜索项目位于 `projects/personal/`，通过 `project.toml` 和冻结发布包接入共享比赛。跨项目注册表位于根目录 `.local/competition/competition.sqlite`。

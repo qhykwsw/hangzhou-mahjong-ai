@@ -28,4 +28,4 @@
   --games 16 --output .local/competition/runs/brawl-01.json
 ```
 
-现有自动研究迁移必须使用受控迁移工具，保持实验、分支、候选、回执和冻结 runtime 的 ID 与内容哈希。迁移前后都要验证保存的路径、包树哈希和恢复能力。
+自动研究数据已经位于 `projects/agent-research/`，实验、分支、候选、回执和冻结 runtime 的 ID 与内容哈希保持不变。后续项目必须从项目清单创建，不再支持无清单的旧布局。

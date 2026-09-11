@@ -40,6 +40,13 @@ def research(tmp_path):
     return start_research(tmp_path)
 
 
+@pytest.fixture(autouse=True)
+def project_manifest(tmp_path):
+    (tmp_path / "project.toml").write_text(
+        '[project]\nid = "test-project"\nfamily = "test"\n'
+    )
+
+
 def start_research(tmp_path, config=None):
     r = Research(tmp_path)
     run = r.create(config or small_config())

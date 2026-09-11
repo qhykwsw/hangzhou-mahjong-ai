@@ -14,10 +14,9 @@ def test_project_descriptor_reads_manifest(tmp_path):
     assert descriptor.research == tmp_path / ".local/research"
 
 
-def test_legacy_project_keeps_local_layout(tmp_path):
-    descriptor = ProjectDescriptor.load(tmp_path)
-    assert descriptor.family == "legacy"
-    assert descriptor.strategies == tmp_path / ".local/strategies"
+def test_project_manifest_is_required(tmp_path):
+    with pytest.raises(ValueError, match="project manifest"):
+        ProjectDescriptor.load(tmp_path)
 
 
 def test_competition_registry_immutable_versions_and_residency(tmp_path):
