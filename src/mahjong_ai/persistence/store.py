@@ -1,15 +1,16 @@
 """Transactional ownership of research state and idempotent job receipts."""
 
 from contextlib import contextmanager
-from pathlib import Path
 import json
 import sqlite3
 import time
+from mahjong_ai.project import ProjectDescriptor
 
 
 class Store:
     def __init__(self, project):
-        self.path = Path(project) / ".local/service/research.sqlite"
+        self.project = ProjectDescriptor.load(project)
+        self.path = self.project.service / "research.sqlite"
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.parent.chmod(0o700)
         with self.connect() as db:

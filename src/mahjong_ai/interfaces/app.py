@@ -307,7 +307,13 @@ def start(project, open_browser=True):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="本地麻将研究控制台")
-    parser.add_argument("--project", default=os.getcwd())
+    default_project = Path.cwd()
+    migrated_agent = default_project / "projects/agent-research"
+    if (migrated_agent / "project.toml").exists() and (
+        migrated_agent / "research.toml"
+    ).exists():
+        default_project = migrated_agent
+    parser.add_argument("--project", default=str(default_project))
     sub = parser.add_subparsers(dest="command", required=True)
     p = sub.add_parser("start")
     p.add_argument("--no-open", action="store_true")

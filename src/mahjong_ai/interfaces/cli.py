@@ -101,6 +101,28 @@ def main(argv=None):
     export.add_argument("--project", default=".")
     export.add_argument("--candidate", required=True)
     export.add_argument("--output", required=True)
+    release = sub.add_parser("release-build", help="build an immutable project release")
+    release.add_argument("--project", required=True)
+    release.add_argument("--version", required=True)
+    release.add_argument("--parent")
+    register = sub.add_parser("competition-register", help="register a frozen release")
+    register.add_argument("bundle")
+    register.add_argument("--root", default=".")
+    register.add_argument("--resident", action="store_true")
+    listed = sub.add_parser("competition-list", help="list registered releases")
+    listed.add_argument("--root", default=".")
+    entrant = sub.add_parser("competition-status", help="change a release status")
+    entrant.add_argument("entrant_id")
+    entrant.add_argument("status", choices=("registered", "paused", "revoked"))
+    entrant.add_argument("--root", default=".")
+    competition = sub.add_parser(
+        "competition-run", help="run an independent four-seat frozen-release brawl"
+    )
+    common(competition)
+    competition.add_argument("--policies", nargs=4, required=True)
+    competition.add_argument("--games", type=int, default=16)
+    competition.add_argument("--output", required=True)
+    competition.add_argument("--check-invariants", action="store_true")
     calibration = sub.add_parser(
         "calibrate", help="compare local fan results with stateless official oracle"
     )
@@ -141,6 +163,88 @@ def main(argv=None):
             json.dumps(
                 export_candidate(args.project, args.candidate, args.output),
                 ensure_ascii=False,
+            )
+        )
+        return 0
+    if args.command == "release-build":
+        from mahjong_ai.competition.releases import build_release
+
+        print(
+            json.dumps(
+                build_release(args.project, args.version, parent=args.parent),
+                ensure_ascii=False,
+            )
+        )
+        return 0
+    if args.command == "competition-register":
+        from mahjong_ai.competition import CompetitionRegistry
+        from mahjong_ai.competition.releases import verify_release
+
+        manifest = verify_release(args.bundle)
+        result = CompetitionRegistry(args.root).register(
+            manifest, args.bundle, resident=args.resident
+        )
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
+    if args.command == "competition-list":
+        from mahjong_ai.competition import CompetitionRegistry
+
+        print(json.dumps(CompetitionRegistry(args.root).list(), ensure_ascii=False))
+        return 0
+    if args.command == "competition-status":
+        from mahjong_ai.competition import CompetitionRegistry
+
+        print(
+            json.dumps(
+                CompetitionRegistry(args.root).set_status(args.entrant_id, args.status),
+                ensure_ascii=False,
+            )
+        )
+        return 0
+    if args.command == "competition-run":
+        if args.games < 4 or args.games % 4:
+            parser.error("competition games must be a positive multiple of four")
+        from mahjong_ai.competition.releases import load_policy
+        from mahjong_ai.evaluation.schedule import schedule, standings
+
+        specs = {str(i): load_policy(value) for i, value in enumerate(args.policies)}
+        assignments = schedule(list(specs), args.games, args.seed)
+        receipts = []
+        for assignment in assignments:
+            players = [specs[p].build() for p in assignment["players"]]
+            result = MahjongEngine(check_invariants=args.check_invariants).run_round(
+                players, config(args), args.seed + assignment["index"]
+            )
+            receipts.append(
+                {
+                    "index": assignment["index"],
+                    "players": assignment["players"],
+                    "ranks": list(result.rank_by_seat),
+                    "completed": result.completed,
+                    "scores": list(result.total_score_by_seat),
+                    "result": result.as_dict(),
+                }
+            )
+        atomic_json(
+            args.output,
+            {
+                "kind": "independent-competition",
+                "policies": args.policies,
+                "games": args.games,
+                "receipts": receipts,
+                "standings": standings(
+                    list(specs),
+                    [
+                        {"players": r["players"], "ranks": r["ranks"]}
+                        for r in receipts
+                        if r["completed"]
+                    ],
+                ),
+            },
+        )
+        print(
+            json.dumps(
+                {"output": args.output, "games": len(receipts)}, ensure_ascii=False
             )
         )
         return 0

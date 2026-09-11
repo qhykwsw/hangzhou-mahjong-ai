@@ -174,8 +174,7 @@ class Controller:
                     ).tree_hash(source),
                     requirements=c["requirements"],
                     output=str(
-                        self.research.project
-                        / ".local/strategies"
+                        self.research.layout.strategies
                         / c["combination"]
                         / (c["branch"] or "baseline")
                         / "versions"

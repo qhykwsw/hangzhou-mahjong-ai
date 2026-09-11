@@ -8,6 +8,7 @@ import secrets
 import shutil
 import time
 from mahjong_ai.persistence.store import Store
+from mahjong_ai.project import ProjectDescriptor
 from mahjong_ai.persistence.artifacts import (
     atomic_json,
     digest,
@@ -25,9 +26,21 @@ from mahjong_ai.research.config import (
 from mahjong_ai.evaluation.schedule import schedule, reference_groups, group_uncertainty
 
 
+def _competition_registry(research):
+    """Return the shared registry, when this checkout provides one."""
+    try:
+        from mahjong_ai.competition.registry import CompetitionRegistry
+
+        root = getattr(research.layout, "workspace", None) or research.project.parent
+        return CompetitionRegistry(root)
+    except (ImportError, AttributeError):
+        return None
+
+
 class Research:
     def __init__(self, project):
         self.project = Path(project).resolve()
+        self.layout = ProjectDescriptor.load(self.project)
         self.store = Store(self.project)
 
     def read(self, experiment=None):
@@ -52,7 +65,7 @@ class Research:
 
     def freeze_runtime(self):
         fingerprint = runtime_fingerprint()
-        runtime = self.project / ".local/research/runtimes" / fingerprint
+        runtime = self.layout.research / "runtimes" / fingerprint
         if not runtime.exists():
             temporary = runtime.with_name(fingerprint + "." + secrets.token_hex(5))
             shutil.copytree(
@@ -73,12 +86,10 @@ class Research:
         """Register configured combinations without starting agents or model training."""
         from mahjong_ai.persistence.artifacts import exclusive_lock
 
-        with exclusive_lock(
-            self.project / ".local/service/registry.lock", blocking=True
-        ):
+        with exclusive_lock(self.layout.service / "registry.lock", blocking=True):
             config = configuration(self.project, overrides)
             if self.store.read() is None:
-                root = self.project / ".local/research"
+                root = self.layout.research
                 root.mkdir(parents=True, exist_ok=True, mode=0o700)
                 (root / "reports").mkdir(exist_ok=True)
                 (root / "private").mkdir(exist_ok=True, mode=0o700)
@@ -121,7 +132,7 @@ class Research:
                     for style in ("conservative", "balanced", "adventurous"):
                         key = "heuristic-" + style
                         cid = "bootstrap--" + style
-                        folder = self.project / ".local/strategies" / key / "bootstrap"
+                        folder = self.layout.strategies / key / "bootstrap"
                         folder.mkdir(parents=True, exist_ok=True)
                         (folder / "strategy.py").write_text(baseline_source(key))
                         from mahjong_ai.strategies.common import PolicySpec
@@ -147,6 +158,53 @@ class Research:
                         )
                         state["bootstrap"].append(cid)
         return self.read()
+
+    def sync_resident_releases(self, s):
+        """Mirror active resident releases as read-only external candidates.
+
+        The candidate snapshot is updated only at a research boundary; cycles
+        retain their own reference list, so a release removed mid-round still
+        completes the round it entered.
+        """
+        registry = _competition_registry(self)
+        if registry is None:
+            return []
+        try:
+            releases = registry.list(active_only=True, resident_only=True)
+        except Exception:
+            return []
+        active = []
+        for release in releases:
+            cid = "external--" + release["entrant_id"]
+            try:
+                from mahjong_ai.competition.releases import load_policy, verify_release
+
+                verify_release(release["bundle_path"])
+                spec = load_policy(release["bundle_path"])
+                spec = spec.as_dict() if hasattr(spec, "as_dict") else dict(spec)
+            except (ImportError, OSError, ValueError, KeyError):
+                continue
+            spec["version"] = cid
+            metadata = release.get("metadata") or {}
+            row = s["candidates"].get(cid, {})
+            row.update(
+                id=cid,
+                branch=None,
+                external=True,
+                entrant_id=release["entrant_id"],
+                project_id=release["project_id"],
+                combination=metadata.get("combination", "external"),
+                status="resident",
+                iterable=False,
+                workspace=release["bundle_path"],
+                spec=spec,
+                requirements=[],
+                runtime_path=s["runtime_path"],
+                metadata=metadata,
+            )
+            s["candidates"][cid] = row
+            active.append(cid)
+        return active
 
     def add_combination(self, s, combination, models):
         key = combination["id"]
@@ -237,7 +295,9 @@ class Research:
                 if (
                     not c
                     or not c.get("spec")
-                    or (c["branch"] and not s["branches"][c["branch"]]["successful"])
+                    or (
+                        c.get("branch") and not s["branches"][c["branch"]]["successful"]
+                    )
                 ):
                     raise ValueError("对手必须是已完成有效评估分支的准备就绪版本")
                 if self.eligible(s) and cid in s["bootstrap"]:
@@ -278,7 +338,7 @@ class Research:
                     continue
                 combination = s["definitions"][key]
                 cid = "baseline--" + key
-                package = self.project / ".local/strategies" / key / "baseline/source"
+                package = self.layout.strategies / key / "baseline/source"
                 package.mkdir(parents=True, exist_ok=True)
                 (package / "strategy.py").write_text(
                     baseline_source(
@@ -326,9 +386,10 @@ class Research:
         ]
 
     def default_opponents(self, s, limit):
+        residents = self.sync_resident_releases(s)
         eligible = {b["id"]: b for b in self.eligible(s)}
         if not eligible:
-            return list(s["bootstrap"])
+            return residents + list(s["bootstrap"])
         ranked = [
             r["candidate_id"] for r in s["last_ranking"] if r["branch"] in eligible
         ]
@@ -337,7 +398,9 @@ class Research:
             for bid, b in sorted(eligible.items())
             if bid not in {r["branch"] for r in s["last_ranking"]}
         ]
-        return ranked[:limit]
+        # Residents are permanent comparison objects and do not get displaced
+        # by the automatic top-K pool.
+        return ranked[:limit] + [cid for cid in residents if cid not in ranked[:limit]]
 
     @staticmethod
     def queue(s, kind, **fields):
@@ -569,14 +632,7 @@ class Research:
             source = (
                 previous.get("spec", {}).get("package_path") or previous["workspace"]
             )
-            dest = (
-                self.project
-                / ".local/strategies"
-                / b["combination"]
-                / branch
-                / "drafts"
-                / name
-            )
+            dest = self.layout.strategies / b["combination"] / branch / "drafts" / name
             shutil.copytree(source, dest, ignore=shutil.ignore_patterns("__pycache__"))
             if previous["status"] == "failed":
                 for job in reversed(list(s["jobs"].values())):
@@ -695,8 +751,8 @@ class Research:
             python = sys.executable
             if requirements:
                 environment = (
-                    self.project
-                    / ".local/research/environments"
+                    self.layout.research
+                    / "environments"
                     / digest([sorted(requirements), sys.version, np.__version__])
                 )
                 python, _ = prepare_environment(requirements, environment, deadline)
@@ -825,8 +881,7 @@ class Research:
             if type(games) is not int or not 0 <= games <= 1000000:
                 raise ValueError("训练场数不合法")
             root = (
-                self.project
-                / ".local/strategies"
+                self.layout.strategies
                 / s["branches"][branch]["combination"]
                 / branch
                 / "submissions"
@@ -880,13 +935,7 @@ class Research:
             if base["status"] != "ready":
                 continue
             cid = b["id"] + "--initial"
-            dest = (
-                self.project
-                / ".local/strategies"
-                / b["combination"]
-                / b["id"]
-                / "initial"
-            )
+            dest = self.layout.strategies / b["combination"] / b["id"] / "initial"
             if not dest.exists():
                 shutil.copytree(base["spec"]["package_path"], dest)
             spec = {**base["spec"], "package_path": str(dest), "version": cid}
@@ -914,6 +963,7 @@ class Research:
         if any(not b["representative"] for b in selected):
             s["phase"] = "initializing"
             return
+        self.sync_resident_releases(s)
         number = len(s["cycles"]) + 1
         pool = (
             experiment["initial_opponents"]
@@ -1044,6 +1094,17 @@ class Research:
                     )
                     for b in self.eligible(s)
                 }
+                for cid in self.sync_resident_releases(s):
+                    c = s["candidates"][cid]
+                    cycle["roster"][cid] = dict(
+                        candidate_id=cid,
+                        entrant_id=c.get("entrant_id"),
+                        combination=c.get("combination", "external"),
+                        model="external",
+                        effort="external",
+                        external=True,
+                        iterable=False,
+                    )
                 roster = [b["candidate_id"] for b in cycle["roster"].values()]
                 for cid in s["bootstrap"]:
                     if len(roster) >= 4:
@@ -1312,7 +1373,10 @@ class Research:
                         **r,
                         **group_uncertainty(groups[cid]),
                         candidate_id=cid,
-                        branch=bid,
+                        branch=None if b.get("external") else bid,
+                        entrant_id=b.get("entrant_id"),
+                        external=bool(b.get("external")),
+                        iterable=bool(b.get("iterable", not b.get("external"))),
                         combination=b["combination"],
                         model=b["model"],
                         effort=b["effort"],
@@ -1320,7 +1384,12 @@ class Research:
                     )
                 )
         return sorted(
-            result, key=lambda r: (-r["mean_utility"], -r["appearances"], r["branch"])
+            result,
+            key=lambda r: (
+                -r["mean_utility"],
+                -r["appearances"],
+                r.get("branch") or r.get("entrant_id") or r["candidate_id"],
+            ),
         )
 
     @staticmethod
