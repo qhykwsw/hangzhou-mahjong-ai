@@ -107,6 +107,7 @@ class Research:
                         status="idle",
                         phase="idle",
                         pause_reason="",
+                        pause_after_round=False,
                         created_at=time.time(),
                         config=config,
                         revisions=[],
@@ -428,6 +429,13 @@ class Research:
                     status="pausing" if s["status"] == "running" else "paused",
                     pause_reason="user paused",
                 )
+                s["pause_after_round"] = False
+            elif action == "pause_after_round":
+                if s["phase"] == "closed":
+                    raise ValueError("已关闭的实验不能安排轮末暂停")
+                if s["status"] != "running":
+                    raise ValueError("只有运行中的实验可以安排轮末暂停")
+                s["pause_after_round"] = not s.get("pause_after_round", False)
             elif action == "resume":
                 if s["status"] == "pausing":
                     raise ValueError("请等待暂停完成")
@@ -1171,6 +1179,15 @@ class Research:
             self.event(
                 db, s, "round_completed", {"round": cycle["number"], "ranking": table}
             )
+            # 轮末暂停：本轮结果落盘后再停，不在下一轮调度任何任务。
+            if s.get("pause_after_round"):
+                s.update(
+                    status="paused",
+                    pause_reason="本轮结束后暂停",
+                    pause_after_round=False,
+                )
+                s["experiments"][-1]["status"] = "paused"
+                return
             self.begin_cycle(s, db)
 
     def complete_iteration(self, s, db, it, error=None, cancelled=False):
@@ -1647,7 +1664,12 @@ class Research:
                     for k, v in current.items()
                     if k not in ("runtime_path", "config", "runtime")
                 }
-                | {k: s[k] for k in ("status", "phase", "pause_reason")}
+                | {
+                    "status": s["status"],
+                    "phase": s["phase"],
+                    "pause_reason": s["pause_reason"],
+                    "pause_after_round": s.get("pause_after_round", False),
+                }
             )
             if current
             else None

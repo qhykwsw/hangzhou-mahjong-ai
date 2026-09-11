@@ -468,6 +468,10 @@ function render() {
     experiment?.phase === "competing",
   );
   $("pause").disabled = experiment?.status !== "running";
+  $("pauseAfterRound").disabled = experiment?.status !== "running";
+  $("pauseAfterRound").textContent = experiment?.pause_after_round
+    ? "本轮后暂停 ✓"
+    : "本轮后暂停";
   $("resume").disabled =
     !experiment ||
     experiment.status !== "paused" ||
@@ -563,6 +567,7 @@ $("experimentForm").onsubmit = async (event) => {
 };
 for (const [id, action] of [
   ["pause", "pause"],
+  ["pauseAfterRound", "pause_after_round"],
   ["resume", "resume"],
   ["extend", "extend"],
   ["closeExperiment", "close"],

@@ -866,6 +866,44 @@ def test_selective_iterations_all_eligible_compete_and_top_k_automatically_refre
     assert len(s["last_ranking"]) == 2
 
 
+def test_pause_after_round_stops_at_the_boundary(research):
+    r, experiment, controller = research
+    ids = list(r.read(experiment)["branches"])
+    with r.edit(experiment) as (s, db):
+        s["branches"][ids[1]]["successful"] = 1
+        s["branches"][ids[1]]["completed"] = 1
+    r.control(experiment, "pause")
+    controller.tick()
+    r.control(experiment, "close")
+    config = small_config() | {"total_rounds": 2, "opponent_limit": 1}
+    experiment = r.create(config, targets=[ids[0]], opponents=[ids[1] + "--initial"])
+    r.control(experiment, "resume")
+    r.control(experiment, "pause_after_round")
+    assert r.read(experiment)["pause_after_round"] is True
+    r.control(experiment, "pause_after_round")
+    assert r.read(experiment)["pause_after_round"] is False
+    r.control(experiment, "pause_after_round")
+    with r.edit(experiment) as (s, db):
+        r.advance(s, db)
+        assert s["cycles"][-1]["number"] == 1
+    finish_branch_with_receipts(r, experiment, controller, ids[0], "first")
+    finish_comparison(r, experiment)
+    s = r.read(experiment)
+    assert s["status"] == "paused" and s["phase"] == "boundary"
+    assert s["pause_reason"] == "本轮结束后暂停"
+    assert s["pause_after_round"] is False
+    assert s["experiments"][-1]["completed_rounds"] == 1
+    assert [c["number"] for c in s["cycles"] if c["experiment"] == experiment] == [1]
+    assert r.snapshot(experiment)["experiment"]["pause_after_round"] is False
+    # 继续后才开始下一轮，并且不会再次自动暂停。
+    r.control(experiment, "resume")
+    with r.edit(experiment) as (s, db):
+        r.advance(s, db)
+    s = r.read(experiment)
+    assert s["status"] == "running" and s["phase"] == "researching"
+    assert s["cycles"][-1]["number"] == 2
+
+
 def test_new_experiment_preserves_branch_history_and_rejects_old_sessions(research):
     r, experiment, controller = research
     branch = next(iter(r.read(experiment)["branches"]))
