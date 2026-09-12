@@ -89,7 +89,10 @@ class Controller:
             ) or (str(root) in command and "mahjong_ai." in command):
                 try:
                     os.killpg(pid, signal.SIGKILL if force else signal.SIGTERM)
-                except ProcessLookupError:
+                except (ProcessLookupError, PermissionError):
+                    # A worker can outlive the service user/session boundary;
+                    # the cancel flag is still durable, so keep the controller
+                    # loop alive and let the process watchdog reap it later.
                     pass
 
     def consume(self, s, db):
@@ -121,7 +124,20 @@ class Controller:
                 j["spent"] += elapsed
                 if j.get("iteration") and j["kind"] in ("agent", "prepare"):
                     s["iterations"][j["iteration"]]["spent"] += elapsed
-            self.research.accept(s, db, j, result)
+            try:
+                self.research.accept(s, db, j, result)
+            except ValueError as exc:
+                if "不可变回执发生变化" not in str(exc):
+                    raise
+                # Keep the first immutable receipt and quarantine a changed
+                # duplicate instead of crashing the whole service loop.
+                j.update(status="failed", error="回执冲突：" + str(exc))
+                self.research.event(
+                    db,
+                    s,
+                    "receipt_conflict",
+                    {"job": j["id"], "attempt": j.get("attempt", 0)},
+                )
 
     def task(self, s, j):
         root = Path(s["root"])
