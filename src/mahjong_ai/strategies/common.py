@@ -127,8 +127,10 @@ def action_summary(obs: Observation, action: Action):
     return before, after, piao
 
 
-def action_features(obs: Observation, action: Action):
+def action_features(obs: Observation, action: Action, risk=None):
     before, after, piao = action_summary(obs, action)
+    if risk is None:
+        risk = risk_preference(obs)
     f = [float(action.action == a) for a in ACTIONS]
     f.extend(float(action.tile == t) for t in range(34))
     f.extend(float(action.kind == k) for k in ("concealed", "exposed", "added"))
@@ -138,11 +140,11 @@ def action_features(obs: Observation, action: Action):
             (after - before) / 10,
             float(piao),
             float(action.tile == WHITE),
-            risk_preference(obs),
+            risk,
             obs.stage.progress * float(piao),
-            risk_preference(obs) * float(piao),
-            risk_preference(obs) * float(action.action == "hu"),
-            risk_preference(obs) * float(action.action == "gang"),
+            risk * float(piao),
+            risk * float(action.action == "hu"),
+            risk * float(action.action == "gang"),
         )
     )
     return np.asarray(f, dtype=np.float64)
@@ -151,8 +153,12 @@ def action_features(obs: Observation, action: Action):
 def feature_matrix(obs: Observation):
     s = state_features(obs)
     ranks = np.asarray([(r - 1) / 3 for r in observed_ranks(obs)])
+    risk = risk_preference(obs)
     return np.asarray(
-        [np.concatenate((s, action_features(obs, a), ranks)) for a in obs.legal_actions]
+        [
+            np.concatenate((s, action_features(obs, a, risk), ranks))
+            for a in obs.legal_actions
+        ]
     )
 
 
