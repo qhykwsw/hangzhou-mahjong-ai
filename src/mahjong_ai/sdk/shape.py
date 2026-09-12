@@ -132,13 +132,12 @@ def analyze(hand, open_melds=0, remaining=None, chain=0, piao=0, you_cai_bi_kao=
             if raw >= 0:
                 distance = raw
                 improving = list(fast_improving)
-                # 只有能和的牌才需要算番：shanten == -1 与 can_hu 等价（含白板补位），
-                # 逐张算番会把 can_hu 的递归分解放大成 34 倍的主要开销。
-                candidates = [
-                    tile
-                    for tile in negatives
-                    if can_hu(tuple(sorted((*hand, tile))), open_melds)
-                ]
+                # For a physically valid draw (every count <= 4), a
+                # negative raw shanten is exactly a winning shape. The C
+                # routine already excludes unavailable and fifth-copy
+                # draws, so crossing back into Python can_hu here only
+                # repeats the same shape proof for every candidate.
+                candidates = list(negatives)
                 if distance == 0:
                     # 未通过胡牌边界的摸牌，其受保护的距离是 0 而不是负数，
                     # 听牌手上这些摸牌不是进张。
