@@ -71,6 +71,51 @@ def test_competition_accumulates_blocks_without_changing_mean_ranking():
         Research.competition_table(state, cycle)
 
 
+def test_competition_accepts_a_chunked_job_with_block_readouts():
+    def summary(cid, utility):
+        return dict(
+            candidate_id=cid,
+            appearances=8,
+            utility_sum=utility * 8,
+            hand_appearances=16,
+            hand_utility_sum=utility * 16,
+            hand_score_sum=0.0,
+            hand_mean_utility=utility,
+            hand_mean_score=0.0,
+            group_means=[utility - 1, utility + 1],
+            hand_group_means=[utility, utility],
+            score_group_means=[0.0, 0.0],
+            errors=0,
+            timeouts=0,
+            fallback_actions=0,
+        )
+
+    cycle = {
+        "id": 1,
+        "roster": {
+            bid: dict(
+                candidate_id=bid, combination="test", model="astra", effort="medium"
+            )
+            for bid in ("variable", "steady")
+        },
+    }
+    state = {
+        "jobs": {
+            "chunk": dict(
+                scope="competition",
+                cycle=1,
+                status="completed",
+                summary=[summary("variable", 1.5), summary("steady", 1.0)],
+            )
+        }
+    }
+    table = Research.competition_table(state, cycle)
+    assert [r["branch"] for r in table] == ["variable", "steady"]
+    assert table[0]["appearances"] == 8
+    assert table[0]["evaluation_groups"] == 2
+    assert table[0]["standard_error"] == 1.0
+
+
 def test_resumed_paired_evaluation_uses_focal_seat_and_rotation_groups(tmp_path):
     assignments = []
     for block, rank in enumerate((1, 4)):
@@ -157,6 +202,22 @@ def test_paired_evaluation_reports_hand_level_readout(tmp_path):
     assert focal["hand_group_means"] == [1.5, 1.5]
     assert focal["score_group_means"] == [0.0, 0.0]
     assert focal["group_blocks"] == [0, 1]
+
+
+def test_play_preserves_block_readouts_for_chunked_competition_jobs(tmp_path):
+    assignments = []
+    for block, rank in enumerate((1, 4)):
+        for seat in range(4):
+            index = len(assignments)
+            assignments.append(dict(index=index, block=block, players=["same"] * 4))
+            atomic_json(
+                tmp_path / "matches" / f"{index:06d}.json",
+                {"players": ["same"] * 4, "ranks": [rank] * 4},
+            )
+    result = play({"assignments": assignments, "policies": {"same": {}}}, tmp_path)
+    row = result["summary"][0]
+    assert row["appearances"] == 32
+    assert row["group_means"] == [3.0, 0.0]
 
 
 def test_competition_ranks_by_field_metric_and_keeps_hand_readout():

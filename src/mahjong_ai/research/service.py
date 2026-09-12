@@ -32,6 +32,21 @@ from mahjong_ai.evaluation.schedule import (
 )
 
 
+COMPETITION_BLOCKS_PER_JOB = 16
+
+
+def evaluation_shard_count(config, group_count, candidate_count):
+    """Choose deterministic shard count without leaving match workers idle."""
+    if group_count < 1 or candidate_count < 1:
+        raise ValueError("evaluation groups and candidates must be positive")
+    configured = max(1, min(int(config["evaluation_shards"]), group_count))
+    target = min(
+        group_count,
+        -(-int(config["match_workers"]) // candidate_count),
+    )
+    return max(configured, target)
+
+
 def _competition_registry(research):
     """Return the shared registry, when this checkout provides one."""
     try:
@@ -1281,13 +1296,14 @@ class Research:
                 assignments = schedule(
                     roster, matches, digest([key, "competition", cycle["id"]])
                 )
-                for block in range(0, len(assignments), 4):
+                chunk = 4 * COMPETITION_BLOCKS_PER_JOB
+                for block in range(0, len(assignments), chunk):
                     self.queue(
                         s,
                         "match",
                         scope="competition",
                         cycle=cycle["id"],
-                        assignments=assignments[block : block + 4],
+                        assignments=assignments[block : block + chunk],
                     )
                 self.event(
                     db,
@@ -1464,10 +1480,15 @@ class Research:
                 )
                 # 一次评估按四座轮换组切成若干分片任务并行跑；对手、种子与
                 # 计分口径都由 block 决定，分片不改变任何一局。
-                shards = max(
-                    1, min(int(cycle["config"]["evaluation_shards"]), len(groups))
+                candidates = [it["incumbent"], *ready]
+                # Do not leave match workers idle when a small candidate batch
+                # would otherwise create fewer tasks than the configured pool.
+                # Blocks and seeds remain unchanged, so this only changes task
+                # boundaries and is still reproducible.
+                shards = evaluation_shard_count(
+                    cycle["config"], len(groups), len(candidates)
                 )
-                for cid in [it["incumbent"], *ready]:
+                for cid in candidates:
                     blocks = []
                     for block, opponents in enumerate(groups):
                         seats = []
@@ -1605,12 +1626,24 @@ class Research:
                 continue
             for r in j.get("summary", []):
                 # A competition job is exactly one complete four-seat block.
-                if r["appearances"] != 4:
-                    raise ValueError("共同竞技回执必须是完整的四座轮换组")
-                groups.setdefault(r["candidate_id"], []).append(r["utility_sum"] / 4)
+                field_groups = r.get("group_means")
+                if not field_groups:
+                    if r["appearances"] != 4:
+                        raise ValueError("共同竞技回执必须是完整的四座轮换组")
+                    field_groups = [r["utility_sum"] / 4]
+                groups.setdefault(r["candidate_id"], []).extend(field_groups)
                 hand_mean = r.get("hand_mean_utility")
                 score_mean = r.get("hand_mean_score")
-                if hand_mean is not None:
+                hand_group_means = r.get("hand_group_means")
+                score_group_means = r.get("score_group_means")
+                if hand_group_means:
+                    hand_groups.setdefault(r["candidate_id"], []).extend(
+                        hand_group_means
+                    )
+                    score_groups.setdefault(r["candidate_id"], []).extend(
+                        score_group_means
+                    )
+                elif hand_mean is not None:
                     hand_groups.setdefault(r["candidate_id"], []).append(hand_mean)
                     score_groups.setdefault(r["candidate_id"], []).append(score_mean)
                 dst = rows.setdefault(

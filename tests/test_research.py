@@ -3,6 +3,7 @@ import time
 import pytest
 from starlette.testclient import TestClient
 from mahjong_ai.research.service import Research
+from mahjong_ai.research.service import evaluation_shard_count
 from mahjong_ai.research.config import COMBINATIONS, configuration
 from mahjong_ai.evaluation.schedule import (
     schedule,
@@ -89,6 +90,13 @@ def test_defaults_and_model_validation(tmp_path):
         configuration(tmp_path, {"evaluation_games": 5})
     with pytest.raises(ValueError, match="training_caps"):
         configuration(tmp_path, {"training_caps": {"heuristic": -1}})
+
+
+def test_evaluation_shards_fill_workers_for_small_candidate_batches():
+    config = {"evaluation_shards": 4, "match_workers": 12}
+    assert evaluation_shard_count(config, group_count=32, candidate_count=2) == 6
+    assert evaluation_shard_count(config, group_count=32, candidate_count=4) == 4
+    assert evaluation_shard_count(config, group_count=2, candidate_count=4) == 2
 
 
 def test_job_receipts_are_immutable_per_execution_attempt(tmp_path):

@@ -62,9 +62,56 @@ def _stats_delta(policy, snapshot):
     }
 
 
+def _attach_group_readouts(summary, assignments, receipts):
+    """Preserve four-seat block means when several blocks share one job."""
+    groups = {}
+    for assignment, receipt in zip(assignments, receipts):
+        block = assignment.get("block")
+        if block is None:
+            continue
+        hands = [tuple(delta) for delta in receipt.get("hand_deltas") or ()]
+        hand_ranks = [score_ranks(delta) for delta in hands]
+        for seat, candidate in enumerate(receipt["players"]):
+            row = groups.setdefault(candidate, {}).setdefault(
+                block,
+                {
+                    "field_sum": 0.0,
+                    "field_count": 0,
+                    "hand_sum": 0.0,
+                    "hand_count": 0,
+                    "score_sum": 0.0,
+                },
+            )
+            row["field_sum"] += 4 - receipt["ranks"][seat]
+            row["field_count"] += 1
+            for delta, ranks in zip(hands, hand_ranks):
+                row["hand_sum"] += 4 - ranks[seat]
+                row["hand_count"] += 1
+                row["score_sum"] += delta[seat]
+    for row in summary:
+        blocks = groups.get(row["candidate_id"], {})
+        row["group_means"] = [
+            values["field_sum"] / values["field_count"]
+            for _, values in sorted(blocks.items())
+            if values["field_count"]
+        ]
+        row["hand_group_means"] = [
+            values["hand_sum"] / values["hand_count"]
+            for _, values in sorted(blocks.items())
+            if values["hand_count"]
+        ]
+        row["score_group_means"] = [
+            values["score_sum"] / values["hand_count"]
+            for _, values in sorted(blocks.items())
+            if values["hand_count"]
+        ]
+
+
 def _build_started_policy(task, key):
     policy = PolicySpec(**task["policies"][key[0]]).build()
-    policy.start()
+    # Built-in rule/RL policies run in the host and have no sandbox startup.
+    if hasattr(policy, "start"):
+        policy.start()
     return policy
 
 
@@ -323,6 +370,7 @@ def play(task, root):
             list(executor.map(lambda policy: policy.close(), pool.values()))
     roster = list(task["policies"])
     summary = standings(roster, receipts)
+    _attach_group_readouts(summary, task["assignments"], receipts)
     result = {"status": "completed", "summary": summary, "matches": len(receipts)}
     if task.get("candidate"):
         focal_receipts = [
