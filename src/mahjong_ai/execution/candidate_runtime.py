@@ -17,6 +17,7 @@ from pathlib import Path
 
 from mahjong_ai.persistence.artifacts import atomic_json, digest, file_hash, read_json
 from mahjong_ai.domain.types import RoundResult
+from mahjong_ai.execution.process_usage import memory_kb
 
 
 class JobCancelled(InterruptedError):
@@ -101,22 +102,7 @@ def _memory_watch_loop():
                 global _MEMORY_THREAD
                 _MEMORY_THREAD = None
                 return
-        rows = subprocess.run(
-            [
-                "/bin/ps",
-                "-o",
-                "pid=,rss=",
-                "-p",
-                ",".join(str(pid) for pid in sorted(targets)),
-            ],
-            capture_output=True,
-            text=True,
-        ).stdout.split("\n")
-        usage = {}
-        for row in rows:
-            fields = row.split()
-            if len(fields) == 2 and fields[0].isdigit() and fields[1].isdigit():
-                usage[int(fields[0])] = int(fields[1])
+        usage = memory_kb(sorted(targets))
         for pid, (owner, limit, process) in targets.items():
             rss = usage.get(pid)
             if rss is None:
@@ -147,9 +133,15 @@ def tree_hash(root):
 
 
 def sandbox_command(argv, readable, writable, *, no_fork=True, network=False):
-    """macOS seatbelt is an enforced allowlist, not a prompt-based restriction."""
+    """Enforce equivalent candidate boundaries with the host OS sandbox."""
+    if sys.platform == "linux":
+        from mahjong_ai.execution.linux_sandbox import command
+
+        return command(argv, readable, writable, no_fork=no_fork, network=network)
     if sys.platform != "darwin" or not shutil.which("sandbox-exec"):
-        raise RuntimeError("隔离候选进程需要 macOS sandbox-exec，没有不安全的降级路径")
+        raise RuntimeError(
+            "隔离候选进程需要 macOS sandbox-exec 或 Linux/WSL bubblewrap"
+        )
 
     def sub(path):
         return "(subpath " + json.dumps(str(Path(path).resolve())) + ")"
@@ -186,6 +178,14 @@ def sandbox_command(argv, readable, writable, *, no_fork=True, network=False):
         profile += "(deny process-fork)"
     # No network, no host home, no experiment files, no inherited secrets.
     return ["/usr/bin/sandbox-exec", "-p", profile, *argv]
+
+
+def sandbox_popen(argv, **kwargs):
+    if sys.platform == "linux":
+        from mahjong_ai.execution.linux_sandbox import spawn
+
+        return spawn(argv, **kwargs)
+    return subprocess.Popen(argv, **kwargs)
 
 
 def public_result(result):
@@ -240,7 +240,7 @@ class CandidateProcess:
             "TMPDIR": self.temp.name,
             "HOME": self.temp.name,
         }
-        self.process = subprocess.Popen(
+        self.process = sandbox_popen(
             sandbox_command(argv, readable, [self.temp.name, self.output]),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,

@@ -4,7 +4,11 @@
 
 ## 启动
 
-需要 macOS、Python 3.12+、已登录的 Codex CLI。LightGBM 需要本机 OpenMP 库，可通过 `brew install libomp` 安装。
+支持 macOS 和启用 systemd 的 Linux/WSL2，需要 Python 3.12+、已登录的 Codex CLI。
+
+- macOS 使用系统自带的 launchd 和 sandbox-exec；LightGBM 的 OpenMP 库可通过 `brew install libomp` 安装。
+- Ubuntu/WSL2 安装运行依赖：`sudo apt-get install bubblewrap libseccomp2 libgomp1 build-essential`。`systemctl --user show-environment` 应能正常执行；WSL 的 systemd 设置见[研究手册](docs/reference/strategy-agent.md)。
+- 不复制其他机器的虚拟环境或编译产物；在当前机器安装依赖并构建 C 加速器。
 
 ```bash
 python3 -m venv .venv
@@ -12,7 +16,11 @@ python3 -m venv .venv
 .venv/bin/mahjong start
 ```
 
-启动打开研究控制台。对比对象由上一轮大乱斗前 K 名自动生成；在卡片列表勾选本轮要迭代的分支，设置研究总轮数、每轮分支迭代次数与并发后开始。当前自动研究项目的配置在 [projects/agent-research/research.toml](projects/agent-research/research.toml)，注册四种启发式组合各两条 DeepSeek 分支（共八条），共 20 轮、每轮每支 5 次迭代，单次评估默认 128 场、分四片并行。每轮结束后统一对比并更新前四名对手池，完整操作见[研究手册](docs/reference/strategy-agent.md)。
+如果系统的 `python3` 低于 3.12，可用 `uv venv --python 3.12 --seed .venv` 创建环境，再执行上述安装命令。
+
+启动打开研究控制台，不自动运行实验。仓库只保存源码和配置，不附带历史实验、训练模型或发布版本。当前配置使用 DeepSeek，开始研究前需在 `CODEX_HOME`（默认 `~/.codex`）配置 `netease-deepseek-flash.config.toml`；仅启动控制台不需要这个配置。
+
+当前项目注册四种启发式组合各两条 DeepSeek 分支。在卡片列表勾选要迭代的分支后开始；每轮先配对选优，再由全体代表大乱斗产生下一轮对手池。具体轮数、场数和并发以 [research.toml](projects/agent-research/research.toml) 与网页创建实验时的设置为准，完整操作见[研究手册](docs/reference/strategy-agent.md)。
 
 ```bash
 .venv/bin/mahjong status
@@ -20,7 +28,7 @@ python3 -m venv .venv
 .venv/bin/mahjong-ai play --rounds 8 --check-invariants
 ```
 
-关闭终端后后台继续运行；停止服务或重启电脑后，重新启动并在网页继续。当前自动研究项目位于 `projects/agent-research/`，`mahjong start` 会在仓库根目录自动选择它；也可以显式传入 `--project projects/agent-research`。SSH 启动输出本机与已连接的 Tailscale 地址，不打开远端电脑浏览器。
+服务独立于启动终端运行；WSL 实例本身必须保持运行，`wsl --shutdown`、Windows 重启或实例退出都会停止服务。停止服务或重启电脑后，重新启动并在网页继续。当前自动研究项目位于 `projects/agent-research/`，`mahjong start` 会在仓库根目录自动选择它；也可以显式传入 `--project projects/agent-research`。SSH 启动输出本机与已连接的 Tailscale 地址，不打开远端电脑浏览器；WSL 优先用 `wslview` 打开 Windows 默认浏览器，没有浏览器时仍输出访问地址。
 
 ## 入口
 
@@ -32,6 +40,4 @@ python3 -m venv .venv
 | 理解领域对象和架构取舍 | [术语表](CONTEXT.md) · [决策记录](docs/adr/) |
 | 查阅官方材料 | [原始资料](docs/sources/README.md) |
 
-自动研究项目的 `projects/agent-research/.local/strategies/`、`projects/agent-research/.local/research/` 和 `projects/agent-research/.local/service/research.sqlite` 需要一并备份。
-
-自动研究迁移后的数据保存在 `projects/agent-research/.local/`；人工维护的 PPO、规则或搜索项目位于 `projects/personal/`，通过 `project.toml` 和冻结发布包接入共享比赛。跨项目注册表位于根目录 `.local/competition/competition.sqlite`。
+自动研究的数据与备份边界见[研究手册](docs/reference/strategy-agent.md#目录备份与导出)；人工项目与跨项目比赛见[策略项目](docs/reference/projects.md)。运行数据不进入 Git，提交源码不能代替备份。

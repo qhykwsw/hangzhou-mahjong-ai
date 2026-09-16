@@ -1,4 +1,4 @@
-"""Local dashboard and one launchd-owned service per project."""
+"""Local dashboard and one host-managed service per project."""
 
 import argparse
 import asyncio
@@ -8,7 +8,6 @@ import ipaddress
 import json
 import os
 from pathlib import Path
-import plistlib
 import socket
 import shutil
 import subprocess
@@ -25,6 +24,7 @@ from mahjong_ai.research.service import Research
 from mahjong_ai.research.config import configuration, COMBINATIONS
 from mahjong_ai.execution.controller import Controller
 from mahjong_ai.persistence.artifacts import atomic_json, exclusive_lock, read_json
+from mahjong_ai.interfaces.service_host import open_url, start_service, stop_service
 
 
 def application(project, tailscale_url=None):
@@ -221,7 +221,7 @@ def start(project, open_browser=True):
             url = read_json(record)["url"]
             if health_at(url, project):
                 if open_browser:
-                    subprocess.run(["open", url], check=True)
+                    open_url(url)
                 return url
         remote_ip = tailscale_ip()
         try:
@@ -234,7 +234,21 @@ def start(project, open_browser=True):
         url = f"http://127.0.0.1:{port}"
         env = {
             key: os.environ[key]
-            for key in ("HOME", "PATH", "CODEX_HOME")
+            for key in (
+                "HOME",
+                "PATH",
+                "CODEX_HOME",
+                "SSL_CERT_FILE",
+                "SSL_CERT_DIR",
+                "HTTP_PROXY",
+                "HTTPS_PROXY",
+                "ALL_PROXY",
+                "NO_PROXY",
+                "http_proxy",
+                "https_proxy",
+                "all_proxy",
+                "no_proxy",
+            )
             if key in os.environ
         }
         env["PYTHONPATH"] = str(Path(__file__).parents[2])
@@ -249,52 +263,19 @@ def start(project, open_browser=True):
             key = provider.get("env_key")
             if key and key in os.environ:
                 env[key] = os.environ[key]
-        plist = root / "service.plist"
-        payload = dict(
-            Label=label,
-            ProgramArguments=[
-                sys.executable,
-                "-B",
-                "-m",
-                "mahjong_ai.interfaces.app",
-                "--project",
-                str(Path(project).resolve()),
-                "serve",
-                "--port",
-                str(port),
-                *(["--tailscale-ip", remote_ip] if remote_ip else []),
-            ],
-            WorkingDirectory=str(Path(project).resolve()),
-            EnvironmentVariables=env,
-            RunAtLoad=True,
-            KeepAlive=False,
-            ExitTimeOut=15,
-            # launchd defaults to adaptive QoS, which throttles candidate CPU
-            # time by ~1.7x against the same work run at user-interactive QoS.
-            ProcessType="Interactive",
-            StandardOutPath=str(root / "service.log"),
-            StandardErrorPath=str(root / "service.log"),
-        )
-        plist.write_bytes(plistlib.dumps(payload))
-        plist.chmod(0o600)
-        domain = f"gui/{os.getuid()}"
-        subprocess.run(
-            ["launchctl", "bootout", domain + "/" + label], capture_output=True
-        )
-        # bootout releases its registration asynchronously on macOS.
-        for attempt in range(50):
-            launched = subprocess.run(
-                ["launchctl", "bootstrap", domain, str(plist)],
-                capture_output=True,
-                text=True,
-            )
-            if launched.returncode == 0:
-                break
-            if launched.returncode != 5 or attempt == 49:
-                raise RuntimeError(
-                    "launchd could not start service: " + launched.stderr.strip()
-                )
-            time.sleep(0.1)
+        argv = [
+            sys.executable,
+            "-B",
+            "-m",
+            "mahjong_ai.interfaces.app",
+            "--project",
+            str(Path(project).resolve()),
+            "serve",
+            "--port",
+            str(port),
+            *(["--tailscale-ip", remote_ip] if remote_ip else []),
+        ]
+        start_service(root, label, project, argv, env)
         atomic_json(record, {"url": url, "label": label})
         for _ in range(100):
             if health_at(url, project):
@@ -305,7 +286,7 @@ def start(project, open_browser=True):
                 f"service did not become ready; see {root / 'service.log'}"
             )
         if open_browser:
-            subprocess.run(["open", url], check=True)
+            open_url(url)
         return url
 
 
@@ -358,28 +339,8 @@ def main(argv=None):
         record = root / "service.json"
         value = read_json(record) if record.exists() else {}
         previous = health_at(value["url"], args.project) if value else None
-        result = subprocess.run(
-            ["launchctl", "bootout", f"gui/{os.getuid()}/{label}"], capture_output=True
-        )
-        if result.returncode == 0:
-            for _ in range(100):
-                present = subprocess.run(
-                    ["launchctl", "print", f"gui/{os.getuid()}/{label}"],
-                    capture_output=True,
-                )
-                alive = (
-                    subprocess.run(
-                        ["/bin/ps", "-p", str(previous["pid"]), "-o", "command="],
-                        capture_output=True,
-                        text=True,
-                    ).stdout
-                    if previous
-                    else ""
-                )
-                if present.returncode != 0 and "mahjong_ai.interfaces.app" not in alive:
-                    break
-                time.sleep(0.1)
-        print("服务已停止" if result.returncode == 0 else "服务未运行")
+        stopped = stop_service(root, label, previous)
+        print("服务已停止" if stopped else "服务未运行")
     else:
         record = root / "service.json"
         value = read_json(record) if record.exists() else {}

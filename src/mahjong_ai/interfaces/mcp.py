@@ -40,7 +40,7 @@ def server(project, experiment_id, branch):
 
     @mcp.tool(annotations=ro)
     def research_read_source(name: str = "contract") -> dict:
-        """读取契约、capabilities（含自由启发式的风格例外），或公开的 types/rules/policy/training/simulation SDK 源码。"""
+        """读取含杭州麻将规则要点的 contract、capabilities，或公开的 types/rules/policy/training/simulation 等 SDK 源码；rules 为判胡与番型实现。"""
         if name == "contract":
             return {"content": CONTRACT}
         if name not in (

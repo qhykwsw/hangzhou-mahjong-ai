@@ -15,3 +15,8 @@ revision_record.txt
 .codex
 *.egg-info/
 build/
+*.so
+*.dylib
+projects/personal/*/models/
+projects/personal/*/releases/
+projects/personal/*/runs/

@@ -1,4 +1,5 @@
 import io
+from concurrent.futures import ThreadPoolExecutor
 import selectors
 import time
 from types import SimpleNamespace
@@ -19,6 +20,22 @@ from mahjong_ai.domain.types import RoundConfig
 from mahjong_ai.strategies.common import PolicySpec
 
 
+def test_candidate_outlives_parallel_startup_thread(tmp_path):
+    (tmp_path / "strategy.py").write_text(
+        "from mahjong_ai.strategies.common import RulePolicy\n"
+        "def build(model): return RulePolicy()\n"
+    )
+    policy = RemotePolicy(tmp_path, tree_hash(tmp_path))
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            executor.submit(policy.start).result()
+        time.sleep(0.05)
+        policy.reset(17)
+        assert policy.worker.process.poll() is None
+    finally:
+        policy.close()
+
+
 def test_candidate_cannot_read_host_files_or_network(tmp_path):
     secret = tmp_path / "private.txt"
     secret.write_text("secret")
@@ -29,10 +46,10 @@ import socket
 from mahjong_ai.strategies.common import RulePolicy
 def build(model):
     try: Path({str(secret)!r}).read_text()
-    except PermissionError: pass
+    except (PermissionError, FileNotFoundError): pass
     else: raise AssertionError("private read allowed")
     try: socket.socket().connect(("127.0.0.1", 9))
-    except PermissionError: pass
+    except OSError: pass
     else: raise AssertionError("network allowed")
     return RulePolicy()
 """
@@ -119,16 +136,7 @@ def test_memory_watcher_uses_snapshot_process_after_owner_closes(monkeypatch):
     candidate_runtime._MEMORY_WATCHED.clear()
     candidate_runtime._MEMORY_WATCHED[123] = (owner, 1)
 
-    class Ps:
-        stdout = "123 2\n"
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-    monkeypatch.setattr(candidate_runtime.subprocess, "run", lambda *a, **k: Ps())
+    monkeypatch.setattr(candidate_runtime, "memory_kb", lambda pids: {123: 2})
 
     # Simulate close() detaching the owner immediately after the locked snapshot.
     def sleep(_seconds):

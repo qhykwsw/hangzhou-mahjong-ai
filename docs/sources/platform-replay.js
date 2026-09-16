@@ -18,7 +18,8 @@
   //   吃   : data.tiles 去除被吃牌（e.tile，来自河不在手牌）后扣 2 张
   //   碰   : 手牌扣 2（第 3 张是被碰牌）
   //   明杠 : 手牌扣 3、河牌扣 1；暗杠 : 手牌扣 4；补杠 : 手牌扣 1 + 扩展既有 3 张副露
-  //   超时 : timeout(kind=discard) 将该家上一次打入河牌的出牌标为超时（legacy 口径）
+  //   超时 : timeout(kind=discard) 把**锚点**（最近一次 tile_discarded 的出牌者，
+  //          s.lastDiscard）的最后一张河牌标为超时 —— 不是按该 timeout 事件自带的 seat
   //   摸牌 : 追加到手牌末尾（末位必为刚摸），pendingDraw[seat] = 该牌
   function buildSteps(startHands, events) {
     const clone = (s) => JSON.parse(JSON.stringify(s));
@@ -100,9 +101,13 @@
           break;
         }
         case "timeout":
-          // 超时自动出牌：标志该家上一次打入河牌的出牌（legacy 口径，按事件所属座位）
-          if (ev.data && ev.data.kind === "discard") {
-            const flags = s.discardFlags[ev.seat];
+          // 超时自动出牌的归属 = **锚点**，不是 timeout 事件自带的 seat：「最近一次
+          // tile_discarded 的出牌者」（s.lastDiscard）才是真正超时的那一方。2026-09-11
+          // 修复前，自动出牌打出财神会在 Discard 内先 nextDraw 推进回合，使 timeout.seat
+          // 被记成**下家**（存量事件仍是该形态）——按锚点配对才能同时正确渲染新老对局。
+          // 响应窗口超时（kind=response）不涉及打出牌，不入此支。
+          if (ev.data && ev.data.kind === "discard" && s.lastDiscard >= 0) {
+            const flags = s.discardFlags[s.lastDiscard];
             if (flags && flags.length) flags[flags.length - 1] = true;
           }
           s.note = "超时未响应";

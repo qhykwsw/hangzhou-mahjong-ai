@@ -3,11 +3,11 @@
 import mimetypes
 import os
 from pathlib import Path
-import subprocess
 import sys
 import tempfile
 import time
-from mahjong_ai.execution.candidate_runtime import sandbox_command
+from mahjong_ai.execution.candidate_runtime import sandbox_command, sandbox_popen
+from mahjong_ai.execution.process_usage import memory_kb, peak_memory_bytes
 from mahjong_ai.persistence.artifacts import atomic_json, file_hash
 
 
@@ -37,7 +37,7 @@ def command(
     no_fork=True,
     file_bytes=64 * 1024**2,
 ):
-    """Meter one sandboxed process; RSS is monitored on macOS (not RLIMIT_AS)."""
+    """Meter a sandboxed process tree using RSS rather than virtual address space."""
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
     seconds = max(0.01, seconds)
@@ -56,7 +56,7 @@ def command(
         ]
         out = (root / "stdout.txt").open("wb")
         err = (root / "stderr.txt").open("wb")
-        process = subprocess.Popen(
+        process = sandbox_popen(
             sandbox_command(
                 wrapped,
                 [
@@ -83,13 +83,7 @@ def command(
                 if pid:
                     process.returncode = os.waitstatus_to_exitcode(status)
                     break
-                rss = subprocess.run(
-                    ["/bin/ps", "-p", str(process.pid), "-o", "rss="],
-                    capture_output=True,
-                    text=True,
-                ).stdout.strip()
-                if rss.isdigit():
-                    peak = max(peak, int(rss) * 1024)
+                peak = max(peak, memory_kb([process.pid]).get(process.pid, 0) * 1024)
                 if time.monotonic() - started >= seconds:
                     cause = "wall_limit"
                 elif peak > memory_bytes:
@@ -111,7 +105,7 @@ def command(
                 process.wait()
             out.close()
             err.close()
-    peak = max(peak, usage.ru_maxrss if usage and sys.platform == "darwin" else 0)
+    peak = max(peak, peak_memory_bytes(usage))
     if peak > memory_bytes:
         cause = cause or "memory_limit"
     truncated = False

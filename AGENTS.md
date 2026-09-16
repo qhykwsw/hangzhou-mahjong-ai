@@ -13,7 +13,7 @@
 - 研究 Agent 仅通过研究 MCP 修改本分支候选；框架修改在仓库源码进行。评估条件与计分不能为了候选表现而改变。
 - 策略按组合和分支长期保存；新实验的运行时代码、提交源码、模型与完整比赛回执冻结。修改框架协议使用新实验，候选保留自身运行时，重启后台不会升级旧版本。本项目不迁移旧研究协议，不保留旧路径兼容层。
 - 策略训练只接收合法观察和清理后的结算。假想隐藏状态可由公开信息与独立随机流生成；宿主真实隐藏牌、环境随机材料、凭据与外部反馈不进入候选。
-- 自动研究项目的 `projects/agent-research/.local/service/research.sqlite`、`projects/agent-research/.local/strategies/` 与 `projects/agent-research/.local/research/` 一并保存研究。人工项目的训练和发布数据归各自项目。凭据目录权限 `0700`、文件 `0600`，日志和报告不写令牌。
+- 自动研究项目的 `projects/agent-research/.local/service/research.sqlite`、`projects/agent-research/.local/strategies/` 与 `projects/agent-research/.local/research/` 一并保存研究。人工项目的训练和发布数据归各自项目；模型、发布包、运行数据和本机编译产物不提交 Git。凭据目录权限 `0700`、文件 `0600`，日志和报告不写令牌。
 - 研究状态转换由 `research/` 拥有，执行器提交任务结果，用户接口调用研究接口；规则与策略 SDK 不依赖网页或后台调度状态。
 
 ## 验证与文档

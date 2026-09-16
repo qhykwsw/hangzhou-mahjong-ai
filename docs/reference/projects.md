@@ -18,14 +18,12 @@
 
 只有显式追加 `--resident`，冻结版本才会在后续自动研究轮次中作为常驻对手；省略该选项时，它不会进入常驻对手池。
 
-独立大乱斗直接传入四个冻结版本：
+独立大乱斗传入四个参赛策略，可组合冻结发布版本与内置基线。接着使用上面构建的规则版本：
 
 ```bash
 .venv/bin/mahjong-ai competition-run \
-  --policies projects/personal/rules/releases/v1 \
-             projects/personal/ppo/releases/v1 \
-             rule rule \
+  --policies projects/personal/rules/releases/v0.1.0 rule rule rule \
   --games 16 --output .local/competition/runs/brawl-01.json
 ```
 
-自动研究数据已经位于 `projects/agent-research/`，实验、分支、候选、回执和冻结 runtime 的 ID 与内容哈希保持不变。后续项目必须从项目清单创建，不再支持无清单的旧布局。
+仓库只提供项目清单与源码，不附带训练模型、实验数据或冻结发布包。PPO 项目先运行 `.venv/bin/python scripts/train_personal_ppo.py` 生成模型，再构建发布包；规则项目可以直接构建。各机器重新建立依赖环境与发布版本，`models/`、`releases/`、`runs/` 和 `.local/` 等运行产物不提交 Git，须独立保存。项目必须从项目清单创建，不支持无清单的旧布局。

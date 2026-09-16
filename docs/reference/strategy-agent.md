@@ -46,9 +46,9 @@
 
 配置合并顺序为代码默认值、自动研究项目 [research.toml](../../projects/agent-research/research.toml)、创建实验时的网页设置。权威默认值和校验见 [config.py](../../src/mahjong_ai/research/config.py)。代码默认同时允许十四个研究 Agent、十二个训练 worker、十二个比赛 worker；当前自动研究项目为八个研究 Agent、十二个训练与比赛 worker。网页可设置候选数、训练场数、选优场数、大乱斗每支目标场数、单次迭代上限、初始版本训练上限、进程内存与计算线程。
 
-当前自动研究项目候选训练额度为 16 场，轮内选优每版本 16 场（128 局），大乱斗每支目标 32 场（256 局），代码默认依次为 128、256、512 场。启发式分支没有训练槽，训练场数在纯启发式迭代里不消耗墙钟；选优与大乱斗的场数按 8 局一场折算成局数后，与逐局读数配套。`training_caps` 按组合家族限制训练额度：启发式与搜索家族为 0，即没有训练槽，`strategy.train` 会被运行检查拒绝，`research_submit_batch` 也不接受 `training_games`；规则策略的实测比较由配对选优完成，不必在训练槽里重打一批真实对局。value/PPO 保留训练槽，代码默认额度 128 场、上限 256 场，超限申请在运行检查之前就被拒绝。训练额度上限来自 128/256/512 三档对照：默认基线的场均名次效用在这三档上没有正向差异，LightGBM 反而随规模单调退化，而 128 场配对选优已经能分辨 0.05 量级的差异，继续加大训练只会占用迭代墙钟。需要更大预算时改实验级配置，不由 Agent 单次提交决定。两项评估场数在实验开始时固定，不依据中途成绩动态追加。原始逐格结果与脚本见 `projects/agent-research/.local/research/reports/training-scale-sweep/`。
+当前自动研究项目候选训练额度为 16 场，轮内选优每版本 16 场（128 局），大乱斗每支目标 32 场（256 局），代码默认依次为 128、256、512 场。启发式分支没有训练槽，训练场数在纯启发式迭代里不消耗墙钟；选优与大乱斗的场数按 8 局一场折算成局数后，与逐局读数配套。`training_caps` 按组合家族限制训练额度：启发式与搜索家族为 0，即没有训练槽，`strategy.train` 会被运行检查拒绝，`research_submit_batch` 也不接受 `training_games`；规则策略的实测比较由配对选优完成，不必在训练槽里重打一批真实对局。value/PPO 保留训练槽，代码默认额度 128 场、上限 256 场，超限申请在运行检查之前就被拒绝。需要更大预算时改实验级配置，不由 Agent 单次提交决定。两项评估场数在实验开始时固定，不依据中途成绩动态追加。
 
-配对选优的同一批对局按四座轮换组切成 `evaluation_shards` 个并行分片任务（默认 4，即每版本评估拆成四个任务并行跑；每个候选各自分片）。对手抽样、墙钟与策略种子都由 `block` 决定，分片只改变任务切分，不改变任何一局；候选读数在分片到齐后按同一口径合成，组间标准误仍按全部轮换组计算。分片数属于评估参数，实验开始时冻结。提高分片数会在分支同时进入选优时更快吃满比赛 worker；只有一个分支评估时并行度仍受该分支两个候选限制。
+配对选优按完整四座轮换组分片，每个参评版本分别产生任务。`evaluation_shards` 是期望分片数（默认 4），实际值还会按本批参评版本数（含原代表）与比赛 worker 数适配，并且不超过轮换组数；权威算法为 `research/service.py` 的 `evaluation_shard_count`。对手抽样、牌局与策略种子都由 `block` 决定，分片只改变任务切分，不增加样本、不改变任何一局；读数在分片到齐后合成，标准误仍按全部轮换组计算。实际并行度由可用 worker 和已就绪分片共同限制，不等于候选个数。
 
 Agent 在下一次迭代提示中直接收到本分支上次的实际执行反馈，`research_status` 与 `research_history` 的各次迭代也提供 `execution_feedback`：申请训练场数、实际完成场数、参数更新数、研究 Agent 耗时、训练与准备耗时和单次执行上限。时间单位为秒，训练与准备耗时包括依赖准备、采集对局、训练和校验，排除排队与选优比赛；缺少记录的数值为 `null`。训练被时限打断而按检查点冻结的候选，`status` 为 `partial`、`interrupted` 说明原因、`completed_games` 为冻结时的实际场数。Agent 根据实际耗时、成绩及代码和对手变化自主调整后续训练场数，框架不自动放大或锁定场数。
 
@@ -64,7 +64,7 @@ Agent 在下一次迭代提示中直接收到本分支上次的实际执行反�
 
 单次分支迭代默认一小时，累计模型思考、依赖准备与训练的实际经过时间，不计排队、暂停和框架评估。到限时把最近一次已提交的训练检查点冻结成候选版本继续评估，该候选记为 `partial`；没有检查点的候选标为超时，全部失败则保留原代表。Agent 提交后立即结束回复、释放槽位；下一次分支迭代开新会话并携带结构化交接，不在旧会话上继续累积上下文。重复提交同一批次返回已接收结果。
 
-执行器面向本机 CPU 和 macOS 强制沙箱。每个候选进程受 RSS 内存上限和计算线程配置约束，超限明确报错，不替换设备或静默缩小算法。默认弃牌三秒、响应一秒，超时或非法动作由环境执行默认动作，完整结果照常计分并保留错误与回退统计。
+执行器面向本机 CPU，macOS 使用 sandbox-exec，Linux/WSL2 使用 Bubblewrap 与 libseccomp。两者都限制文件访问、网络与候选派生进程，同时允许算法计算线程；沙箱不可用时拒绝执行，不回退到无隔离运行。依赖下载单独允许网络，创建依赖环境单独允许子进程，不把这些权限交给候选。每个候选受 RSS 内存上限和计算线程配置约束，Linux 统计沙箱启动器及其子进程的合计 RSS，超限明确报错，不替换设备或静默缩小算法。默认弃牌三秒、响应一秒，超时或非法动作由环境执行默认动作，完整结果照常计分并保留错误与回退统计。
 
 模型配置从 `CODEX_HOME` 读取，未设置时使用 `~/.codex`。需要 `config.toml`；研究注册表里的 `deepseek` 与 `qwen` 分别叠加 `netease-deepseek-flash.config.toml`、`netease-qwen-flash.config.toml`。本机提供方配置和凭据不随仓库分发，变更后须实际调用验证。研究工具直接暴露，不依赖第三方模型工具发现能力。
 
@@ -74,11 +74,19 @@ Agent 在下一次迭代提示中直接收到本分支上次的实际执行反�
 
 分支上下文另有结构性上限：**每次分支迭代开一条新会话**。上一轮的对话归档到该次迭代记录上（`thread_id` 留档，仅用于审计），新任务改为携带结构化交接：现役代表及其做法、最近三次迭代的结果与耗时、自己的名次，以及上一次研究判断。交接摘要约 2–4 KB，历史细节仍由 `research_status`、`research_history` 按需读取，因此上下文不再随迭代次数线性增长；中途暂停后继续同一次迭代仍复用该次会话。
 
-服务由 macOS 用户域 launchd 管理，不注册登录启动项。服务以 `ProcessType=Interactive` 注册，避免候选进程被后台 QoS 降级；改动服务安装方式后要重新核对比赛吞吐。优先端口 8765，冲突时选择可用端口；日志位于 `projects/agent-research/.local/service/service.log`。`--no-open` 或 SSH 会话仅输出地址。启动时若 Tailscale 已连接，则同时监听回环与 Tailscale IPv4 网卡；连接状态改变后重启服务。地址以 `status` 的 `url`、`tailscale_url` 为准。
+服务由 macOS 用户域 launchd 或 Linux/WSL2 的 systemd 用户服务管理，不注册登录启动项。macOS 保持 `ProcessType=Interactive`，避免候选进程被后台 QoS 降级；Linux 使用临时服务单元，停止时先通知主进程收尾，再清理剩余进程。改动服务安装方式后要重新核对比赛吞吐。优先端口 8765，冲突时选择可用端口；日志位于 `projects/agent-research/.local/service/service.log`，服务环境文件权限为 `0600`。`--no-open` 或 SSH 会话仅输出地址；WSL 优先通过 `wslview` 打开 Windows 默认浏览器，打开失败不影响服务启动。启动时若 WSL/Linux 内的 Tailscale 已连接，则同时监听回环与该 Tailscale IPv4 网卡；不把 Windows 宿主的 Tailscale 地址当成本机网卡。连接状态改变后重启服务。地址以 `status` 的 `url`、`tailscale_url` 为准。
+
+### WSL2 环境
+
+在 Ubuntu 内安装 `bubblewrap`、`libseccomp2`、`libgomp1` 和 `build-essential`，使用 Python 3.12+ 创建项目自己的 `.venv`。若默认 Python 版本较低，可使用 `uv venv --python 3.12 --seed .venv`。不要复制 Mac 的 `.venv`、wheel 缓存或 C 扩展；安装项目时在本机重新构建。
+
+`systemctl --user show-environment` 必须能正常执行。若 WSL 尚未启用 systemd，在 `/etc/wsl.conf` 的 `[boot]` 节设置 `systemd=true`，再从 Windows 执行 `wsl --shutdown` 后重新进入发行版，见[微软说明](https://learn.microsoft.com/en-us/windows/wsl/systemd)。服务不依赖启动它的终端，但 systemd 服务本身不保证 WSL 实例持续存活；长时间研究需要保持实例运行。Windows 重启或关闭 WSL 后，重新运行 `mahjong start` 并在网页继续，不自动恢复实验执行。
 
 ## 候选契约与训练
 
 权威契约为 [CONTRACT](../../src/mahjong_ai/research/contract.py) 与 [MCP schema](../../src/mahjong_ai/interfaces/mcp.py)。`strategy.py` 声明 `COMBINATION`，提供 `build(model_dir)`，返回实现 `reset(seed)`、`act(observation)`、`finish_round(result, seat)` 的对象。动作必须来自 `observation.legal_actions`。
+
+研究契约直接提供杭州麻将的关键规则：仅自摸、没有点炮或抢杠胡，白板与吃牌限制，以及杠后爆头重算和补牌弃胡窗口。不能把其他麻将玩法的“安全牌/现物”当作本玩法的规则保证；弃牌仍可能帮助对手吃碰杠。`research_read_source("rules")` 提供判胡与番型源码，当前合法动作仍由观察决定。规则提示随新实验的运行时冻结，旧实验与已冻结候选不自动改写。
 
 value/PPO 组合的 `train(ctx)` 可生成模型或其他文件。`ctx.play(learner)` 请求一次真实完整结算，`ctx.play_many(learner, games)` 顺序采集轨迹。`ctx.episodes` 限制训练对局数，`ctx.output` 保存产物，`ctx.initial` 是派生父代模型；`ctx.checkpoint(metadata)` 原子提交恢复点，`ctx.completed_episodes` 和 `ctx.checkpoint_metadata` 提供恢复信息。启发式与搜索组合没有训练槽：`ctx.play` 只在训练上下文可用，把规则调参塞进训练槽会占用本支迭代时间，并且与随后的配对选优重复。
 
@@ -109,14 +117,15 @@ value/PPO 组合的 `train(ctx)` 可生成模型或其他文件。`ctx.play(lear
 - `projects/agent-research/.local/strategies/<combination>/<branch>/`：分支初版、草稿、冻结提交和准备完成的候选版本。组合下还保存共享初版与启动策略。
 - `projects/agent-research/.local/research/`：实验配置与轮次回执、任务、按内容标识冻结的运行时、依赖环境、随机材料和 `reports/`。
 - `projects/agent-research/.local/service/research.sqlite`：长期策略注册表、实验状态、事件和幂等回执。
-- `projects/agent-research/.local/monitoring/research_watch.py`：只读巡检探针，汇总在途任务与告警、不改研究状态；退出码 0 表示无告警、1 表示有告警。
 
 三者一并备份才能完整恢复。框架代码在实验开始时冻结，候选引用自身的运行时，重启不会升级旧版本。按日期 run 划分的旧研究记录与旧研究协议都不迁移，也不建立兼容路径。
+
+全新检出不包含历史实验、已训练模型或冻结发布包；首次打开控制台只初始化配置中的研究分支，历史和排行榜为空。运行数据均在本机生成且不纳入 Git。不同机器分别从新实验开始，不复制跨操作系统的运行时或继续旧机器的在途任务。
 
 验收、吞吐与诊断记录保存到 `projects/agent-research/.local/research/reports/`，具体实验配置和轮次回执在 `projects/agent-research/.local/research/experiments/<id>/`。是否完成以完整任务和比赛回执为准，不能仅凭服务正常推断。
 
 ```bash
-.venv/bin/mahjong-ai export --project . \
+.venv/bin/mahjong-ai export --project projects/agent-research \
   --candidate <full-candidate-id> --output /path/to/bundle
 ```
 
