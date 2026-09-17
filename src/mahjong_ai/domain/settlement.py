@@ -66,6 +66,7 @@ def run_settlement(engine, policies, config, seed, *, policy_seeds=None):
             else tuple(range(4))
         )
         game_scores, game_whites, history = [0] * 4, [0] * 4, []
+        views = None
         dealer = (
             seed % 4 if game_index == 0 else derive_seed(seed, "dealer", game_index) % 4
         )
@@ -89,6 +90,7 @@ def run_settlement(engine, policies, config, seed, *, policy_seeds=None):
                 game_scores,
                 history,
                 extra,
+                previous_views=views,
             )
             hand.rounds_total = config.rounds
             stage_scores = tuple(scores[i] for i in seat_players)
@@ -132,7 +134,7 @@ def run_settlement(engine, policies, config, seed, *, policy_seeds=None):
                 whites[player] += hand.white_acquired[seat]
                 game_scores[seat] += hand.delta[seat]
                 game_whites[seat] += hand.white_acquired[seat]
-            history = hand.events
+            history, views = hand.events, hand.public_views()
             game_hands += 1
             hands.append(
                 {

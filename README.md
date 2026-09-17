@@ -28,15 +28,17 @@ python3 -m venv .venv
 .venv/bin/mahjong-ai play --rounds 8 --check-invariants
 ```
 
-服务独立于启动终端运行；WSL 实例本身必须保持运行，`wsl --shutdown`、Windows 重启或实例退出都会停止服务。停止服务或重启电脑后，重新启动并在网页继续。当前自动研究项目位于 `projects/agent-research/`，`mahjong start` 会在仓库根目录自动选择它；也可以显式传入 `--project projects/agent-research`。SSH 启动输出本机与已连接的 Tailscale 地址，不打开远端电脑浏览器；WSL 优先用 `wslview` 打开 Windows 默认浏览器，没有浏览器时仍输出访问地址。
+服务独立于启动终端运行；WSL 实例本身必须保持运行，`wsl --shutdown`、Windows 重启或实例退出都会停止服务。重新启动服务后，未完成的实验须在网页手动继续；已完成实验保留结果，不自动追加研究。当前自动研究项目位于 `projects/agent-research/`，`mahjong start` 会在仓库根目录自动选择它；也可以显式传入 `--project projects/agent-research`。SSH 启动输出本机与已连接的 Tailscale 地址，不打开远端电脑浏览器；WSL 优先用 `wslview` 打开 Windows 默认浏览器，没有浏览器时仍输出访问地址。
 
 ## 入口
 
 | 需要做什么 | 文档 |
 | --- | --- |
 | 配置、运行、暂停和理解排名 | [研究手册](docs/reference/strategy-agent.md) |
+| 理解 Agent 会话、累计结论与详情读取 | [迭代交接与查询](docs/reference/strategy-agent.md#会话累计结论与按需读取) |
 | 修改框架或策略 SDK | [开发索引](docs/reference/development.md) |
 | 核对规则、导出或平台对战 | [平台规则与接入](docs/reference/platform.md) |
+| 训练、评估与发布自我对弈策略 | [自我对弈项目](projects/personal/selfplay/README.md) |
 | 理解领域对象和架构取舍 | [术语表](CONTEXT.md) · [决策记录](docs/adr/) |
 | 查阅官方材料 | [原始资料](docs/sources/README.md) |
 

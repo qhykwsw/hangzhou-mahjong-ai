@@ -254,6 +254,29 @@ def test_mcp_exposes_and_executes_conclusion_tool(conclusions):
     )
 
 
+def test_source_tool_advertises_legal_names_and_policy_mapping(conclusions):
+    import asyncio
+    from mahjong_ai.interfaces.mcp import server
+
+    mcp = server(conclusions.project, "current-experiment", "own")
+    tools = {tool.name: tool for tool in asyncio.run(mcp.list_tools())}
+    tool = tools["research_read_source"]
+    names = tool.inputSchema["properties"]["name"]["enum"]
+    assert "policy" in names and "common" not in names
+    assert "strategies/common.py" in tool.description
+    import json
+
+    offset, parts = 0, []
+    while offset is not None:
+        result = asyncio.run(
+            mcp.call_tool("research_read_source", {"name": "policy", "offset": offset})
+        )
+        page = json.loads(result[0].text)
+        parts.append(page["content"])
+        offset = page["next_offset"]
+    assert "class RulePolicy" in "".join(parts)
+
+
 def test_recovered_job_failure_and_focal_diagnostics_remain_in_evidence(conclusions):
     with conclusions.edit() as (s, db):
         s["iterations"]["own-i1"]["execution_failures"] = [

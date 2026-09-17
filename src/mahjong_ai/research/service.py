@@ -20,6 +20,11 @@ from mahjong_ai.persistence.artifacts import (
 from mahjong_ai.execution.candidate_runtime import tree_hash
 from mahjong_ai.strategies.catalog import baseline_source
 from mahjong_ai.research.conclusions import ledger, validate_assessment
+from mahjong_ai.research.selection import (
+    SELECTION_RULE,
+    paired_interval,
+    promotion_decision,
+)
 from mahjong_ai.research.config import (
     configuration,
     merge,
@@ -78,10 +83,13 @@ def paired_readout(reference, candidate, metric="field"):
     if not diffs:
         return None
     count = len(diffs)
+    delta = sum(diffs) / count
+    standard_error = sqrt(variance(diffs) / count) if count >= 2 else None
     return dict(
         blocks=count,
-        delta=sum(diffs) / count,
-        standard_error=sqrt(variance(diffs) / count) if count >= 2 else None,
+        delta=delta,
+        standard_error=standard_error,
+        **paired_interval(delta, standard_error, count),
     )
 
 
@@ -393,6 +401,7 @@ class Research:
                 initial_opponents=pool,
                 total_rounds=config["total_rounds"],
                 completed_rounds=0,
+                selection_rule=SELECTION_RULE,
                 config=deepcopy(config),
                 runtime=fingerprint,
                 runtime_path=runtime,
@@ -972,13 +981,15 @@ class Research:
         at submission time instead of burning the iteration in preparation.
         """
         from mahjong_ai.execution.candidate_runtime import (
+            ActionUnavailable,
             CandidateProcess,
+            RemotePolicy,
             train_package,
         )
         from mahjong_ai.execution.dependencies import prepare_environment
-        from mahjong_ai.domain.engine import derive_seed
+        from mahjong_ai.domain.engine import MahjongEngine, derive_seed
         from mahjong_ai.domain.types import RoundConfig
-        from mahjong_ai.strategies.common import PolicySpec
+        from mahjong_ai.strategies.common import PolicySpec, RulePolicy
         import numpy as np
         import sys
         import tempfile
@@ -1019,6 +1030,68 @@ class Research:
                 )
             finally:
                 probe.close()
+            if not capabilities.get("train"):
+                timeouts = root_state["config"]["timeouts"]
+                policy = RemotePolicy(
+                    source,
+                    tree_hash(source),
+                    timeouts["discard"],
+                    python,
+                    response_seconds=timeouts["response"],
+                    runtime=runtime,
+                )
+                smoke_deadline = min(deadline, time.monotonic() + 30)
+
+                class StrictProbe:
+                    def check(self):
+                        if any(
+                            policy.stats[key]
+                            for key in ("errors", "timeouts", "fallback_actions")
+                        ):
+                            raise ValueError(
+                                (policy.last_error or {}).get("message")
+                                or "候选动作超时或非法"
+                            )
+                        if time.monotonic() >= smoke_deadline:
+                            raise TimeoutError("候选对局自检超过 30 秒")
+
+                    def reset(self, seed):
+                        policy.reset(seed)
+                        self.check()
+
+                    def act(self, observation):
+                        self.check()
+                        try:
+                            action = policy.act(observation)
+                        except ActionUnavailable:
+                            self.check()
+                            raise
+                        self.check()
+                        return action
+
+                    def finish_round(self, result, seat):
+                        policy.finish_round(result, seat)
+                        self.check()
+
+                try:
+                    seed = derive_seed(source.name, "preflight-actions")
+                    smoke_config = RoundConfig(
+                        **{
+                            **(game or {}),
+                            "rounds": 1,
+                            "games_per_round": 1,
+                            "allow_tiebreak": False,
+                        }
+                    )
+                    result = MahjongEngine(record_events=False).run_round(
+                        [StrictProbe(), RulePolicy(), RulePolicy(), RulePolicy()],
+                        smoke_config,
+                        seed - seed % 4,
+                    )
+                    if not result.completed:
+                        raise ValueError("候选对局自检未完成")
+                finally:
+                    policy.close()
             if capabilities.get("train"):
                 with tempfile.TemporaryDirectory(prefix="mahjong-preflight-") as tmp:
                     train_package(
@@ -1043,6 +1116,26 @@ class Research:
             "error": None,
             "seconds": round(time.monotonic() - started, 1),
         }
+
+    def submission_candidates(self, state, branch, candidates, limit):
+        if not 1 <= len(candidates) <= limit:
+            raise ValueError(
+                f"本次最多提交 {limit} 个候选（candidate_limit={limit}），"
+                f"实际收到 {len(candidates)} 个；请提交 1 到 {limit} 个互不重复的草稿"
+            )
+        rows = [self.own(state, branch, cid) for cid in candidates]
+        if len({c["id"] for c in rows}) != len(rows):
+            raise ValueError("请提交互不重复的草稿；完整 ID 与短名可能指向同一候选")
+        if any(c["status"] != "draft" for c in rows):
+            raise ValueError("只有草稿状态的候选可以提交")
+        if any(
+            c.get("iteration") != state["branches"][branch]["iteration"] for c in rows
+        ):
+            raise ValueError(
+                "只能提交本次迭代派生的草稿；历史草稿请作为 parent，"
+                "用 research_create_candidate 派生新候选后再提交"
+            )
+        return rows
 
     def submit(self, experiment, branch, candidates, training_games=None):
         # Drafts must run before they freeze: a candidate that cannot import,
@@ -1075,11 +1168,13 @@ class Research:
             training_games,
             turn_config["training_games"],
         )
+        self.require_plan(self.require_turn(snapshot, branch))
+        drafts = self.submission_candidates(
+            snapshot, branch, candidates, turn_config["candidate_limit"]
+        )
         checks = {}
-        for cid in [self.own(snapshot, branch, c)["id"] for c in candidates]:
-            draft = snapshot["candidates"][cid]
-            if draft["status"] != "draft":
-                continue
+        for draft in drafts:
+            cid = draft["id"]
             check = self.preflight(
                 Path(draft["workspace"]),
                 draft["requirements"],
@@ -1106,13 +1201,9 @@ class Research:
                     }
             it = self.require_turn(s, branch)
             self.require_plan(it)
-            if not 1 <= len(candidates) <= it["config"]["candidate_limit"] or len(
-                set(candidates)
-            ) != len(candidates):
-                raise ValueError("请提交 1 到 4 个互不重复的草稿")
-            rows = [self.own(s, branch, cid) for cid in candidates]
-            if any(c["status"] != "draft" for c in rows):
-                raise ValueError("只有草稿状态的候选可以提交")
+            rows = self.submission_candidates(
+                s, branch, candidates, it["config"]["candidate_limit"]
+            )
             family = (s["definitions"].get(combination) or {}).get("family")
             cap = (it["config"].get("training_caps") or {}).get(family)
             games = self.training_allowance(
@@ -1441,17 +1532,11 @@ class Research:
         improved = False
         if success:
             choices = [it["incumbent"], *sorted(it["candidates"])]
-            valid = [cid for cid in choices if cid in it["results"]]
-            winner = max(
-                valid,
-                key=lambda cid: (
-                    it["results"][cid]["mean_utility"],
-                    cid == it["incumbent"],
-                    -choices.index(cid),
-                ),
-            )
-            # 候选与基线共用同一份赛程：场口径配对差供页面对照选优是否落在
-            # 噪声以内；逐局配对只作辅助读数。
+            qualified = []
+            expected_games = (
+                it.get("config") or s["cycles"][it["cycle"] - 1]["config"]
+            )["evaluation_games"]
+            # 晋级只使用完整四座轮换组的场口径配对区间；逐局读数不参与。
             for cid in it["candidates"]:
                 reference = it["results"].get(it["incumbent"])
                 result = it["results"].get(cid)
@@ -1459,6 +1544,23 @@ class Research:
                     paired = paired_readout(reference, result, metric)
                     if paired and result is not None:
                         result[field] = paired
+                if result is not None:
+                    result["promotion"] = promotion_decision(
+                        reference, result, expected_games
+                    )
+                    if result["promotion"]["eligible"]:
+                        qualified.append(cid)
+            winner = it["incumbent"]
+            if qualified:
+                winner = max(
+                    [it["incumbent"], *qualified],
+                    key=lambda cid: (
+                        it["results"][cid]["mean_utility"],
+                        cid == it["incumbent"],
+                        -choices.index(cid),
+                    ),
+                )
+            it["selection_rule"] = SELECTION_RULE
             for cid in it["candidates"]:
                 s["candidates"][cid]["status"] = (
                     "evaluated"
@@ -1533,6 +1635,30 @@ class Research:
             if result.get("thread_id"):
                 b["thread_id"] = result["thread_id"]
             if it["status"] == "researching":
+                if (
+                    result["status"] == "completed"
+                    and not result.get("error")
+                    and not result.get("interrupted")
+                    and result.get("thread_id")
+                    and job.get("continuations", 0) < 2
+                    and it["config"]["iteration_seconds"] - it["spent"] >= 30
+                ):
+                    # A clean model turn is not a completed research iteration.
+                    # Resume its session and retain the original time budget.
+                    job["continuations"] = job.get("continuations", 0) + 1
+                    job["spent"] += result.get("usage", {}).get("wall_seconds", 0.0)
+                    job["status"] = "queued"
+                    self.event(
+                        db,
+                        s,
+                        "agent_continuation",
+                        {
+                            "job": job["id"],
+                            "iteration": it["id"],
+                            "continuation": job["continuations"],
+                        },
+                    )
+                    return
                 self.complete_iteration(
                     s, db, it, result.get("error") or "no candidate submitted"
                 )

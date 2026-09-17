@@ -483,6 +483,76 @@ def test_heuristic_family_has_no_training_slot(tmp_path):
     assert iteration["training_games"] == 0
 
 
+@pytest.mark.parametrize("limit", [1, 2])
+def test_candidate_quota_matches_prompt_and_rejects_before_preflight(
+    tmp_path, monkeypatch, limit
+):
+    from mahjong_ai.execution.agent import agent_prompt
+
+    r, run, controller = start_research(
+        tmp_path, small_config() | {"candidate_limit": limit}
+    )
+    branch = next(iter(r.read(run)["branches"]))
+    with r.edit(run) as (s, db):
+        job = r.start_iteration(s, branch)
+        task = controller.task(s, job)
+    r.declare_plan(run, branch, "quota", "one change", "bounded candidates")
+    drafts = [
+        r.fork(run, branch, f"draft-{n}", "same hypothesis")["candidate_id"]
+        for n in range(limit + 1)
+    ]
+
+    def unexpected_preflight(*args, **kwargs):
+        pytest.fail("invalid batch must be rejected before running candidates")
+
+    monkeypatch.setattr(r, "preflight", unexpected_preflight)
+    with pytest.raises(ValueError, match=rf"本次最多提交 {limit} 个候选"):
+        r.submit(run, branch, drafts)
+    assert task["candidate_limit"] == limit
+    assert f"本次最多提交一批 1 至 {limit} 个候选" in agent_prompt(task)
+    assert "本次最多提交一批 1 至 4 个候选" not in agent_prompt(task)
+    if limit > 1:
+        with pytest.raises(ValueError, match="互不重复"):
+            r.submit(run, branch, [drafts[0], "draft-0"])
+
+
+def test_previous_iteration_draft_must_be_forked_before_submission(tmp_path):
+    r, run, _ = start_research(tmp_path, small_config() | {"iterations_per_round": 2})
+    branch = next(iter(r.read(run)["branches"]))
+    with r.edit(run) as (s, db):
+        r.start_iteration(s, branch)
+    r.declare_plan(run, branch, "first", "draft", "one hypothesis")
+    old = r.fork(run, branch, "unused", "not evaluated")["candidate_id"]
+    with r.edit(run) as (s, db):
+        r.complete_iteration(
+            s, db, s["iterations"][s["branches"][branch]["iteration"]], "not submitted"
+        )
+        r.start_iteration(s, branch)
+    r.record_conclusion(
+        run,
+        branch,
+        "candidate:" + old,
+        "untested",
+        "No evaluation",
+        "No samples",
+        "unknown",
+        "Draft was not submitted",
+    )
+    r.declare_plan(run, branch, "second", "retry draft", "evaluate the old idea")
+    with pytest.raises(ValueError, match="本次迭代派生"):
+        r.submit(run, branch, [old])
+    fresh = r.fork(run, branch, "fresh", "retry with current provenance", parent=old)[
+        "candidate_id"
+    ]
+    r.submit(run, branch, [fresh])
+    state = r.read(run)
+    current = state["branches"][branch]["iteration"]
+    assert state["candidates"][old]["iteration"] != current
+    assert state["candidates"][old]["status"] == "draft"
+    assert state["candidates"][fresh]["iteration"] == current
+    assert state["iterations"][current]["candidates"] == [fresh]
+
+
 def test_partial_prepare_failure_evaluates_all_successes(research):
     r, run, controller = research
     branch = next(iter(r.read(run)["branches"]))
@@ -636,6 +706,38 @@ def test_submission_rejects_draft_that_does_not_run(research):
         / iteration["id"]
     )
     assert not root.exists()
+
+
+def test_preflight_rejects_runtime_action_errors_before_evaluation(research):
+    r, run, _ = research
+    branch = next(iter(r.read(run)["branches"]))
+    with r.edit(run) as (s, db):
+        r.start_iteration(s, branch)
+    r.declare_plan(
+        run, branch, "runtime bug", "exercise act", "reject fallback policies"
+    )
+    r.fork(run, branch, "bad-action", "cached shape API called with a list")
+    r.candidate(
+        run,
+        branch,
+        "bad-action",
+        path="strategy.py",
+        content="""
+from mahjong_ai.strategies.common import RulePolicy
+from mahjong_ai.sdk.shape import shanten
+COMBINATION = "heuristic-balanced"
+class Policy(RulePolicy):
+    style = "balanced"
+    def utilities(self, obs):
+        return [shanten(list(obs.hand)) for action in obs.legal_actions]
+def build(model_dir): return Policy()
+""",
+    )
+    result = r.check(run, branch, "bad-action")
+    assert result["ok"] is False
+    assert "unhashable type" in result["error"]
+    with pytest.raises(ValueError, match="运行自检"):
+        r.submit(run, branch, ["bad-action"])
 
 
 def test_64_branches_use_dynamic_agent_slots(tmp_path, monkeypatch):
@@ -845,11 +947,15 @@ def finish_branch_with_receipts(r, experiment, controller, branch, name, improve
             assert all(len(a["players"]) == 4 for a in task["assignments"])
         for job in matches:
             mean = 2 if job["candidate"] == candidate and improve else 1
+            blocks = sorted({a["block"] for a in job["assignments"]})
+            appearances = len(job["assignments"])
             focal = dict(
                 candidate_id=job["candidate"],
-                appearances=4,
-                utility_sum=mean * 4,
+                appearances=appearances,
+                utility_sum=mean * appearances,
                 mean_utility=mean,
+                group_blocks=blocks,
+                group_means=[mean] * len(blocks),
                 errors=0,
                 timeouts=0,
                 fallback_actions=0,
@@ -893,7 +999,11 @@ def test_selective_iterations_all_eligible_compete_and_top_k_automatically_refre
     r.control(experiment, "pause")
     controller.tick()
     r.control(experiment, "close")
-    config = small_config() | {"total_rounds": 2, "opponent_limit": 1}
+    config = small_config() | {
+        "total_rounds": 2,
+        "opponent_limit": 1,
+        "evaluation_games": 8,
+    }
     experiment = r.create(config, targets=[ids[0]], opponents=[ids[1] + "--initial"])
     r.control(experiment, "resume")
     with r.edit(experiment) as (s, db):
@@ -1257,6 +1367,61 @@ def test_iteration_selection_follows_the_field_metric_and_reports_hand_pairing(
         assert hand_paired["standard_error"] == 0.25
 
 
+@pytest.mark.parametrize(
+    "differences,expected_winner",
+    [
+        ({"noisy": [0.7, -0.5, 0.7, -0.5]}, "incumbent"),
+        ({"strong": [0.5, 0.75, 0.25, 0.5]}, "strong"),
+        ({"noisy": [1.4, -0.1, 1.4, -0.1], "strong": [0.5, 0.75, 0.25, 0.5]}, "strong"),
+        ({"same": [0.0] * 4}, "incumbent"),
+    ],
+)
+def test_promotion_gates_mean_ranking_on_paired_confidence(
+    research, differences, expected_winner
+):
+    r, run, _ = research
+    with r.edit(run) as (s, db):
+        branch = next(iter(s["branches"].values()))
+        incumbent = branch["representative"]
+        ids = {name: incumbent + "--" + name for name in differences}
+
+        def result(values):
+            return dict(
+                appearances=16,
+                mean_utility=sum(values) / 4,
+                group_blocks=list(range(4)),
+                field_group_means=values,
+            )
+
+        results = {incumbent: result([1.5] * 4)}
+        for name, diff in differences.items():
+            cid = ids[name]
+            s["candidates"][cid] = dict(
+                s["candidates"][incumbent], id=cid, status="evaluated"
+            )
+            results[cid] = result([1.5 + value for value in diff])
+        it = dict(
+            id="ci-selection",
+            experiment=run,
+            branch=branch["id"],
+            cycle=1,
+            number=1,
+            status="evaluating",
+            incumbent=incumbent,
+            candidates=list(ids.values()),
+            config={**s["config"], "evaluation_games": 16},
+            results=results,
+        )
+        s["iterations"][it["id"]] = it
+        r.complete_iteration(s, db, it)
+        assert branch["representative"] == (
+            incumbent if expected_winner == "incumbent" else ids[expected_winner]
+        )
+        for cid in ids.values():
+            assert "confidence_lower" in it["results"][cid]["paired"]
+            assert "promotion" in it["results"][cid]
+
+
 def test_focal_scoring_excludes_same_version_in_opponent_seats(tmp_path):
     from mahjong_ai.persistence.artifacts import atomic_json
 
@@ -1375,3 +1540,137 @@ def test_all_failed_branches_use_bootstrap_comparison_and_finish_round(research)
     state = r.read(experiment)
     assert state["phase"] == "finished" and not state["last_ranking"]
     assert r.snapshot()["default_opponents"] == state["bootstrap"]
+
+
+def test_completed_agent_without_submission_resumes_same_iteration(research):
+    """Replay a clean model turn that ended after reads, before submitting."""
+    from mahjong_ai.persistence.artifacts import atomic_json
+
+    r, run, controller = research
+    with r.edit(run) as (s, db):
+        branch = next(iter(s["branches"]))
+        job = r.start_iteration(s, branch)
+        job["status"] = "running"
+        iteration = s["iterations"][job["iteration"]]
+        root = Path(s["root"]) / "jobs" / job["id"]
+        atomic_json(
+            root / "result.json",
+            {
+                "status": "completed",
+                "thread_id": "early-ended-thread",
+                "usage": {"wall_seconds": 123.6},
+                "interrupted": False,
+                "error": None,
+            },
+        )
+        controller.consume(s, db)
+        assert iteration["status"] == "researching"
+        assert job["status"] == "queued"
+        assert job["continuations"] == 1
+        assert s["branches"][branch]["thread_id"] == "early-ended-thread"
+        assert s["branches"][branch]["completed"] == 0
+        assert iteration["spent"] == pytest.approx(123.6)
+        controller.consume(s, db)
+        assert job["continuations"] == 1
+        assert iteration["spent"] == pytest.approx(123.6)
+
+
+@pytest.mark.parametrize(
+    "case", ["reported_error", "interrupted", "no_thread", "deadline", "limit"]
+)
+def test_agent_continuation_keeps_failure_and_budget_bounds(research, case):
+    r, run, _ = research
+    with r.edit(run) as (s, db):
+        branch = next(iter(s["branches"]))
+        job = r.start_iteration(s, branch)
+        it = s["iterations"][job["iteration"]]
+        result = dict(status="completed", thread_id="thread", usage={"wall_seconds": 5})
+        if case == "reported_error":
+            result.update(status="failed", error="provider unavailable")
+        if case == "interrupted":
+            result["interrupted"] = True
+        if case == "no_thread":
+            result.pop("thread_id")
+        if case == "deadline":
+            it["spent"] = it["config"]["iteration_seconds"] - 20
+        if case == "limit":
+            job["continuations"] = 2
+        r.accept(s, db, job, result)
+        assert it["status"] == "completed"
+        assert s["branches"][branch]["completed"] == 1
+        assert s["branches"][branch]["failed"] == 1
+        assert job["status"] == "completed"
+
+
+def test_agent_continuation_relaunch_preserves_thread_and_time(research, monkeypatch):
+    from types import SimpleNamespace
+    from mahjong_ai.execution import controller as execution
+    from mahjong_ai.execution.agent import agent_prompt
+    from mahjong_ai.persistence.artifacts import atomic_json, read_json
+
+    r, run, controller = research
+    monkeypatch.setattr(
+        execution.subprocess, "Popen", lambda *a, **kw: SimpleNamespace(pid=12345)
+    )
+    with r.edit(run) as (s, db):
+        branch = next(iter(s["branches"]))
+        job = r.start_iteration(s, branch)
+        root = Path(s["root"]) / "jobs" / job["id"]
+        # Two continuations, then one final failed attempt; never a new iteration.
+        for attempt in range(3):
+            job["status"] = "running"
+            atomic_json(
+                root / "result.json",
+                dict(
+                    status="completed",
+                    thread_id="same-thread",
+                    usage={"wall_seconds": 120 + attempt},
+                ),
+            )
+            controller.consume(s, db)
+            if attempt < 2:
+                assert job["status"] == "queued"
+                controller.launch(s, job)
+                task = read_json(root / "task.json")
+                assert task["thread_id"] == "same-thread"
+                assert task["continuation"] == attempt + 1
+                remaining = (
+                    s["iterations"][job["iteration"]]["config"]["iteration_seconds"]
+                    - s["iterations"][job["iteration"]]["spent"]
+                )
+                assert task["deadline"] - time.time() == pytest.approx(remaining, abs=2)
+                assert "同一次研究迭代" in agent_prompt(task)
+                assert len(agent_prompt(task)) < 1000
+        assert s["branches"][branch]["completed"] == 1
+        assert s["branches"][branch]["failed"] == 1
+        assert s["iterations"][job["iteration"]]["spent"] == 363
+        assert job["spent"] + job["usage"]["wall_seconds"] == 363
+        assert job["continuations"] == 2
+
+
+def test_submitted_agent_does_not_continue_while_stop_flag_is_pending(research):
+    r, run, _ = research
+    branch = next(iter(r.read(run)["branches"]))
+    with r.edit(run) as (s, db):
+        job = r.start_iteration(s, branch)
+    r.declare_plan(run, branch, "baseline", "same policy", "exercise receipt race")
+    cid = r.fork(run, branch, "receipt-race", "same policy")["candidate_id"]
+    r.submit(run, branch, [cid])
+    with r.edit(run) as (s, db):
+        job = s["jobs"][job["id"]]
+        root = Path(s["root"]) / "jobs" / job["id"]
+        assert not (root / "submitted.flag").exists()
+        r.accept(
+            s,
+            db,
+            job,
+            dict(
+                status="completed",
+                thread_id="submitted-thread",
+                usage={"wall_seconds": 20},
+            ),
+        )
+        assert job["status"] == "completed"
+        assert not job.get("continuations")
+        assert s["iterations"][job["iteration"]]["status"] == "submitted"
+        assert s["branches"][branch]["failed"] == 0

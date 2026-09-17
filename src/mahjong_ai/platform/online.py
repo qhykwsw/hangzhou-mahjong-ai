@@ -6,6 +6,7 @@ player snapshot is required for play; the probe needs no mapping and never acts.
 
 from __future__ import annotations
 
+import inspect
 import json
 import re
 import ssl
@@ -49,18 +50,39 @@ class SnapshotError(ValueError):
 
 
 class RateLimiter:
-    """Shared across all game workers for one credential/user process."""
+    """Shared across all game workers for one credential/user process.
+
+    Three priority levels: a caller waits while any caller of a higher level is
+    waiting, so the shared /state budget goes first to tables where our own
+    draw or discard may be pending (2), then to possible claim windows (1),
+    then to housekeeping polls (0).
+    """
 
     def __init__(self, rate=14, clock=time.monotonic, sleep=time.sleep):
         self.interval, self.clock, self.sleep = 1 / rate, clock, sleep
         self.next = 0.0
         self.lock = threading.Lock()
+        self.cond = threading.Condition(self.lock)
+        self.waiting = [0, 0, 0]
 
-    def acquire(self):
-        with self.lock:
-            now = self.clock()
-            scheduled = max(now, self.next)
-            self.next = scheduled + self.interval
+    @property
+    def high_waiting(self):
+        return self.waiting[2]
+
+    def acquire(self, priority=0):
+        priority = 2 if priority is True else 0 if priority is False else int(priority)
+        priority = max(0, min(2, priority))
+        with self.cond:
+            self.waiting[priority] += 1
+            try:
+                while any(self.waiting[level] for level in range(priority + 1, 3)):
+                    self.cond.wait(timeout=0.05)
+                now = self.clock()
+                scheduled = max(now, self.next)
+                self.next = scheduled + self.interval
+            finally:
+                self.waiting[priority] -= 1
+                self.cond.notify_all()
         self.sleep(max(0.0, scheduled - now))
 
 
@@ -76,10 +98,10 @@ class PlatformClient:
         )
         self.limiter = RateLimiter()
 
-    def request(self, method, path, body=None):
+    def request(self, method, path, body=None, priority=0):
         for attempt in range(self.retries + 1):
             if "/state?" in path:
-                self.limiter.acquire()
+                self.limiter.acquire(priority)
             req = urllib.request.Request(
                 self.base + path,
                 method=method,
@@ -120,6 +142,51 @@ class PlatformClient:
                         "platform connection failed; action outcome may be unknown"
                     ) from None
                 time.sleep(min(4, 2**attempt))
+
+    def notify(self, path, on_frame, stop):
+        """Follow the server-sent seq stream of one game until closed or stopped.
+
+        Frames carry only a seq watermark (and ``closed`` at the end); the
+        stream does not consume the /state request budget.  Reconnects with a
+        short backoff; returns False when the endpoint is unavailable so the
+        caller can fall back to timed polling.
+        """
+        failures = 0
+        while not stop.is_set():
+            req = urllib.request.Request(
+                self.base + path,
+                headers={"Authorization": "Bearer " + self._token, "Accept": "text/event-stream"},
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=45, context=self.context) as response:
+                    failures = 0
+                    for raw in response:
+                        if stop.is_set():
+                            return True
+                        line = raw.decode("utf-8", "replace").strip()
+                        if not line.startswith("data:"):
+                            continue  # comments / keepalives / blank separators
+                        try:
+                            frame = json.loads(line[5:].strip())
+                        except ValueError:
+                            continue
+                        if not isinstance(frame, dict):
+                            continue
+                        on_frame(int(frame.get("seq", 0) or 0), bool(frame.get("closed")))
+                        if frame.get("closed"):
+                            return True
+            except urllib.error.HTTPError as exc:
+                if exc.code in (404, 405, 501):
+                    return False
+                failures += 1
+            except (urllib.error.URLError, TimeoutError, ConnectionError, OSError):
+                failures += 1
+            if stop.is_set():
+                return True
+            if failures >= 8:
+                return False
+            time.sleep(min(5.0, 0.5 * 2 ** min(failures, 4)))
+        return True
 
     def discover(self, tournament_id=None):
         me = self.request("GET", "/api/me")
@@ -434,6 +501,17 @@ class TournamentRunner:
             nonlocal seq, hand_no
             for event in payload.get("events") or []:
                 if event["seq"] not in event_ids:
+                    for i in range(len(events) - 1, -1, -1):
+                        local = events[i]
+                        if (
+                            local.get("reconstructed")
+                            and local["seq"] != 1
+                            and local["type"] == event.get("type")
+                            and local.get("seat") == event.get("seat")
+                            and local.get("tile", "") == (event.get("tile") or "")
+                        ):
+                            del events[i]
+                            break
                     event = dict(event)
                     event["_round_no"] = (event.get("data") or {}).get(
                         "round_no", hand_no
@@ -444,14 +522,70 @@ class TournamentRunner:
                         hand_no = event["_round_no"] + 1
                 seq = max(seq, event["seq"])
 
-        while not self.stop.is_set():
-            # A fully answered peng window can become chi without emitting
-            # any event. Snapshot polling must therefore be independent of seq.
+        # Server-sent seq frames wake the loop; every fetch is still a full
+        # seq=0 snapshot because a fully answered peng window can become chi
+        # without emitting any event.  Frames only tell us *when* to look.
+        wake = threading.Event()
+        frames = {"seq": 0, "closed": False, "count": 0}
+        notify_stop = threading.Event()
+        notify_thread = None
+        if callable(getattr(self.client, "notify", None)):
+
+            def on_frame(frame_seq, closed):
+                frames["seq"] = max(frames["seq"], frame_seq)
+                frames["count"] += 1
+                if closed:
+                    frames["closed"] = True
+                wake.set()
+
+            def follow():
+                if not self.client.notify(f"/api/games/{_id(gid)}/notify", on_frame, notify_stop):
+                    frames["unavailable"] = True
+                wake.set()
+
+            notify_thread = threading.Thread(target=follow, name=f"notify-{gid}", daemon=True)
+            notify_thread.start()
+        accepts_priority = "priority" in inspect.signature(self.client.request).parameters
+        levels = {"low": 0, "medium": 1, "high": 2}
+        last_snap = None
+        fetched_seq = 0
+        skip_until = 0  # absolute seq below which no frame can need our action
+        settled_since = None
+        last_history = 0.0
+        last_round = None
+        adapter_retries = 0
+        force_snapshot = True
+        try:
+          while not self.stop.is_set():
+            if notify_thread is not None and not frames.get("unavailable"):
+                priority = None
+                while priority is None and not self.stop.is_set():
+                    settled = last_snap is not None and last_snap.get("phase") == "settled"
+                    timed_out = not wake.wait(timeout=1.0 if settled or last_snap is None else 2.0)
+                    wake.clear()
+                    if frames.get("unavailable"):
+                        priority = "high"
+                        break
+                    priority = self._fetch_plan(
+                        last_snap,
+                        frames["seq"] - fetched_seq,
+                        timed_out,
+                        force_snapshot or frames["closed"],
+                        frames["seq"] < skip_until,
+                        settled_since,
+                        now_ms=time.time() * 1000,
+                    )
+                if self.stop.is_set():
+                    break
+            else:
+                priority = "high"
             cursor = 0
             force_snapshot = False
             res = self.client.request(
-                "GET", f"/api/games/{_id(gid)}/state?seq={cursor}"
+                "GET", f"/api/games/{_id(gid)}/state?seq={cursor}", **({"priority": levels.get(priority, 2)} if accepts_priority else {})
             )
+            fetched_seq = max(fetched_seq, int(res.get("seq", 0) or 0), frames["seq"] if res.get("finished") else 0)
+            skip_until = 0
             ingest(res)
             if res.get("finished"):
                 state.update(status="finished", final=_redact(res), event_seq=seq)
@@ -464,6 +598,11 @@ class TournamentRunner:
             snap = res.get("snapshot")
             if snap is None:
                 raise SnapshotError("full state response lacks snapshot")
+            last_snap = snap
+            if snap.get("phase") == "settled":
+                settled_since = settled_since or time.monotonic()
+            else:
+                settled_since = None
             hand_no = snap["round_no"]
             # seq=0 is the server's full-snapshot sentinel. Preserve subsequent
             # events instead of repeatedly discarding them after each action.
@@ -487,9 +626,30 @@ class TournamentRunner:
                     event_ids.add(1)
                 else:
                     state["initial_history_gap"] = True
-            if res.get("seq", 0) > seq:
+            # The event history feeds the policy's public chronology; it is
+            # refreshed at most every few seconds so most decisions cost one
+            # request.  It shares the fetch priority: a low-priority wait here
+            # would hold up this table's own decision.
+            own_actions = sum(
+                1
+                for e in events
+                if e.get("seat") == snap.get("seat")
+                and e.get("_round_no", snap["round_no"]) == snap["round_no"]
+                and e.get("type") in ("tile_discarded", "gang")
+            )
+            history_due = (
+                notify_thread is None
+                or frames.get("unavailable")
+                or snap.get("phase") in ("settled", "finished")
+                or snap["round_no"] != last_round
+                or own_actions < int((snap.get("god") or {}).get("chain_count") or 0)
+                or time.monotonic() - last_history >= 4.0
+            )
+            last_round = snap["round_no"]
+            if res.get("seq", 0) > seq and history_due:
+                last_history = time.monotonic()
                 delta = self.client.request(
-                    "GET", f"/api/games/{_id(gid)}/state?seq={seq}"
+                    "GET", f"/api/games/{_id(gid)}/state?seq={seq}", **({"priority": levels.get(priority, 2)} if accepts_priority else {})
                 )
                 ingest(delta)
                 if delta.get("snapshot"):
@@ -497,20 +657,31 @@ class TournamentRunner:
                     seq = max(seq, delta.get("seq", seq))
                 elif delta.get("seq", 0) > res.get("seq", 0):
                     res = self.client.request(
-                        "GET", f"/api/games/{_id(gid)}/state?seq=0"
+                        "GET", f"/api/games/{_id(gid)}/state?seq=0", **({"priority": levels.get(priority, 2)} if accepts_priority else {})
                     )
                     if res.get("snapshot"):
                         snap = res["snapshot"]
             with self.lock:
                 tournament = self.tournament
-            obs = self.adapter(
-                {
-                    "snapshot": snap,
-                    "tournament": tournament,
-                    "response": res,
-                    "wire_events": sorted(events, key=lambda e: e["seq"]),
-                }
-            )
+            try:
+                obs = self.adapter(
+                    {
+                        "snapshot": snap,
+                        "tournament": tournament,
+                        "response": res,
+                        "wire_events": sorted(events, key=lambda e: e["seq"]),
+                    }
+                )
+            except SnapshotError:
+                if adapter_retries >= 3:
+                    raise
+                # Usually a stale event history; refresh everything and look again.
+                adapter_retries += 1
+                last_history = 0.0
+                force_snapshot = True
+                time.sleep(0.05)
+                continue
+            adapter_retries = 0
             state.update(event_seq=seq, round_no=hand_no)
             if obs is None:
                 continue
@@ -567,13 +738,30 @@ class TournamentRunner:
                     "POST", f"/api/games/{_id(gid)}/action", wire_action(action)
                 )
                 record.update(accepted=True, response=response)
-                if seq == 0:
+                # Predict how many events must pass before we can be needed
+                # again, so frames in between do not spend /state requests.
+                if action.action == "discard":
+                    # our discard, >=1 response, then a draw or a claimer's discard
+                    skip_until = fetched_seq + 3
+                elif action.action == "pass" and obs.phase == "response_peng":
+                    if obs.stage.seat == (snap["turn"] + 1) % 4:
+                        # A fully answered peng window becomes our chi window
+                        # without any event: look again right away.
+                        force_snapshot = True
+                    else:
+                        # our pass, the other responders, the next seat's draw and discard
+                        skip_until = fetched_seq + len(snap.get("responding_seats") or []) + 2
+                elif action.action == "pass" and obs.phase == "response_chi":
+                    skip_until = 0  # the chi responder is the next seat: our draw follows
+                elif action.action in ("chi", "peng", "gang"):
+                    force_snapshot = True  # it is our turn to discard now
+                if True:
                     kind = {"discard": "tile_discarded", "hu": "round_ended"}.get(
                         action.action, action.action
                     )
                     events.append(
                         {
-                            "seq": 1,
+                            "seq": 1 if seq == 0 else max(seq, fetched_seq) + 0.5,
                             "type": kind,
                             "seat": obs.stage.seat,
                             "tile": wire_action(action).get("tile", ""),
@@ -588,8 +776,9 @@ class TournamentRunner:
                             "reconstructed": True,
                         }
                     )
-                    event_ids.add(1)
-                    seq = 1
+                    if seq == 0:
+                        event_ids.add(1)
+                        seq = 1
             except ApiError as exc:
                 record.update(http_status=exc.status, error_code=exc.code)
                 if exc.status != 409:
@@ -604,8 +793,79 @@ class TournamentRunner:
                     stream.write(json.dumps(record, ensure_ascii=False) + "\n")
             state["event_seq"] = seq
             atomic_json(path, state)
-        state["status"] = "paused"
-        atomic_json(path, state)
+          state["status"] = "paused"
+          atomic_json(path, state)
+        finally:
+            notify_stop.set()
+            wake.set()
+
+    @staticmethod
+    def _fetch_plan(last_snap, delta, timed_out, force, predicted_quiet, settled_since, now_ms=None):
+        """Decide whether to spend a /state request now and at which priority.
+
+        Returns None (wait for the next frame), "high" (our own draw or
+        discard may be pending), "medium" (a claim window may be open for us)
+        or "low" (housekeeping poll that must not delay other tables).
+        """
+        if force or last_snap is None:
+            return "high"
+        phase = last_snap.get("phase")
+        me = last_snap.get("seat")
+        turn = last_snap.get("turn")
+        if phase == "settled":
+            # Dealing the next hand emits no event; poll during the fixed pause
+            # and switch to high priority when the new hand is imminent.
+            if not timed_out:
+                return None
+            waited = time.monotonic() - settled_since if settled_since else 0.0
+            return "high" if waited >= 4.0 else "low"
+        if timed_out:
+            return "low"
+        if delta <= 0 or predicted_quiet:
+            return None
+        responders = last_snap.get("responding_seats") or []
+        if phase == "draw":
+            if turn == me:
+                return "high"  # we should already be acting; resync
+            # the seat before us discards next: our chi window, then our draw
+            return "high" if turn == (me - 1) % 4 else "medium"
+        if phase in ("response_peng", "response_chi"):
+            if me in responders:
+                return "high" if phase == "response_chi" or me == (turn + 1) % 4 else "medium"
+            # Every remaining responder answers (pass or timeout), then the next
+            # seat draws and discards: only that discard can open a window for
+            # us.  A claim shortens the sequence; we accept looking one event
+            # late in that rarer case to keep the request budget for the rest.
+            if delta < len(responders) + 2:
+                return None
+            return "high" if (turn + 1) % 4 == me else "medium"
+        return "high"
+
+    @staticmethod
+    def _needs_snapshot(fresh_events, last_snap):
+        """Do the newly read events make a full snapshot worth a request now?"""
+        me = last_snap.get("seat")
+        turn = last_snap.get("turn")
+        phase = last_snap.get("phase")
+        responders = last_snap.get("responding_seats") or []
+        for e in fresh_events:
+            kind, seat = e.get("type"), e.get("seat")
+            data = e.get("data") or {}
+            if kind in ("round_ended", "game_ended", "gap"):
+                return True
+            if seat == me:
+                if kind == "tile_drawn":
+                    return True  # our turn to discard
+                continue  # echoes of our own actions
+            if kind == "tile_discarded":
+                return True  # a claim window may be open for us
+            if kind == "timeout" and data.get("kind") == "discard":
+                return True  # server discarded for them; window may follow
+            if kind in ("pass", "timeout") and phase == "response_peng" and me == (turn + 1) % 4 and me not in responders:
+                return True  # peng window resolving into our chi window, no event for that
+            if kind not in ("pass", "timeout", "chi", "peng", "gang", "tile_drawn"):
+                return True  # unknown event: look
+        return False
 
     def run(self, tournament_id=None, seconds=300):
         self.root.mkdir(parents=True, exist_ok=True)
@@ -614,24 +874,53 @@ class TournamentRunner:
         if seconds <= 0:
             raise ValueError("positive online time budget required")
         tid, scoped, _ = self.client.discover(tournament_id)
+
+        def transient(exc):
+            # The tournament endpoint occasionally answers 404 TOURNAMENT_GONE or
+            # 5xx while the server reshuffles stages; a live event must outlast
+            # that, so only a persistent failure ends the run.
+            return (
+                isinstance(exc, ConnectionError)
+                or exc.status == 429
+                or exc.status >= 500
+                or (exc.status == 404 and exc.code == "TOURNAMENT_GONE")
+            )
+
         if self.join:
             # Tournament detail is forbidden before registration for global tokens.
             for operation in ("register", "ready"):
-                try:
-                    self.client.request(
-                        "POST", f"/api/tournaments/{_id(tid)}/{operation}"
-                    )
-                except ApiError as exc:
-                    if exc.status != 409:
-                        raise
+                for attempt in range(5):
+                    try:
+                        self.client.request(
+                            "POST", f"/api/tournaments/{_id(tid)}/{operation}"
+                        )
+                        break
+                    except (ApiError, ConnectionError) as exc:
+                        if isinstance(exc, ApiError) and exc.status == 409:
+                            break
+                        if not transient(exc) or attempt == 4:
+                            raise
+                        time.sleep(2 * (attempt + 1))
         futures, completed = {}, set()
+        failing_since = None
+        last_join = 0.0
         with (
             exclusive_lock(self.root / ".online.lock"),
             ThreadPoolExecutor(max_workers=self.workers) as pool,
         ):
             try:
                 while time.monotonic() < deadline:
-                    t = self.client.request("GET", f"/api/tournaments/{_id(tid)}")
+                    try:
+                        t = self.client.request("GET", f"/api/tournaments/{_id(tid)}")
+                    except (ApiError, ConnectionError) as exc:
+                        if not transient(exc):
+                            raise
+                        failing_since = failing_since or time.monotonic()
+                        if time.monotonic() - failing_since > 300:
+                            raise
+                        self.stop.wait(2)
+                        continue
+                    failing_since = None
                     with self.lock:
                         self.tournament = t
                     # Persist authoritative stage ledger; never sum repeated ranking snapshots.
@@ -641,7 +930,8 @@ class TournamentRunner:
                         break
                     if status == "stage_open" and not t.get("qualified"):
                         break
-                    if self.join and status in ("registering", "stage_open"):
+                    if self.join and status in ("registering", "stage_open") and time.monotonic() - last_join >= 30:
+                        last_join = time.monotonic()
                         try:
                             if status == "registering":
                                 self.client.request(
@@ -650,8 +940,10 @@ class TournamentRunner:
                             self.client.request(
                                 "POST", f"/api/tournaments/{_id(tid)}/ready"
                             )
-                        except ApiError as exc:
-                            if exc.status != 409:
+                        except (ApiError, ConnectionError) as exc:
+                            if isinstance(exc, ApiError) and exc.status == 409:
+                                pass
+                            elif not transient(exc):
                                 raise
                     for gid, future in list(futures.items()):
                         if future.done():

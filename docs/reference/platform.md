@@ -61,6 +61,8 @@
 
 脚本冻结 runtime 并保存对局与审计结果。相同输出目录用于恢复，已完成对局不重复；新比赛使用新目录。`--insecure` 适用于平台自签证书。
 
+审计里的 `response_window_expired` 与我方座位的 `timeout` 事件代表我方错过了响应窗口，错过等价于过牌，不会产生非法动作，因此规则一致性检查不会报警。必须单独看**我方窗口错过率**（我方 `timeout(response)` ÷ 我方全部窗口）：4 桌并发的测试房约 2%，10 桌并发的纯轮询客户端约 50%，这是客户端时延而非策略问题。正式赛用 10 桌并发，对战前先在同等并发下核对该指标。
+
 ```bash
 .venv/bin/python scripts/inspect_platform_run.py .local/platform/test-01
 .venv/bin/python scripts/audit_platform_run.py .local/platform/test-01 \
@@ -77,8 +79,10 @@
 | 确认身份与配置 | 读取 `/api/me` 与房间 rules；响应窗口、并发 M、每场局数 Rounds 从配置读取 |
 | 正式阶段 | register、ready 后参与；新的 `stage_open` 需要重新 ready。报名只是意向，不占对局额度，不能在客户端按报名数量扣减可用场次 |
 | 自由匹配 | 仅 `POST /api/match`，不 register/ready；服务端优先按近期战力相近匹配，无需客户端选房。结果未知先查 me，避免重复匹配 |
-| 并发 | 每个 game 独立状态和游标，同一用户共享限流；自由匹配准入按正在进行的对局数 + 新房 M ≤ 16 判断，`MATCH_LIMIT_REACHED` 只来自 `/api/match`，报名不占额度。当前 state 请求按 14/s 控制 |
+| 并发 | 每个 game 独立状态和游标，同一用户共享限流；自由匹配准入按正在进行的对局数 + 新房 M ≤ 16 判断，`MATCH_LIMIT_REACHED` 只来自 `/api/match`，报名不占额度。当前 state 请求按 14/s 控制（官方上限 16/s，实测 15/s 已会触发 429） |
+| 唤醒与拉取 | 每桌订阅 `GET /api/games/{id}/notify` SSE 流（只带 seq 水位，不占 state 额度）作为唤醒信号，仍以 `state?seq=0` 全量快照为准。按上一快照与本方最近动作预测静默期：本方出牌后至少 3 个事件、吃碰窗口过牌后至少 2 个事件内不拉取；本方是下家时碰窗过牌后立即重拉（碰转吃无事件）；他人窗口只在事件数达到 min(2, 应答人数) 后再看。限流分高低优先级，可能轮到本方的拉取优先，局间 5 秒暂停只做低优先级定时轮询。10 桌并发下旧的纯轮询错过约一半的 1 秒吃碰窗口 |
 | 事件恢复 | `seq=0` 重建；游标断档或 409 后重拉状态。碰转吃可能无新事件，不能仅依赖事件长轮询 |
+| 瞬时错误 | 锦标赛详情接口偶发 `404 TOURNAMENT_GONE`、429 与 5xx；参赛循环视为瞬时错误，2 秒后重试，连续失败超过 5 分钟才退出；报名与出席确认每 30 秒重发一次，409 视为已完成。适配器抛快照错误先强制刷新历史与快照重试 3 次再判失败 |
 | 合法动作 | 平台无 `allowed_actions`，适配器结合 stage、turn、responding_seats、drawn_tile 生成；state pending 不代表局势未变化 |
 | 抓打圈豁免 | 适配器将 `god.god_discarder_seat` 传入观察，无圈时为 -1；`catch_restricted` 等价于 `catch_play && god_discarder_seat != seat`。圈内非财神出牌仍对豁免方开启固定时长响应窗口，不能因圈中或没有可吃碰的牌而跳过轮询 |
 | 分数 | `round_ended.data.scores` 为本局增量，`game_ended.final_scores` 为累计分 |

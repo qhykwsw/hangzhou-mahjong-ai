@@ -13,9 +13,21 @@ CONTRACT = """# 麻将分支研究契约
 - 杠爆按杠动作完成后、补牌前的听牌手牌判定爆头，不沿用上一次出牌时的状态；单次杠与爆头
   叠加为 ×4，再按规则叠加其他番型。财飘与杠的连续动作链需满足各自条件，不能无条件续链。
 判胡与番型细节读取 research_read_source("rules")，动作始终以 observation.legal_actions 为准。
+公开源码名称以 research_read_source 的 name 枚举为准。RulePolicy、risk_preference 等
+strategies/common.py 内容使用 name="policy" 读取，不使用 "common"；不要用文件路径或组合 ID 猜名称。
 
 只使用 mahjong_research MCP 工具，不使用 shell、其他工具或子 Agent。
-先读研究状态、本分支现役代表，以及 research_conclusions 中跨实验保留的累计研究结论和执行证据。
+每次交接已提供本分支全部累计假设、结论、适用条件和失败原因，不按最近三次截断。
+交接中 evidence.condition_id 指向 research_conditions 的共享评估条件，信息没有删除。
+research_status 只读当前任务、现役代表、草稿、额度和 pending_conclusion_ids，不重复交接中的结论正文。
+首次省略 known_revision；后续传上次收到的 revision，未变化返回 unchanged，否则返回 delta，
+用 changes 替换对应顶层字段并删除 removed 中的字段。版本不可用时返回 full；省略版本也可重新读取完整当前状态。
+research_history 按 kind=candidates/iterations/conclusions 与 query 分页检索，只返回匹配页；
+沿 next_offset 翻页可访问全部历史。research_read_conclusion(record_id) 返回一条完整证据与全部修订。
+research_read_file / research_read_source 按字符分页，沿 next_offset 继续到 null 才是全文；
+需要定位时可指定 offset/limit（最多 4000 字符），同一文件各页 revision 应一致。
+先核对当前状态与现役源码，复用交接中的累计结论；只针对本次假设的知识缺口读取 SDK 或历史。
+无需遍历全部 SDK、重复读取契约或已经看过且未变化的源码；压缩后按缺失记录定位读取，避免从头通读。
 每次迭代先复盘 assessment 为空的已完成尝试，用 research_record_conclusion 按 record_id 记录：
 - status：verified（在所列条件下得到验证）、refuted（在所列条件下被否定）、inconclusive（证据不足）
   或 untested（未有效验证）；conclusion 解释假设与证据的关系，conditions 写适用条件、局限和重试条件。
@@ -32,7 +44,10 @@ CONTRACT = """# 麻将分支研究契约
 方向比别的选择更值得做）。没有记录判断就不能创建或提交候选，这段文字会和分支一起展示在网页上
 给用户看。为这位读者而写：写明具体机制和证据，不要写“优化策略”这类空话。
 从本分支任意历史候选派生草稿、修改它的 strategy.py 包，然后提交一批 1..configured_limit 个
-候选（最多四个）。提交成功后立即结束本次回复。
+候选（读取 research_status.config.candidate_limit，以本次实际上限为准，不能默认四个）。
+超限批次在自检前拒绝；未提交草稿不会参与评估，不能把它们当作已有验证结果。
+创建时 candidate_id 使用 1..64 位字母、数字、下划线或连字符短名，不含分支前缀；工具返回完整 ID。
+历史草稿只能作为 parent 派生本次的新候选，不可跨迭代直接提交，以保持研究证据归属。提交成功后立即结束本次回复。
 工具回执可能在调用已经生效之后丢失，所以把每个报错都当成状态问题而不是重试信号：先重新读
 research_status，按实际落到注册表的结果继续。重复 create 会返回已存在的候选（"existing":
 true）而不是报冲突，research_declare_plan 可以安全重写，两者都可重复调用；不要重复提交一个
@@ -78,7 +93,9 @@ chi、peng、gang、hand_ended，不包含配牌、庄家初摸或网络 pass/ti
 gang 事件的 concealed 标识暗杠，非本人观察隐藏其 tile/tiles。副露 from_seat 从合法公开历史恢复，
 历史缺失时为 None，不能把未知来源当作固定座位。公开 observations 源码提供事件规范化和财飘判断。
 每个草稿都必须先真正跑通再提交：调用 research_check_candidate，它会在冻结运行时里导入包、用
-完整能力校验器执行 build，有 train 时再打一场训练。提交会重跑同一套检查；失败的草稿会带着原始
+完整能力校验器执行 build；无 train 的策略还会真实打一局，报错、超时、非法动作均不通过，
+有 train 时再打一场训练。牌形缓存接口（如 shanten）的 hand 参数使用 tuple，不传不可哈希的 list。
+提交会重跑同一套检查；失败的草稿会带着原始
 错误被拒绝，整批不会冻结。你必须在同一次回复里修好并重新提交。不要带着没跑通的草稿结束回复，
 也不要提交你没有执行过的代码。
 heuristic 与 search 组合没有训练环节：不要定义 strategy.train，也不要传 training_games；这些
@@ -88,7 +105,7 @@ ctx.initial 是派生父代的模型；ctx.play(learner) 跑完一次真实完�
 对局数；ctx.checkpoint(metadata) 原子提交可恢复的模型状态；ctx.completed_episodes 与
 ctx.checkpoint_metadata 提供恢复信息。
 在可训练组合上，训练场数由你提交时决定；配置值只是默认，你可以覆盖。
-在 research_status / research_history 里查看自己每次迭代的 execution_feedback，以及提示里给出
+在 research_history(kind="iterations") 里查看自己每次迭代的 execution_feedback，以及提示里给出
 的上次执行反馈。它报告申请与实际完成的训练场数、agent_seconds、preparation_seconds 和
 execution_limit_seconds。时间单位是秒；preparation 包含依赖准备、采集对局、训练与校验，不含
 排队和配对评估；null 表示没有记录到测量值。根据实际耗时与结果自行调整后续 training_games，并
@@ -109,11 +126,16 @@ research_record_conclusion 里。每次迭代都在新会话中进行，携带�
 对比阶段。每个准备好的候选与原代表完成相同的配对赛程，没有提前筛选。优化目标是终局名次的
 平均效用 3、2、1、0。名次沿用线上赛段结算：非决赛按总分、名次分、白板获取数、稳定身份依次
 排序；只有单场名次分在同分时取平均，不能把这个平均名次当作最终赛段名次。决赛按总分和加赛。
-没有候选超过原代表指标时保留原代表，同分也保留。所有未归档且完成过有效候选评估的分支都参加
+晋级要求双方完整、同等场数且无报错、超时、代打，并且场口径配对差的双侧 95% Student-t
+置信区间下界严格大于 0。每四座轮换组算一个样本，自由度为组数减一；不足两组、配对不完整、
+区间下界为零或负数时保留原代表，不能仅凭均值略高晋级。多个候选达标时取平均场效用最高者。
+paired.confidence_lower / confidence_upper 给出区间，promotion 给出是否达标及原因；逐局差不参与晋级。
+所有未归档且完成过有效候选评估的分支都参加
 共同竞技，包括本轮没有迭代的分支。前 K 名代表组成下一轮的对手池。没有淘汰。排行榜在共同竞技
 之后更新，而不是每批之后。
 成绩包含 evaluation_groups 和按四座轮换组均值估计的 standard_error（不足两组时为 null）。这是
-描述性的抽样波动，不是名次的置信区间；选优仍只看平均效用，不动态追加样本。
+描述性的抽样波动，不是名次的置信区间。晋级只使用候选对原代表的配对差区间；大乱斗仍按均值排名。
+区间仅针对本批冻结对手池的单次比较，不是跨迭代同时保证；不动态追加样本，也不改写历史冻结结果。
 分支历史跨实验保留；候选名在同一分支内必须唯一。
 你不能改动评估器、赛程、资源并发、对手选择和执行时限。
 单次迭代默认执行上限一小时，不含排队与框架评估。失败同样消耗一次额度；部分成功的批次照常

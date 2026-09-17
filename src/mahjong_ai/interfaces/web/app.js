@@ -245,8 +245,13 @@ function cardProgress(branch) {
     const paired = evaluation.paired == null
       ? ""
       : ` · 场配对 Δ ${evaluation.paired.delta >= 0 ? "+" : ""}${evaluation.paired.delta.toFixed(3)}${evaluation.paired.standard_error == null ? "" : ` ± ${evaluation.paired.standard_error.toFixed(3)}`}`;
+    const interval = evaluation.paired?.confidence_lower == null
+      ? ""
+      : ` · 95% 区间 [${evaluation.paired.confidence_lower.toPrecision(3)}, ${evaluation.paired.confidence_upper.toPrecision(3)}]`;
+    const promotionReasons = {eligible: "达到晋级门槛", insufficient_evidence: "未达晋级门槛", execution_errors: "评估含运行异常，不晋级", incomplete_evaluation: "评估未满额，不晋级", incomplete_pairing: "配对组不足或不完整，不晋级"};
+    const promotion = evaluation.promotion ? ` · ${promotionReasons[evaluation.promotion.reason] || evaluation.promotion.reason}` : "";
     html += progressRow(label, `${evaluation.completed_games}/${evaluation.total_games} 场`, evaluation.completed_games,
-      evaluation.total_games, (progressStates[evaluation.status] || evaluation.status) + live + score + hands + paired);
+      evaluation.total_games, (progressStates[evaluation.status] || evaluation.status) + live + score + hands + paired + interval + promotion);
   }
   if (p.outcome) {
     const outcome = {improved: "新版晋级为基线", retained: "保留原基线", failed: "本次迭代失败", cancelled: "本次迭代已取消"};

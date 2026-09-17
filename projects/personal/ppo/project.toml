@@ -1,9 +1,0 @@
-[project]
-id = "personal-ppo"
-family = "ppo"
-entrypoint = "src/strategy.py"
-workspace = "../.."
-
-dependencies = []
-algorithm = "ppo"
-description = "Minimal human-maintained PPO policy using public observations"

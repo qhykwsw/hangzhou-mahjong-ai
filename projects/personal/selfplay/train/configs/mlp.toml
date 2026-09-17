@@ -1,0 +1,3 @@
+run_name = "mlp"
+arch = "mlp"
+hours = 1.0

@@ -9,6 +9,7 @@ import sys
 import time
 from mahjong_ai.persistence.artifacts import atomic_json, read_json
 from mahjong_ai.research.contract import CONTRACT
+from mahjong_ai.research.agent_context import handoff_view
 
 # 模型网关在并发启动时会对瞬时过载返回 429/5xx；Codex 自己的重试用尽后整轮
 # 迭代会被记成失败并消耗配额，所以在执行器里再补一层带退避的重试。
@@ -97,12 +98,27 @@ def codex_command(
 
 
 def agent_prompt(task):
+    if task.get("continuation"):
+        return (
+            "继续当前同一次研究迭代，沿用本会话已有判断、草稿和累计结论。"
+            "上一条回复正常结束，但注册表尚未收到候选提交；这不算完成任务。"
+            "先读取 research_status 对齐实际状态，再完成待复盘结论、计划、"
+            "候选实现和自检，调用 research_submit_batch 提交成功后才能结束。"
+            "不要重复创建已有草稿或重复提交已接收的批次。原迭代时间上限不变。"
+        )
+    if task.get("thread_id"):
+        return (
+            "继续当前同一次研究迭代，沿用会话中的累计结论、判断和草稿，不重新投喂交接。"
+            "先调用 research_status 核对当前状态；已知 revision 时传 known_revision，"
+            "上下文压缩后需要恢复当前状态时省略版本号，缺少某条证据时主动读取详情。"
+            "完成本次候选实现、自检和 research_submit_batch，提交成功后立即结束。"
+        )
     prompt = (
         CONTRACT
         + "\n当前策略组合："
         + task["brief"]
         + (
-            "\n先读取状态、本分支现役代表和全部相关历史。必须派生新草稿后修改和提交。"
+            "\n交接已包含全部累计结论；先核对当前状态与现役源码，按本次假设的具体缺口读取资料，不要遍历 SDK 或重新获取已给出的历史、契约和未变化源码。必须派生新草稿后修改和提交。"
             "先用 research_record_conclusion 整理累计研究结论中 assessment 为空的记录，"
             "区分假设效果和实现、资源、基础设施失败。再用 research_declare_plan 写下三件事：assessment（现役策略现在具体"
             "在做什么、它这一路的实测轨迹说明什么）、direction（本次要尝试的方向）、reason（为什么"
@@ -112,7 +128,8 @@ def agent_prompt(task):
             "重复调用 create 会直接返回已存在的那个候选（existing 为 true），"
             "research_declare_plan 可以安全重写；不要在没有确认结果前反复重试同一个调用，"
             "也不要重复提交一个你没有看到结果的批次。"
-            "本次最多提交一批 1 至 4 个候选；提交成功后立即用简短结论结束本次回复，"
+            f"本次最多提交一批 1 至 {task['candidate_limit']} 个候选；"
+            "未提交草稿不参与评估，不要把它们当作已有验证结果。提交成功后立即用简短结论结束本次回复，"
             "不等待比赛。提交前先用 research_check_candidate 跑通每个草稿，框架在提交时会再跑一次；"
             "被拒绝必须在本次回复内修好并重新提交，不能带着跑不通的代码结束回复。"
             "比赛完成后的下一次迭代会开启新会话并携带结构化交接。不要向用户提问。"
@@ -128,8 +145,10 @@ def agent_prompt(task):
     if task.get("handoff"):
         prompt += (
             "\n本分支的结构化交接（每次迭代开新会话，携带累计研究结论与待复盘证据，"
-            "结论不按最近三次截断；不要引用旧聊天中记不得的细节，需要就查 research_status / research_history）：\n"
-            + json.dumps(task["handoff"], ensure_ascii=False)
+            "结论不按最近三次截断；每条 evidence.condition_id 指向 research_conditions 中的共享条件；不要重新通读完整历史，缺少细节时按关键词检索 research_history 或用 research_read_conclusion 读取一条完整证据）：\n"
+            + json.dumps(
+                handoff_view(task["handoff"]), ensure_ascii=False, separators=(",", ":")
+            )
         )
     if task.get("previous_iteration_feedback"):
         prompt += (

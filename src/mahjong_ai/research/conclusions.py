@@ -135,6 +135,7 @@ def ledger(state, branch=None):
                         if complete
                         else None,
                         "paired": deepcopy(result.get("paired")),
+                        "promotion": deepcopy(result.get("promotion")),
                         "runtime_counters": counters,
                         "failures": errors,
                         "diagnostics_truncated": diagnostics_truncated,

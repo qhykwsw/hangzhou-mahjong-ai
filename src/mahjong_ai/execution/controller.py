@@ -186,6 +186,7 @@ class Controller:
                 model_config=b["model_config"],
                 brief=comb["name"] + ": " + str(comb["parameters"]),
                 iteration=it["number"],
+                candidate_limit=cfg["candidate_limit"],
                 handoff=self.research.handoff(s, b["id"]),
                 previous_plan=(previous or {}).get("plan"),
                 previous_iteration_feedback=(
@@ -275,6 +276,7 @@ class Controller:
         task.update(deadline=time.time() + remaining, owner_pid=os.getpid())
         if j["kind"] == "agent":
             task["thread_id"] = s["branches"][j["branch"]]["thread_id"]
+            task["continuation"] = j.get("continuations", 0)
         atomic_json(root / "task.json", task)
         module = (
             "mahjong_ai.execution.agent"

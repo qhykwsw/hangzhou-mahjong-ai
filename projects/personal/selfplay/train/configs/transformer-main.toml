@@ -1,0 +1,5 @@
+run_name = "transformer-main"
+arch = "transformer"
+hours = 72.0
+league_snapshot_minutes = 30.0
+checkpoint_minutes = 10.0

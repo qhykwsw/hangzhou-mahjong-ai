@@ -8,7 +8,7 @@ from dataclasses import replace
 from typing import Protocol, Sequence
 
 from mahjong_ai.domain.rules import WHITE, counts, calculate_fan, payments
-from mahjong_ai.domain.observations import can_discard_piao, policy_events
+from mahjong_ai.domain.observations import can_discard_piao
 from mahjong_ai.domain.types import (
     Action,
     Meld,
@@ -21,6 +21,7 @@ from mahjong_ai.domain.types import (
 
 
 ENGINE_VERSION = "hangzhou-local-v7"
+POLICY_EVENT_KINDS = frozenset(("draw", "discard", "chi", "peng", "gang", "hand_ended"))
 
 
 def derive_seed(*parts) -> int:
@@ -50,6 +51,7 @@ class HandState:
         scores=(0, 0, 0, 0),
         previous_events=(),
         in_tiebreak=False,
+        previous_views=None,
     ):
         self.config = config
         self.dealer = dealer
@@ -68,6 +70,16 @@ class HandState:
         self.discards = [[] for _ in range(4)]
         self.events: list[tuple[PublicEvent, int | None]] = list(previous_events)
         self.hand_start = len(self.events)
+        # Per-seat policy-visible projections of ``events``; appended lazily so
+        # every observation is O(new events) instead of re-masking the whole
+        # multi-hand history.  A caller that already holds the projection of
+        # ``previous_events`` (the settlement loop) passes it in.
+        if previous_views is not None:
+            if len(previous_views) != 4:
+                raise ValueError("previous_views requires four seat projections")
+            self._views = [list(v) for v in previous_views]
+            self._views_source = self.events
+            self._views_len = len(self.events)
         self.initial_hands = [list(h) for h in self.hands]
         for seat in range(4):
             self._event("deal", seat, tiles=tuple(self.hands[seat]), private=seat)
@@ -182,14 +194,55 @@ class HandState:
                     result.append(Action("chi", t, used))
         return tuple(result)
 
+    def _sync_views(self):
+        events = self.events
+        if (
+            getattr(self, "_views_source", None) is not events
+            or getattr(self, "_views_len", 0) > len(events)
+        ):
+            self._views = [[], [], [], []]
+            self._views_source = events
+            self._views_len = 0
+        done = self._views_len
+        if done == len(events):
+            return
+        views = self._views
+        for event, private in events[done:]:
+            kind = event.kind
+            if kind not in POLICY_EVENT_KINDS:
+                continue
+            tile, tiles = event.tile, tuple(sorted(event.tiles))
+            if kind in ("peng", "gang") and tile is not None:
+                tiles = (tile,) * (3 if kind == "peng" else 4)
+            scores = tuple(event.scores)
+            visible = (
+                event
+                if tile == event.tile and tiles == event.tiles and scores == event.scores
+                else replace(event, tile=tile, tiles=tiles, scores=scores)
+            )
+            hidden = None
+            secret_draw = kind == "draw"
+            for viewer in range(4):
+                if (
+                    (private is not None and private != viewer)
+                    or (secret_draw and event.seat != viewer)
+                    or (event.concealed and event.seat != viewer)
+                ):
+                    if hidden is None:
+                        hidden = replace(event, tile=None, tiles=(), scores=scores)
+                    views[viewer].append(hidden)
+                else:
+                    views[viewer].append(visible)
+        self._views_len = len(events)
+
+    def public_views(self):
+        """Four per-seat policy event lists covering every recorded event."""
+        self._sync_views()
+        return self._views
+
     def observation(self):
         seat = self.turn
-        public = []
-        for e, private in self.events:
-            if private is None or private == seat:
-                public.append(e)
-            else:
-                public.append(replace(e, tile=None, tiles=()))
+        self._sync_views()
         melds = tuple(
             tuple(
                 m if not m.concealed or i == seat else replace(m, tiles=()) for m in row
@@ -208,7 +261,7 @@ class HandState:
                 in_tiebreak=self.in_tiebreak,
             ),
             tuple(sorted(self.hands[seat])),
-            policy_events(public, seat),
+            tuple(self._views[seat]),
             self.legal_actions(),
             melds,
             tuple(tuple(x) for x in self.discards),

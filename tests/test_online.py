@@ -1,3 +1,4 @@
+import time
 """Normalized contract fixtures; these are not captured official player snapshots."""
 
 from dataclasses import asdict
@@ -403,3 +404,71 @@ def test_official_piao_and_kong_replenishment_recover_from_own_events():
         }
     )
     assert obs.piao_count == 1 and obs.chain_count == 2
+
+
+def test_fetch_plan_spends_requests_only_when_a_turn_can_be_pending():
+    from mahjong_ai.platform.online import TournamentRunner
+
+    plan = TournamentRunner._fetch_plan
+    assert plan(None, 0, False, False, False, None) == "high"
+    draw_other = {"phase": "draw", "seat": 1, "turn": 3, "responding_seats": []}
+    assert plan(draw_other, 0, False, False, False, None) is None
+    assert plan(draw_other, 1, False, False, False, None) == "medium"
+    assert plan(draw_other, 0, True, False, False, None) == "low"
+    # the seat right before us is about to discard: chi window and our draw follow
+    draw_prev = {"phase": "draw", "seat": 1, "turn": 0, "responding_seats": []}
+    assert plan(draw_prev, 1, False, False, False, None) == "high"
+    # frames inside a predicted quiet stretch after our own action are skipped
+    assert plan(draw_other, 2, False, False, True, None) is None
+    # others' response window: one pass cannot open anything for us
+    others = {"phase": "response_peng", "seat": 1, "turn": 2, "responding_seats": [0, 3]}
+    assert plan(others, 3, False, False, False, None) is None
+    assert plan(others, 4, False, False, False, None) == "medium"
+    others_prev = {"phase": "response_peng", "seat": 1, "turn": 0, "responding_seats": [2, 3]}
+    assert plan(others_prev, 4, False, False, False, None) == "high"
+    mine = {"phase": "response_peng", "seat": 1, "turn": 2, "responding_seats": [1, 3]}
+    assert plan(mine, 1, False, False, False, None) == "medium"
+    mine_chi = {"phase": "response_chi", "seat": 1, "turn": 0, "responding_seats": [1]}
+    assert plan(mine_chi, 1, False, False, False, None) == "high"
+    # settled: only timer polls, high once the fixed pause is nearly over
+    settled = {"phase": "settled", "seat": 1, "turn": 0}
+    assert plan(settled, 5, False, False, False, None) is None
+    assert plan(settled, 0, True, False, False, time.monotonic()) == "low"
+    assert plan(settled, 0, True, False, False, time.monotonic() - 4.5) == "high"
+    assert plan(settled, 0, False, True, False, None) == "high"
+
+
+def test_rate_limiter_lets_high_priority_callers_go_first():
+    from mahjong_ai.platform.online import RateLimiter
+
+    clock = [0.0]
+    order = []
+    limiter = RateLimiter(rate=10, clock=lambda: clock[0], sleep=lambda s: clock.__setitem__(0, clock[0] + s))
+    limiter.acquire(priority=2)
+    order.append(("high", clock[0]))
+    limiter.acquire(priority=0)
+    order.append(("low", clock[0]))
+    limiter.acquire(priority=1)
+    order.append(("medium", clock[0]))
+    assert [round(t, 2) for _, t in order] == [0.0, 0.1, 0.2]
+    assert limiter.waiting == [0, 0, 0]
+
+
+def test_needs_snapshot_only_for_events_that_can_require_our_action():
+    from mahjong_ai.platform.online import TournamentRunner
+
+    need = TournamentRunner._needs_snapshot
+    snap = {"seat": 1, "turn": 2, "phase": "response_peng", "responding_seats": [0, 3]}
+    assert need([{"type": "pass", "seat": 0}], snap) is False
+    assert need([{"type": "timeout", "seat": 3, "data": {"kind": "response"}}], snap) is False
+    assert need([{"type": "tile_discarded", "seat": 3}], snap) is True
+    assert need([{"type": "tile_drawn", "seat": 1}], snap) is True
+    assert need([{"type": "tile_drawn", "seat": 3}], snap) is False
+    assert need([{"type": "peng", "seat": 0}], snap) is False
+    assert need([{"type": "round_ended", "seat": None}], snap) is True
+    assert need([{"type": "timeout", "seat": 0, "data": {"kind": "discard"}}], snap) is True
+    # we are the next seat and already answered the peng window: its resolution
+    # opens our chi window without any event
+    chi_next = {"seat": 3, "turn": 2, "phase": "response_peng", "responding_seats": [0, 1]}
+    assert need([{"type": "pass", "seat": 0}], chi_next) is True
+    assert need([{"type": "mystery", "seat": 0}], snap) is True

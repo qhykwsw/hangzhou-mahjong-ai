@@ -55,13 +55,19 @@ def file_hash(path):
 
 
 def environment_info():
+    from importlib.metadata import PackageNotFoundError, version
     import platform
     import sys
     import numpy as np
 
+    try:
+        scipy_version = version("scipy")
+    except PackageNotFoundError:
+        scipy_version = None
     return {
         "python": sys.version,
         "numpy": np.__version__,
+        "scipy": scipy_version,
         "platform": platform.platform(),
         "machine": platform.machine(),
     }

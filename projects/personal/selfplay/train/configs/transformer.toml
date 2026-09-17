@@ -1,0 +1,3 @@
+run_name = "transformer"
+arch = "transformer"
+hours = 1.0

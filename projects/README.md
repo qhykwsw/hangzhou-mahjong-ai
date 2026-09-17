@@ -8,7 +8,7 @@
 projects/
 ├── agent-research/       # 自动研究项目；组合仍由 research.toml 注册
 └── personal/
-    ├── ppo/              # 人工维护的 PPO 项目
+    ├── selfplay/         # 人工维护的自我对弈 PPO 项目（PyTorch 训练，ONNX 发布）
     └── rules/            # 人工维护的规则项目
 ```
 
