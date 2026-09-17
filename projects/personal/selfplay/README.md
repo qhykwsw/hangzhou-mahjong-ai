@@ -20,6 +20,7 @@ selfplay/
 │   ├── models/         # mlp / resnet / transformer，共用编码与头
 │   ├── export.py       # torch → ONNX 与一致性校验
 │   ├── evaluate.py     # 离线评估：固定对手、分块置信区间、多策略互打
+│   ├── sweep_nodes.py  # 逐节点评估：导出联赛快照与 best，同种子配对初筛，前几名大乱斗复核
 │   └── configs/        # 三种架构与冒烟配置
 ├── scripts/            # 参赛流程：大乱斗选优、冻结、上线与自动续跑
 ├── tests/              # 项目内测试
@@ -37,6 +38,8 @@ PYTHONPATH=src python3 projects/personal/selfplay/train/run.py --config projects
 # 离线评估导出的 actor；--brawl 让多方均衡混战（'auto' = 自动研究现役代表，'builtin' = 四个内置基线）
 PYTHONPATH=src python3 projects/personal/selfplay/train/evaluate.py --policy projects/personal/selfplay/runs/transformer-main/export --games 1024
 PYTHONPATH=src python3 projects/personal/selfplay/train/evaluate.py --policy <export...> --brawl auto builtin --games 2048
+# 逐节点评估（--wait-pid 等训练进程退出再开始；--entries 冻结的对手名单写在 <run>/sweep/opponents.json）
+PYTHONPATH=src python3 projects/personal/selfplay/train/sweep_nodes.py --run projects/personal/selfplay/runs/transformer-main --wait-pid <训练 PID>
 # 发布：把导出复制到 models/ 后走通用流程
 cp projects/personal/selfplay/runs/resnet/export/{policy.onnx,meta.json} projects/personal/selfplay/models/
 .venv/bin/mahjong-ai release-build --project projects/personal/selfplay --version v0.1.0
@@ -47,7 +50,7 @@ cp projects/personal/selfplay/runs/resnet/export/{policy.onnx,meta.json} project
 
 `scripts/tonight.sh` 把「多方大乱斗 → 冻结胜者（RL 走 release-build，自动研究候选走 `mahjong-ai export`）→ 沙箱试跑 → `--go` 时用 `online-play --join` 上线」串成一条流程；`scripts/go-ertest.sh` 直接用已冻结的参赛包上线并在异常退出时用同一目录自动续跑。两者都读 `.local/credentials/free-play.json` 里的锦标赛令牌。
 
-训练日志在 `runs/<run_name>/log.jsonl`，检查点在 `runs/<run_name>/ckpt/`，联赛快照在 `runs/<run_name>/league/`，结束时导出到 `runs/<run_name>/export/` 并做 torch 与 ONNX 的输出比对。`--resume` 从 `ckpt/latest.pt` 续跑。
+训练日志在 `runs/<run_name>/log.jsonl`，检查点在 `runs/<run_name>/ckpt/`，联赛快照在 `runs/<run_name>/league/`，结束时导出到 `runs/<run_name>/export/` 并做 torch 与 ONNX 的输出比对。`--resume` 从 `ckpt/latest.pt` 续跑；进度表按「累计时长 ÷ `--hours`」计算，续跑时改 `--hours` 会让学习率、熵系数与塑形权重跳到新位置，且 `best.pt` 在续跑第一轮会被覆盖。联赛快照每 30 分钟一份，移出联赛池后文件仍保留，`sweep_nodes.py` 以它们为节点，结果写到 `runs/<run_name>/sweep/summary.md`；同种子评估可复现，相邻节点配对约把差值标准误降三成。
 
 ## 关键约定
 

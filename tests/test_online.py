@@ -1,3 +1,5 @@
+import json
+import threading
 import time
 """Normalized contract fixtures; these are not captured official player snapshots."""
 
@@ -420,22 +422,25 @@ def test_fetch_plan_spends_requests_only_when_a_turn_can_be_pending():
     assert plan(draw_prev, 1, False, False, False, None) == "high"
     # frames inside a predicted quiet stretch after our own action are skipped
     assert plan(draw_other, 2, False, False, True, None) is None
-    # others' response window: one pass cannot open anything for us
+    # others' response window: a peng resolves it at once and the claimer's
+    # discard is the second event, so one event can never need us
     others = {"phase": "response_peng", "seat": 1, "turn": 2, "responding_seats": [0, 3]}
-    assert plan(others, 3, False, False, False, None) is None
-    assert plan(others, 4, False, False, False, None) == "medium"
+    assert plan(others, 1, False, False, False, None) is None
+    assert plan(others, 2, False, False, False, None) == "medium"
     others_prev = {"phase": "response_peng", "seat": 1, "turn": 0, "responding_seats": [2, 3]}
-    assert plan(others_prev, 4, False, False, False, None) == "high"
+    assert plan(others_prev, 2, False, False, False, None) == "high"
+    chi_other = {"phase": "response_chi", "seat": 1, "turn": 2, "responding_seats": [3]}
+    assert plan(chi_other, 1, False, False, False, None) is None
+    assert plan(chi_other, 2, False, False, False, None) == "medium"
     mine = {"phase": "response_peng", "seat": 1, "turn": 2, "responding_seats": [1, 3]}
     assert plan(mine, 1, False, False, False, None) == "medium"
     mine_chi = {"phase": "response_chi", "seat": 1, "turn": 0, "responding_seats": [1]}
     assert plan(mine_chi, 1, False, False, False, None) == "high"
-    # settled: only timer polls, high once the fixed pause is nearly over
-    settled = {"phase": "settled", "seat": 1, "turn": 0}
-    assert plan(settled, 5, False, False, False, None) is None
-    assert plan(settled, 0, True, False, False, time.monotonic()) == "low"
-    assert plan(settled, 0, True, False, False, time.monotonic() - 4.5) == "high"
-    assert plan(settled, 0, False, True, False, None) == "high"
+    # states we already answered: our own draw follows a chi-window pass,
+    # otherwise only a claimer's discard can need us
+    assert plan(mine, 1, False, False, False, None, acted=True) == "medium"
+    assert plan(mine_chi, 1, False, False, False, None, acted=True) == "high"
+
 
 
 def test_rate_limiter_lets_high_priority_callers_go_first():
@@ -452,6 +457,18 @@ def test_rate_limiter_lets_high_priority_callers_go_first():
     order.append(("medium", clock[0]))
     assert [round(t, 2) for _, t in order] == [0.0, 0.1, 0.2]
     assert limiter.waiting == [0, 0, 0]
+
+
+def test_rate_limiter_promotes_a_starved_medium_caller():
+    from mahjong_ai.platform.online import RateLimiter
+
+    limiter = RateLimiter(rate=100)
+    limiter.waiting[2] = 1  # a high caller that never stops waiting
+    started = time.monotonic()
+    limiter.acquire(priority=1)
+    elapsed = time.monotonic() - started
+    assert 0.2 <= elapsed < 0.6  # yields for a while, then is promoted past the high caller
+    assert limiter.waiting == [0, 0, 1]
 
 
 def test_needs_snapshot_only_for_events_that_can_require_our_action():
@@ -472,3 +489,346 @@ def test_needs_snapshot_only_for_events_that_can_require_our_action():
     chi_next = {"seat": 3, "turn": 2, "phase": "response_peng", "responding_seats": [0, 1]}
     assert need([{"type": "pass", "seat": 0}], chi_next) is True
     assert need([{"type": "mystery", "seat": 0}], snap) is True
+
+
+def _peng_window(now_ms, turn, last_discard, responders=(0, 1, 2), seq=1, melds=None, counts=None):
+    return {
+        "game_id": "fixture",
+        "seat": 0,
+        "phase": "response_peng",
+        "round_no": 1,
+        "dealer": 0,
+        "turn": turn,
+        "waited_seat": 0,
+        "responding_seats": list(responders),
+        "wall_remaining": 60,
+        "window_deadline_ms": now_ms,
+        "discards": [[], ["7t"] if turn == 1 else [], [], [last_discard] if turn == 3 else []],
+        "melds": melds or [[], [], [], []],
+        "hand_counts": counts or [13, 13, 13, 13],
+        "my_hand": ["1w", "2w", "东", "东", "南", "南", "西", "西", "北", "北", "中", "中", "白"],
+        "last_discard": last_discard,
+        "drawn_tile": "",
+        "scores": [0, 0, 0, 0],
+        "god": {"chain_count": 0, "baotou": False, "catch_play": False},
+    }
+
+
+class _NotifyClient:
+    """Fake server with an SSE notify stream driven by the test script."""
+
+    def __init__(self, states):
+        self.states = states  # callable(client) -> response for a snapshot GET
+        self.gets = 0
+        self.posts = []
+        self.frames = []
+        self.posted = threading.Event()
+        self.on_frame = None
+
+    def request(self, method, path, body=None):
+        if method == "POST":
+            self.posts.append(body)
+            self.posted.set()
+            return {"ok": True}
+        if "seq=0" not in path:
+            return {"seq": 1, "pending": True}
+        self.gets += 1
+        return self.states(self)
+
+    def notify(self, path, on_frame, stop):
+        self.on_frame = on_frame
+        on_frame(1, False)
+        for frame in self.frames:
+            frame(self, stop)
+        stop.wait()
+        return True
+
+
+def _run_fixture(tmp_path, client):
+    from mahjong_ai.platform.official import OfficialAdapter
+
+    runner = TournamentRunner(client, PolicySpec(), OfficialAdapter(), tmp_path)
+    runner.tournament = {
+        "config": {"Kind": "test", "Rounds": 2, "BaseScore": 1, "YouCaiBiKao": False}
+    }
+    runner._play("fixture")
+    state = json.loads(next(tmp_path.glob("game-*.json")).read_text())
+    return state["client"]
+
+
+def test_silent_chi_window_is_looked_for_at_the_peng_deadline(tmp_path):
+    # Live behaviour (2026-09-17 二测): the peng window lasts exactly 1 s and,
+    # when we are the next seat, our chi window opens at that deadline with no
+    # event on the notify stream.  Fast opponents answer within milliseconds,
+    # so no frame arrives in between: the client must look on its own timer.
+    deadline = time.time() * 1000 + 300
+
+    def states(client):
+        if len(client.posts) >= 2:
+            return {"finished": True, "seq": 3, "snapshot": None}
+        snap = _peng_window(deadline, 3, "3w")
+        if client.posts and time.time() * 1000 >= deadline:
+            snap.update(phase="response_chi", responding_seats=[0], window_deadline_ms=deadline + 1000)
+            return {"seq": 2, "snapshot": snap}
+        return {"seq": 1 if not client.posts else 2, "snapshot": snap}
+
+    def after_first_post(client, stop):
+        client.posted.wait(5)
+        client.posted.clear()
+        client.on_frame(2, False)  # our own pass; nothing else follows
+        client.posted.wait(5)
+        client.on_frame(3, True)
+
+    client = _NotifyClient(states)
+    client.frames = [after_first_post]
+    started = time.monotonic()
+    diag = _run_fixture(tmp_path, client)
+    assert [p["action"] for p in client.posts][0] == "pass"
+    assert client.posts[1]["action"] in ("chi", "pass")
+    assert time.monotonic() - started < 1.5
+    assert diag["deadline_checks"] == 1
+    assert client.gets == 3  # peng window, deadline check, final state
+
+
+def test_claimers_discard_right_after_our_pass_is_not_skipped(tmp_path):
+    # Another responder may peng at once; its discard is then only two events
+    # after our pass and opens a window for us.  The old prediction skipped
+    # the responders plus two events and missed a quarter of such windows.
+    now = time.time() * 1000 + 1000
+
+    def states(client):
+        if len(client.posts) >= 2:
+            return {"finished": True, "seq": 14, "snapshot": None}
+        if client.posts:
+            melds = [[], [], [], [{"kind": "peng", "tiles": ["5t", "5t", "5t"], "from_seat": 1}]]
+            snap = _peng_window(now + 60, 3, "3w", melds=melds, counts=[13, 13, 13, 10])
+            snap["discards"][1] = ["7t"]
+            return {"seq": 13, "snapshot": snap}
+        return {"seq": 10, "snapshot": _peng_window(now, 1, "7t", responders=(0, 2, 3))}
+
+    def after_first_post(client, stop):
+        client.posted.wait(5)
+        client.posted.clear()
+        for seq in (11, 12):  # our pass, seat 3 pengs
+            client.on_frame(seq, False)
+            time.sleep(0.03)
+        client.on_frame(13, False)  # seat 3 discards: a window for us
+        client.posted.wait(5)
+        client.on_frame(14, True)
+
+    client = _NotifyClient(states)
+    client.frames = [after_first_post]
+    started = time.monotonic()
+    diag = _run_fixture(tmp_path, client)
+    assert len(client.posts) == 2
+    assert client.gets == 3  # first window, the claimer's window, final state
+    assert diag["count_skips"] >= 1
+    assert time.monotonic() - started < 1.0  # answered on the discard frame, not on the idle timeout
+
+
+def test_action_unavailable_is_retried_while_the_window_has_time(tmp_path):
+    from mahjong_ai.execution.candidate_runtime import ActionUnavailable
+    from mahjong_ai.platform.official import OfficialAdapter
+
+    class Stub:
+        calls = 0
+
+        def reset(self, seed):
+            pass
+
+        def act(self, obs):
+            self.calls += 1
+            if self.calls == 1:
+                raise ActionUnavailable("slow candidate")
+            return next(a for a in obs.legal_actions if a.action == "discard")
+
+    class Spec:
+        identity = "stub"
+        action_seconds = 3.0
+        response_seconds = 1.0
+
+        def build(self):
+            return stub
+
+    stub = Stub()
+    deadline = time.time() * 1000 + 3000
+
+    class Client:
+        gets = 0
+        posts = []
+
+        def request(self, method, path, body=None):
+            if method == "POST":
+                self.posts.append(body)
+                return {"ok": True}
+            if "seq=0" not in path:
+                return {"seq": 1, "pending": True}
+            if self.posts:
+                return {"finished": True, "seq": 2, "snapshot": None}
+            self.gets += 1
+            return {
+                "seq": 1,
+                "snapshot": {
+                    "game_id": "fixture",
+                    "seat": 0,
+                    "phase": "draw",
+                    "round_no": 1,
+                    "dealer": 0,
+                    "turn": 0,
+                    "responding_seats": [],
+                    "wall_remaining": 60,
+                    "window_deadline_ms": deadline,
+                    "discards": [[], [], [], []],
+                    "melds": [[], [], [], []],
+                    "hand_counts": [14, 13, 13, 13],
+                    "my_hand": ["1w", "2w", "3w", "4w", "5w", "6w", "7w", "8w", "9w", "1t", "2t", "3t", "东", "南"],
+                    "last_discard": "",
+                    "drawn_tile": "南",
+                    "scores": [0, 0, 0, 0],
+                    "god": {"chain_count": 0, "baotou": False, "catch_play": False},
+                },
+            }
+
+    client = Client()
+    runner = TournamentRunner(client, Spec(), OfficialAdapter(), tmp_path)
+    runner.tournament = {
+        "config": {"Kind": "test", "Rounds": 2, "BaseScore": 1, "YouCaiBiKao": False}
+    }
+    runner._play("fixture")
+    assert stub.calls == 2 and client.posts[0]["action"] == "discard"
+    diag = json.loads(next(tmp_path.glob("game-*.json")).read_text())["client"]
+    assert diag["action_unavailable"] == 1 and diag["action_retries"] == 1
+
+
+def test_action_timeline_tells_claims_from_answers_and_the_draw():
+    from mahjong_ai.platform.online import ActionTimeline
+
+    end = 100.0  # local time the peng window closes; we acted on seq 10 at 99.2
+    # (our own pass, seq 11, is skipped by count in the loop and never reaches the timeline)
+    # 1. fast bots, nobody claims: both answers were already in our snapshot
+    tl = ActionTimeline(10, end, 2, 0, 1)
+    assert tl.decide(100.3, 11, 11) == "quiet"  # deadline passed, no burst: nothing to fetch
+    assert tl.decide(100.4, 12, 11) == "quiet"  # the next seat's chi-window pass
+    assert tl.decide(101.0, 13, 12) == "quiet"  # the next seat's draw on the timer
+    assert tl.decide(101.05, 14, 13) == "fetch"  # its discard opens a window
+    # 2. slow table: nobody answered before the deadline, two timeouts arrive as the burst
+    tl = ActionTimeline(10, end, 2, 0, 1)
+    assert tl.decide(100.0, 13, 11) == ("defer", end + tl.BURST_END)
+    assert tl.decide(100.25, 13, 13) == "quiet"  # burst of 2 = the 2 expected timeouts
+    assert tl.decide(101.0, 15, 13) == "quiet"  # chi-window timeout together with the draw
+    assert tl.decide(101.3, 16, 15) == "fetch"  # the discard
+    # 2b. the next seat answers early and its draw arrives alone
+    tl = ActionTimeline(10, end, 2, 0, 1)
+    assert tl.decide(100.0, 13, 11) == ("defer", end + tl.BURST_END)
+    assert tl.decide(100.25, 13, 13) == "quiet"
+    assert tl.decide(100.6, 14, 13) == "quiet"  # the next seat's pass
+    assert tl.decide(101.0, 15, 14) == "quiet"  # the draw
+    assert tl.decide(101.02, 17, 15) == "fetch"  # the discard (with a fast answer to it)
+    # 3. a bot chis right at the deadline and discards at once: burst bigger than the timeouts
+    tl = ActionTimeline(10, end, 2, 0, 1)
+    assert tl.decide(99.5, 12, 11) == "followup"  # one answer after ours
+    tl.pre_answer_skipped = True
+    assert tl.decide(100.03, 15, 12) == ("defer", end + tl.BURST_END)
+    assert tl.decide(100.25, 15, 15) == "fetch"  # 3 frames: 1 timeout + chi + discard
+    # 3b. the next seat chis a little later and discards before the timed draw
+    tl = ActionTimeline(10, end, 2, 0, 1)
+    assert tl.decide(100.3, 11, 11) == "quiet"
+    assert tl.decide(100.5, 12, 11) == "quiet"  # the chi (looks like a pass)
+    assert tl.decide(100.7, 13, 12) == "fetch"  # its discard, too early for the draw
+    # 4. a peng before the deadline: the lone claim frame asks for a follow-up look
+    tl = ActionTimeline(10, end, 2, 0, 1)
+    assert tl.decide(99.4, 12, 11) == "followup"
+    tl.pre_answer_skipped = True  # the follow-up saw nothing: taken for an answer
+    assert tl.decide(99.6, 13, 12) == "fetch"  # a second lone frame is looked at
+    # 5. two frames at once before the deadline: a peng and its discard
+    tl = ActionTimeline(10, end, 2, 0, 1)
+    assert tl.decide(99.4, 13, 11) == "fetch"
+    # a claim seen in a fetched state ends the timeline
+    assert tl.stale({"round_no": 1, "melds": [[], [{"kind": "peng"}], [], []]}) is True
+    assert tl.stale({"round_no": 1, "melds": [[], [], [], []]}) is False
+    # 6. a look taken meanwhile showed the next seat already holding its draw:
+    #    the following frame is its discard, not the draw
+    tl = ActionTimeline(10, end, 2, 0, 1)
+    tl.sync({"phase": "draw", "turn": 2, "hand_counts": [13, 13, 14, 13]}, 2)
+    assert tl.decide(101.02, 16, 15) == "fetch"
+    tl = ActionTimeline(10, end, 2, 0, 1)
+    tl.sync({"phase": "response_chi", "turn": 1, "hand_counts": [13, 13, 13, 13]}, 2)
+    assert tl.decide(100.5, 14, 13) == "quiet"  # the next seat's pass
+    assert tl.decide(101.0, 15, 14) == "quiet"  # its draw
+    assert tl.decide(101.03, 16, 15) == "fetch"  # its discard
+
+
+def test_timeout_burst_pass_and_draw_cost_no_request_until_the_discard(tmp_path):
+    # After our pass in a peng window (we are not the next seat): two timeouts
+    # at the deadline, the next seat's chi-window pass, its timed draw and
+    # its discard.  Only the discard can open a window for us, so the client
+    # must look exactly once more, on that frame.
+    end = time.time() * 1000 + 500
+
+    def states(client):
+        if len(client.posts) >= 2:
+            return {"finished": True, "seq": 17, "snapshot": None}
+        if client.posts:
+            snap = _peng_window(time.time() * 1000 + 1000, 3, "3w")
+            snap["discards"][1] = ["7t"]
+            return {"seq": 16, "snapshot": snap}
+        return {"seq": 10, "snapshot": _peng_window(end, 1, "7t", responders=(0, 2, 3))}
+
+    def script(client, stop):
+        client.posted.wait(5)
+        client.posted.clear()
+        client.on_frame(11, False)  # our pass
+        time.sleep(max(0.0, end / 1000 - time.time()))
+        client.on_frame(12, False)  # timeout
+        client.on_frame(13, False)  # timeout
+        time.sleep(0.3)
+        client.on_frame(14, False)  # the next seat passes its chi window
+        time.sleep(0.7)
+        client.on_frame(15, False)  # its draw, one second after the deadline
+        time.sleep(0.05)
+        client.on_frame(16, False)  # its discard: a window for us
+        client.posted.wait(5)
+        client.on_frame(17, True)
+
+    client = _NotifyClient(states)
+    client.frames = [script]
+    diag = _run_fixture(tmp_path, client)
+    assert len(client.posts) == 2
+    assert client.gets == 3  # our window, the next seat's discard, final state
+    assert diag["timeline_fetches"] == 1
+
+
+def test_next_seat_without_a_chi_window_still_plays_its_own_draw(tmp_path):
+    # We pass a peng window as the next seat, but no chi window follows (the
+    # server gives us none): our draw one second after the deadline must be
+    # fetched and discarded, not taken for the next seat's timed draw.
+    end = time.time() * 1000 + 400
+
+    def states(client):
+        if len(client.posts) >= 2:
+            return {"finished": True, "seq": 15, "snapshot": None}
+        if client.posts:
+            snap = _peng_window(end, 3, "3w")
+            snap.update(phase="draw", turn=0, responding_seats=[], drawn_tile="5w", window_deadline_ms=end + 4000)
+            snap["my_hand"] = snap["my_hand"] + ["5w"]
+            snap["hand_counts"] = [14, 13, 13, 13]
+            return {"seq": 14, "snapshot": snap}
+        return {"seq": 10, "snapshot": _peng_window(end, 3, "3w")}
+
+    def script(client, stop):
+        client.posted.wait(5)
+        client.posted.clear()
+        client.on_frame(11, False)  # our pass
+        time.sleep(max(0.0, end / 1000 - time.time()))
+        client.on_frame(13, False)  # two timeouts at the deadline
+        time.sleep(1.0)
+        client.on_frame(14, False)  # our own draw
+        client.posted.wait(5)
+        client.on_frame(15, True)
+
+    client = _NotifyClient(states)
+    client.frames = [script]
+    started = time.monotonic()
+    _run_fixture(tmp_path, client)
+    assert [p["action"] for p in client.posts] == ["pass", "discard"]
+    assert time.monotonic() - started < 2.5

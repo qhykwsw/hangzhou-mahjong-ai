@@ -49,6 +49,11 @@ class SnapshotError(ValueError):
     pass
 
 
+# Seconds a low (index 0) or medium (index 1) limiter caller yields to higher
+# levels before it is promoted one level.
+PROMOTE_AFTER = (0.5, 0.25)
+
+
 class RateLimiter:
     """Shared across all game workers for one credential/user process.
 
@@ -71,17 +76,30 @@ class RateLimiter:
 
     def acquire(self, priority=0):
         priority = 2 if priority is True else 0 if priority is False else int(priority)
-        priority = max(0, min(2, priority))
+        level = max(0, min(2, priority))
         with self.cond:
-            self.waiting[priority] += 1
+            self.waiting[level] += 1
+            started = self.clock()
             try:
-                while any(self.waiting[level] for level in range(priority + 1, 3)):
+                while any(self.waiting[above] for above in range(level + 1, 3)):
                     self.cond.wait(timeout=0.05)
+                    # A caller that has yielded long enough is promoted, so a
+                    # claim window is never starved by a stream of own-turn
+                    # requests from the other tables.
+                    waited = self.clock() - started
+                    promoted = level
+                    while promoted < 2 and waited >= PROMOTE_AFTER[promoted]:
+                        promoted += 1
+                    if promoted > level:
+                        self.waiting[level] -= 1
+                        level = promoted
+                        self.waiting[level] += 1
+                        self.cond.notify_all()
                 now = self.clock()
                 scheduled = max(now, self.next)
                 self.next = scheduled + self.interval
             finally:
-                self.waiting[priority] -= 1
+                self.waiting[level] -= 1
                 self.cond.notify_all()
         self.sleep(max(0.0, scheduled - now))
 
@@ -97,11 +115,14 @@ class PlatformClient:
             else ssl.create_default_context()
         )
         self.limiter = RateLimiter()
+        self.local = threading.local()  # per-thread limiter wait of the last /state request
 
     def request(self, method, path, body=None, priority=0):
         for attempt in range(self.retries + 1):
             if "/state?" in path:
+                began = time.perf_counter()
                 self.limiter.acquire(priority)
+                self.local.wait_ms = (time.perf_counter() - began) * 1000
             req = urllib.request.Request(
                 self.base + path,
                 method=method,
@@ -467,6 +488,151 @@ def wire_action(action):
     return result
 
 
+DIAG_COUNTERS = (
+    "frames",
+    "fetch_high",
+    "fetch_medium",
+    "fetch_low",
+    "deadline_checks",
+    "count_skips",
+    "wait_timeouts",
+    "key_seen",
+    "obs_none",
+    "action_unavailable",
+    "action_retries",
+    "adapter_retries",
+    "rejected",
+    "timeline_skips",
+    "timeline_fetches",
+)
+# Seconds after the peng deadline at which the silent chi window is looked for.
+CHI_CHECK_DELAYS = (0.12, 0.4)
+# Seconds a lone pre-deadline frame waits for the discard that follows a peng.
+CLAIM_FOLLOWUP = 0.08
+
+
+class ActionTimeline:
+    """What the server does after our own action, from frame seqs and times only.
+
+    Measured on the live platform (2026-09-17/18): a discard opens a 1 s peng
+    window in which only answers are recorded; a peng resolves it at once and
+    the claimer discards right after.  Otherwise, at the deadline the server
+    records one timeout per responder that stayed silent, opens the next
+    seat's chi window (no event) and, one second later, lets the next seat
+    draw (an event) and discard.  Between two discards there are therefore
+    three peng answers, one chi answer and one draw, or three answers and a
+    chi, or up to one answer and a peng.  Knowing our own event's seq and the
+    number of frames before the deadline is enough to tell the timeout burst
+    from a claim and the next seat's draw from its discard.
+    """
+
+    PRE_MARGIN = 0.1  # seconds before the local deadline that still count as "before"
+    BURST_END = 0.25  # seconds after the local deadline by which the timeout burst is complete
+    DRAW_EARLY = 0.2  # a frame this long before the timed draw cannot be it
+
+    def __init__(self, base_seq, window_end, others, melds, round_no):
+        self.base = base_seq  # seq of the snapshot we acted on; our event is base + 1
+        self.window_end = window_end  # local time the peng window closes
+        self.others = others  # responders other than us
+        self.melds = melds  # meld count when we acted; a change means a claim happened
+        self.round_no = round_no
+        self.pre_watermark = None
+        self.burst_decided = False
+        self.pre_answer_skipped = False
+        self.answer_skipped = False  # the next seat's chi-window answer was seen
+        self.draw_skipped = False
+        self.disabled = False
+
+    @property
+    def draw_at(self):
+        return self.window_end + 1.0
+
+    def stale(self, snap):
+        """A fetched state that no longer follows this timeline disables it."""
+        melds = sum(len(row) for row in snap.get("melds") or [])
+        return snap.get("round_no") != self.round_no or melds != self.melds
+
+    def sync(self, snap, next_seat):
+        """Align with a state fetched meanwhile so no step is counted twice."""
+        phase, turn = snap.get("phase"), snap.get("turn")
+        counts = snap.get("hand_counts") or []
+        if phase == "response_chi":
+            self.burst_decided = True  # the peng window is over
+        elif phase == "draw" and turn == next_seat:
+            self.burst_decided = self.answer_skipped = True
+            if counts and counts[turn] % 3 == 2:
+                self.draw_skipped = True  # already drawn: the discard is next
+        elif phase != "response_peng":
+            self.disabled = True
+
+    def decide(self, now, seq, prev_seq):
+        """Return "fetch", "quiet", "followup" (wait CLAIM_FOLLOWUP, then ask
+        again) or ("defer", wake_at) (quiet until then)."""
+        jump = seq - prev_seq
+        end = self.window_end
+        if now < end - self.PRE_MARGIN:
+            # Answers only, unless a peng: its discard follows within a moment.
+            if jump <= 0:
+                return "quiet"
+            if jump == 1 and not self.pre_answer_skipped:
+                return "followup"
+            if jump == 1 and self.pre_answer_skipped:
+                return "fetch"  # a second lone frame may be a slow claimer's discard
+            return "fetch"
+        if not self.burst_decided:
+            if self.pre_watermark is None:
+                self.pre_watermark = prev_seq if jump > 0 else seq
+            if now < end + self.BURST_END:
+                return ("defer", end + self.BURST_END)
+            self.burst_decided = True
+            answered = max(0, self.pre_watermark - self.base - 1)
+            expected_timeouts = max(0, self.others - answered)
+            burst = seq - self.pre_watermark
+            if burst > expected_timeouts:
+                return "fetch"  # a claim (and its discard) rode along with the timeouts
+            return "quiet"
+        if jump <= 0:
+            return "quiet"
+        if now < self.draw_at - self.DRAW_EARLY:
+            # The next seat's chi-window answer: a pass needs nothing, a chi
+            # is followed by its discard, which is one more frame.
+            if jump == 1 and not self.answer_skipped:
+                self.answer_skipped = True
+                return "quiet"
+            return "fetch"
+        if not self.draw_skipped and (jump == 1 or (jump == 2 and not self.answer_skipped)):
+            # The next seat's draw on its timer, alone or together with the
+            # chi-window timeout that precedes it.
+            self.draw_skipped = self.answer_skipped = True
+            return "quiet"
+        return "fetch"  # the discard that opens a window
+# Seconds between event-history refreshes when nothing else forces one.
+HISTORY_INTERVAL = 8.0
+
+
+def _policy_stats(policy):
+    """Diagnostics a sandboxed policy keeps in memory; empty for local ones."""
+    stats = getattr(policy, "stats", None)
+    if not isinstance(stats, dict):
+        return {}
+    result = dict(stats)
+    latencies = sorted(getattr(policy, "latencies", []) or [])
+    if latencies:
+        result["latency_ms"] = {
+            "p50": latencies[len(latencies) // 2] * 1000,
+            "p99": latencies[min(len(latencies) - 1, int(len(latencies) * 0.99))] * 1000,
+            "max": latencies[-1] * 1000,
+        }
+    error = getattr(policy, "last_error", None)
+    if error:
+        result["last_error"] = {
+            "type": error.get("type"),
+            "message": (error.get("message") or "")[:500],
+            "stderr": (error.get("stderr") or "")[-1000:],
+        }
+    return result
+
+
 class TournamentRunner:
     def __init__(self, client, policy, adapter, output, workers=16, join=False):
         if not 1 <= workers <= 16:
@@ -496,6 +662,9 @@ class TournamentRunner:
         event_ids = {e["seq"] for e in events}
         hand_no = state.get("round_no", 1)
         force_snapshot = False
+        diag = state.setdefault("client", {})
+        for name in DIAG_COUNTERS:
+            diag.setdefault(name, 0)
 
         def ingest(payload):
             nonlocal seq, hand_no
@@ -534,6 +703,7 @@ class TournamentRunner:
             def on_frame(frame_seq, closed):
                 frames["seq"] = max(frames["seq"], frame_seq)
                 frames["count"] += 1
+                diag["frames"] += 1
                 if closed:
                     frames["closed"] = True
                 wake.set()
@@ -548,6 +718,7 @@ class TournamentRunner:
         accepts_priority = "priority" in inspect.signature(self.client.request).parameters
         levels = {"low": 0, "medium": 1, "high": 2}
         last_snap = None
+        last_key = None  # dedupe key of last_snap when it asked us to act
         fetched_seq = 0
         skip_until = 0  # absolute seq below which no frame can need our action
         settled_since = None
@@ -555,43 +726,204 @@ class TournamentRunner:
         last_round = None
         adapter_retries = 0
         force_snapshot = True
+        # Set by our own accepted action: the key we acted on, the peng deadline
+        # at which our chi window can open silently (next seat only), how many
+        # deadline checks were spent, and when the next seat's draw is due.
+        acted_key = None
+        chi_deadline_ms = None
+        deadline_checks = 0
+        timeline = None  # ActionTimeline after our own pass or discard
+        timeline_discarder = 0
+        window_end = None  # local end of the response window our action belongs to
+        offsets = []  # server clock minus this clock, from our own discards
+        own_discard_at = None
+        own_discard_round = None
+        retries = {}
+        woke_at = None
+        defer_until = None
+        why = "start"  # what triggered the current fetch, for the fetch log
+        last_jump = 0
+
+        def to_local(server_seconds):
+            if not offsets:
+                return server_seconds
+            return server_seconds - sorted(offsets)[len(offsets) // 2]
+        fetch_log = path.with_suffix(".fetches")  # not *.jsonl: audits read those as actions
+
+        def log_fetch(outcome, priority, res, snap, fetch_ms, now):
+            try:
+                with fetch_log.open("a") as stream:
+                    stream.write(
+                        json.dumps(
+                            {
+                                "t": round(now, 3),
+                                "seq": res.get("seq"),
+                                "why": why,
+                                "jump": last_jump,
+                                "off": round(sorted(offsets)[len(offsets) // 2], 3) if offsets else None,
+                                "prio": priority,
+                                "phase": (snap or {}).get("phase"),
+                                "turn": (snap or {}).get("turn"),
+                                "ms": round(fetch_ms, 1),
+                                "wait_ms": getattr(getattr(self.client, "local", None), "wait_ms", None),
+                                "rel_end": round(now - window_end, 3) if window_end else None,
+                                "outcome": outcome,
+                            }
+                        )
+                        + "\n"
+                    )
+            except OSError:
+                pass
         try:
           while not self.stop.is_set():
             if notify_thread is not None and not frames.get("unavailable"):
                 priority = None
                 while priority is None and not self.stop.is_set():
+                    acted = last_key is not None and last_key == acted_key
                     settled = last_snap is not None and last_snap.get("phase") == "settled"
-                    timed_out = not wake.wait(timeout=1.0 if settled or last_snap is None else 2.0)
+                    timeout = 1.0 if settled or last_snap is None else 2.0
+                    check_at = None
+                    if (
+                        acted
+                        and chi_deadline_ms
+                        and deadline_checks < 2
+                        and last_snap.get("phase") == "response_peng"
+                    ):
+                        # Our chi window opens at the peng deadline without any
+                        # event.  Look then, and once more a little later in
+                        # case this clock runs ahead of the server's.
+                        check_at = to_local(chi_deadline_ms / 1000) + (
+                            CHI_CHECK_DELAYS[deadline_checks]
+                        )
+                        timeout = max(0.0, min(timeout, check_at - time.time()))
+                    if defer_until is not None:
+                        timeout = max(0.0, min(timeout, defer_until - time.time()))
+                    prev_seq = frames["seq"]
+                    timed_out = not wake.wait(timeout=timeout)
                     wake.clear()
+                    woke_at = time.perf_counter()
+                    last_jump = frames["seq"] - prev_seq
                     if frames.get("unavailable"):
                         priority = "high"
+                        why = "no-notify"
                         break
+                    if check_at is not None and time.time() >= check_at - 0.005:
+                        deadline_checks += 1
+                        diag["deadline_checks"] += 1
+                        priority = "high"
+                        why = "chi-check"
+                        break
+                    if timed_out and check_at is not None and time.time() < check_at - 0.005:
+                        if defer_until is None or time.time() < defer_until - 0.005:
+                            continue  # woke early for a deadline check not due yet
+                    deferred_due = defer_until is not None and time.time() >= defer_until - 0.005
+                    defer_until = None
+                    if timed_out and not deferred_due:
+                        diag["wait_timeouts"] += 1
+                    now = time.time()
+                    quiet = frames["seq"] < skip_until and not deferred_due
+                    verdict = None
+                    if quiet and not timed_out:
+                        diag["count_skips"] += 1
+                    elif quiet:
+                        pass
+                    elif force_snapshot or frames["closed"] or (timed_out and not deferred_due):
+                        pass
+                    elif timeline is not None and not timeline.disabled and chi_deadline_ms is None:
+                        verdict = timeline.decide(now, frames["seq"], prev_seq)
+                        if verdict == "followup":
+                            # A peng is followed at once by the claimer's discard:
+                            # give the second frame a moment before deciding.
+                            before = frames["seq"]
+                            wake.wait(timeout=CLAIM_FOLLOWUP)
+                            wake.clear()
+                            if frames["seq"] == before:
+                                timeline.pre_answer_skipped = True
+                                verdict = "quiet"
+                            else:
+                                verdict = "fetch"
+                        if isinstance(verdict, tuple):
+                            defer_until = verdict[1]
+                            verdict = "quiet"
+                            quiet = True  # look again when the burst is complete
+                        elif verdict == "quiet":
+                            diag["timeline_skips"] += 1
+                            skip_until = frames["seq"] + 1
+                            quiet = True
+                        elif verdict == "fetch":
+                            diag["timeline_fetches"] += 1
+                    elif (
+                        timeline is not None
+                        and not timeline.disabled
+                        and chi_deadline_ms
+                        and now < timeline.window_end - ActionTimeline.PRE_MARGIN
+                    ):
+                        # We are the next seat: before the deadline only a claim
+                        # can need us; from the deadline on every frame may be
+                        # our chi window or our own draw and is looked at.
+                        verdict = timeline.decide(now, frames["seq"], prev_seq)
+                        if verdict == "followup":
+                            before = frames["seq"]
+                            wake.wait(timeout=CLAIM_FOLLOWUP)
+                            wake.clear()
+                            verdict = "quiet" if frames["seq"] == before else "fetch"
+                            if verdict == "quiet":
+                                timeline.pre_answer_skipped = True
+                        if isinstance(verdict, tuple):
+                            defer_until = verdict[1]
+                            quiet = True
+                        elif verdict == "quiet":
+                            skip_until = frames["seq"] + 1
+                            quiet = True
+                            diag["timeline_skips"] += 1
+                    if timed_out and deferred_due:
+                        timed_out = False  # a planned look, not an idle poll
                     priority = self._fetch_plan(
                         last_snap,
                         frames["seq"] - fetched_seq,
                         timed_out,
                         force_snapshot or frames["closed"],
-                        frames["seq"] < skip_until,
+                        quiet,
                         settled_since,
                         now_ms=time.time() * 1000,
+                        acted=acted,
                     )
+                    if verdict == "fetch" and priority is None:
+                        priority = "medium"
+                    if priority is not None:
+                        why = (
+                            "force" if force_snapshot or frames["closed"]
+                            else "idle" if timed_out
+                            else "timeline" if verdict == "fetch"
+                            else "plan"
+                        )
                 if self.stop.is_set():
                     break
             else:
                 priority = "high"
+                why = "poll"
+                woke_at = time.perf_counter()
             cursor = 0
             force_snapshot = False
+            fetch_began = time.perf_counter()
             res = self.client.request(
                 "GET", f"/api/games/{_id(gid)}/state?seq={cursor}", **({"priority": levels.get(priority, 2)} if accepts_priority else {})
             )
+            fetch_ms = (time.perf_counter() - fetch_began) * 1000
+            diag["fetch_" + (priority if priority in levels else "high")] += 1
             fetched_seq = max(fetched_seq, int(res.get("seq", 0) or 0), frames["seq"] if res.get("finished") else 0)
             skip_until = 0
+            last_key = None
             ingest(res)
             if res.get("finished"):
+                log_fetch("finished", priority, res, res.get("snapshot"), fetch_ms, time.time())
+                diag["policy"] = _policy_stats(policy)
+                diag["clock_offset_s"] = round(sorted(offsets)[len(offsets) // 2], 3) if offsets else None
                 state.update(status="finished", final=_redact(res), event_seq=seq)
                 atomic_json(path, state)
                 return
             if res.get("pending"):
+                log_fetch("pending", priority, res, None, fetch_ms, time.time())
                 continue
             if res.get("snapshot") is None:
                 res = self.client.request("GET", f"/api/games/{_id(gid)}/state?seq=0")
@@ -599,6 +931,25 @@ class TournamentRunner:
             if snap is None:
                 raise SnapshotError("full state response lacks snapshot")
             last_snap = snap
+            if (
+                own_discard_at is not None
+                and own_discard_round == snap.get("round_no")
+                and snap.get("turn") == snap.get("seat")
+                and snap.get("phase") in ("response_peng", "response_chi")
+                and snap.get("window_deadline_ms")
+            ):
+                # The window our discard opened ends 1 s (chi: 2 s) after the
+                # discard: its deadline calibrates the server clock offset.
+                span = 1.0 if snap["phase"] == "response_peng" else 2.0
+                sample = snap["window_deadline_ms"] / 1000 - span - own_discard_at
+                if -3.0 < sample < 3.0:
+                    offsets.append(sample)
+                    del offsets[:-7]
+            if timeline is not None and not timeline.disabled:
+                if timeline.stale(snap):
+                    timeline.disabled = True
+                else:
+                    timeline.sync(snap, (timeline_discarder + 1) % 4)
             if snap.get("phase") == "settled":
                 settled_since = settled_since or time.monotonic()
             else:
@@ -643,7 +994,7 @@ class TournamentRunner:
                 or snap.get("phase") in ("settled", "finished")
                 or snap["round_no"] != last_round
                 or own_actions < int((snap.get("god") or {}).get("chain_count") or 0)
-                or time.monotonic() - last_history >= 4.0
+                or time.monotonic() - last_history >= HISTORY_INTERVAL
             )
             last_round = snap["round_no"]
             if res.get("seq", 0) > seq and history_due:
@@ -677,6 +1028,7 @@ class TournamentRunner:
                     raise
                 # Usually a stale event history; refresh everything and look again.
                 adapter_retries += 1
+                diag["adapter_retries"] += 1
                 last_history = 0.0
                 force_snapshot = True
                 time.sleep(0.05)
@@ -684,6 +1036,8 @@ class TournamentRunner:
             adapter_retries = 0
             state.update(event_seq=seq, round_no=hand_no)
             if obs is None:
+                diag["obs_none"] += 1
+                log_fetch("none", priority, res, snap, fetch_ms, time.time())
                 continue
             key = digest(
                 {
@@ -698,8 +1052,12 @@ class TournamentRunner:
                     "wall": obs.wall_remaining,
                 }
             )
+            last_key = key
             if key in seen:
+                diag["key_seen"] += 1
+                log_fetch("seen", priority, res, snap, fetch_ms, time.time())
                 continue
+            log_fetch("act", priority, res, snap, fetch_ms, time.time())
             begin = time.perf_counter()
             from mahjong_ai.execution.candidate_runtime import (
                 ActionUnavailable,
@@ -713,8 +1071,15 @@ class TournamentRunner:
             try:
                 action = policy.act(obs)
             except ActionUnavailable:
-                # The server owns timeout fallback. Never submit a stale action.
-                seen.add(key)
+                # The server owns timeout fallback.  Never submit a stale
+                # action, but look again while the window leaves time to retry.
+                diag["action_unavailable"] += 1
+                left = (snap.get("window_deadline_ms") or 0) / 1000 - time.time()
+                if left >= 0.4 and retries.get(key, 0) < 2:
+                    retries[key] = retries.get(key, 0) + 1
+                    diag["action_retries"] += 1
+                else:
+                    seen.add(key)
                 force_snapshot = True
                 continue
             decision_ms = (time.perf_counter() - begin) * 1000
@@ -731,6 +1096,16 @@ class TournamentRunner:
                 "decision_ms": decision_ms,
                 "request_ms": None,
                 "accepted": False,
+                "ts": time.time(),
+                "priority": priority,
+                "fetch_ms": fetch_ms,
+                "limiter_wait_ms": getattr(getattr(self.client, "local", None), "wait_ms", None),
+                "wake_to_post_ms": (time.perf_counter() - woke_at) * 1000 if woke_at else None,
+                "window_left_ms": (
+                    snap["window_deadline_ms"] - time.time() * 1000
+                    if snap.get("window_deadline_ms")
+                    else None
+                ),
             }
             begin = time.perf_counter()
             try:
@@ -740,19 +1115,36 @@ class TournamentRunner:
                 record.update(accepted=True, response=response)
                 # Predict how many events must pass before we can be needed
                 # again, so frames in between do not spend /state requests.
+                acted_key = key
+                chi_deadline_ms = None
+                deadline_checks = 0
+                timeline = None
+                window_end = None
+                deadline_ms = snap.get("window_deadline_ms") or 0
+                melds_now = sum(len(row) for row in snap.get("melds") or [])
                 if action.action == "discard":
-                    # our discard, >=1 response, then a draw or a claimer's discard
-                    skip_until = fetched_seq + 3
+                    # Our discard opens a 1 s peng window; see ActionTimeline.
+                    skip_until = fetched_seq + 2
+                    own_discard_at = time.time()
+                    own_discard_round = snap.get("round_no")
+                    window_end = own_discard_at + 1.0
+                    timeline_discarder = obs.stage.seat
+                    timeline = ActionTimeline(fetched_seq, window_end, 3, melds_now, snap.get("round_no"))
                 elif action.action == "pass" and obs.phase == "response_peng":
+                    skip_until = fetched_seq + 2
+                    window_end = to_local(deadline_ms / 1000) if deadline_ms else None
                     if obs.stage.seat == (snap["turn"] + 1) % 4:
-                        # A fully answered peng window becomes our chi window
-                        # without any event: look again right away.
-                        force_snapshot = True
-                    else:
-                        # our pass, the other responders, the next seat's draw and discard
-                        skip_until = fetched_seq + len(snap.get("responding_seats") or []) + 2
+                        # Our chi window opens at the peng deadline without any
+                        # event; the wait loop looks for it then.
+                        chi_deadline_ms = deadline_ms or None
+                    if window_end:
+                        others = max(0, len(snap.get("responding_seats") or [1, 2, 3]) - 1)
+                        timeline_discarder = snap["turn"]
+                        timeline = ActionTimeline(fetched_seq, window_end, others, melds_now, snap.get("round_no"))
                 elif action.action == "pass" and obs.phase == "response_chi":
-                    skip_until = 0  # the chi responder is the next seat: our draw follows
+                    # We are the next seat: our own pass is one event, our draw
+                    # (at the chi deadline) the next.
+                    skip_until = fetched_seq + 2
                 elif action.action in ("chi", "peng", "gang"):
                     force_snapshot = True  # it is our turn to discard now
                 if True:
@@ -783,6 +1175,7 @@ class TournamentRunner:
                 record.update(http_status=exc.status, error_code=exc.code)
                 if exc.status != 409:
                     raise
+                diag["rejected"] += 1
                 force_snapshot = True
             except ConnectionError:
                 force_snapshot = True
@@ -793,6 +1186,7 @@ class TournamentRunner:
                     stream.write(json.dumps(record, ensure_ascii=False) + "\n")
             state["event_seq"] = seq
             atomic_json(path, state)
+          diag["policy"] = _policy_stats(policy)
           state["status"] = "paused"
           atomic_json(path, state)
         finally:
@@ -800,12 +1194,15 @@ class TournamentRunner:
             wake.set()
 
     @staticmethod
-    def _fetch_plan(last_snap, delta, timed_out, force, predicted_quiet, settled_since, now_ms=None):
+    def _fetch_plan(
+        last_snap, delta, timed_out, force, predicted_quiet, settled_since, now_ms=None, acted=False
+    ):
         """Decide whether to spend a /state request now and at which priority.
 
         Returns None (wait for the next frame), "high" (our own draw or
         discard may be pending), "medium" (a claim window may be open for us)
         or "low" (housekeeping poll that must not delay other tables).
+        ``acted`` says ``last_snap`` is the state we already answered.
         """
         if force or last_snap is None:
             return "high"
@@ -823,6 +1220,16 @@ class TournamentRunner:
             return "low"
         if delta <= 0 or predicted_quiet:
             return None
+        if acted:
+            # After our chi-window pass our own draw is the next event, and
+            # after a peng-window pass as the next seat our chi window opens
+            # at the deadline: both are our own turn.  Otherwise any frame
+            # past the predicted quiet stretch may be a claimer's discard.
+            if phase == "response_chi" or (
+                phase == "response_peng" and me == (turn + 1) % 4
+            ):
+                return "high"
+            return "medium"
         responders = last_snap.get("responding_seats") or []
         if phase == "draw":
             if turn == me:
@@ -832,11 +1239,14 @@ class TournamentRunner:
         if phase in ("response_peng", "response_chi"):
             if me in responders:
                 return "high" if phase == "response_chi" or me == (turn + 1) % 4 else "medium"
-            # Every remaining responder answers (pass or timeout), then the next
-            # seat draws and discards: only that discard can open a window for
-            # us.  A claim shortens the sequence; we accept looking one event
-            # late in that rarer case to keep the request budget for the rest.
-            if delta < len(responders) + 2:
+            if phase == "response_chi":
+                # The next seat answers; its discard (after a chi) or the
+                # following draw is the second event.
+                return None if delta < 2 else "medium"
+            # A peng resolves the window at once and the claimer's discard is
+            # the second event; otherwise nothing before the second event can
+            # open a window for us either.
+            if delta < 2:
                 return None
             return "high" if (turn + 1) % 4 == me else "medium"
         return "high"

@@ -111,11 +111,15 @@ def main():
     p.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 4) - 4))
     p.add_argument("--seed", type=int, default=2024)
     p.add_argument("--no-auto-research", action="store_true")
+    p.add_argument("--entries", help="JSON list of opponent entries; keeps the opponent set fixed across runs")
     p.add_argument("--output")
     args = p.parse_args()
-    entries = list(BUILTIN)
-    if not args.no_auto_research:
-        entries += auto_research_representatives(REPO / "projects/agent-research")
+    if args.entries:
+        entries = json.loads(Path(args.entries).read_text())
+    else:
+        entries = list(BUILTIN)
+        if not args.no_auto_research:
+            entries += auto_research_representatives(REPO / "projects/agent-research")
     fixed_ids = [e["id"] for e in entries]
     policies = [str(Path(x).resolve()) for x in args.policy]
     rng = random.Random(args.seed)

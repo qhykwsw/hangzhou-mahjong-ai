@@ -42,6 +42,8 @@ def summarize_player(root):
     for file in Path(root).glob("game-*.jsonl"):
         for line in file.read_text().splitlines():
             r = json.loads(line)
+            if "decision_ms" not in r:
+                continue  # diagnostics written next to the actions, not an action
             actions += 1
             decision_ms.append(r["decision_ms"])
             request_ms.append(r["request_ms"])
