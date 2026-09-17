@@ -12,6 +12,58 @@ from mahjong_ai.domain.rules import payments
 from mahjong_ai.platform.live_workflow import summarize_player
 
 
+def crossed_pass_window(row, earlier, events):
+    """Identify a delayed peng-pass consuming chi before the next local response."""
+    snap = row["snapshot"]
+    if (
+        row["action"]["action"] not in ("pass", "chi")
+        or snap["phase"] != "response_chi"
+    ):
+        return []
+    previous = next(
+        (
+            r
+            for r in reversed(earlier)
+            if r["game_id"] == row["game_id"]
+            and r["accepted"]
+            and r["action"]["action"] == "pass"
+        ),
+        None,
+    )
+    if previous is None:
+        return []
+    before = previous["snapshot"]
+    if (
+        before["phase"] != "response_peng"
+        or before["seat"] != snap["seat"]
+        or before["round_no"] != snap["round_no"]
+        or before["last_discard"] != snap["last_discard"]
+    ):
+        return []
+    window = [e for e in events if previous["seq"] < e["seq"] <= row["seq"]]
+    if not window or any(e["type"] not in ("pass", "timeout") for e in window):
+        return []
+    passed = window[-1]
+    timeout = next(
+        (
+            e
+            for e in window
+            if e["type"] == "timeout"
+            and e.get("seat") == snap["seat"]
+            and (e.get("data") or {}).get("window") == "peng"
+        ),
+        None,
+    )
+    if (
+        timeout
+        and passed["type"] == "pass"
+        and passed.get("seat") == snap["seat"]
+        and passed["seq"] == row["seq"]
+    ):
+        return [timeout["seq"], passed["seq"]]
+    return []
+
+
 def audit(root):
     workflow = read_json(root / "workflow.json")
     cfg = workflow["protocol"]["config"]
@@ -75,7 +127,7 @@ def audit(root):
         summary = summarize_player(directory)
         for path in directory.glob("game-*.jsonl"):
             rows = [json.loads(l) for l in path.read_text().splitlines()]
-            for row in rows:
+            for index, row in enumerate(rows):
                 if row["accepted"]:
                     continue
                 events = games.get(row["game_id"], {}).get("events", [])
@@ -97,7 +149,10 @@ def audit(root):
                         break
                     if e["type"] in ("tile_discarded", "tile_drawn", "round_ended"):
                         break
-                if row["action"]["action"] != "pass":
+                crossed = crossed_pass_window(row, rows[:index], events)
+                if crossed:
+                    cause, witnesses = "pass_accepted_in_next_window", crossed
+                elif row["action"]["action"] != "pass":
                     cause = "unexplained_nonpass"
                 errors.append(
                     {

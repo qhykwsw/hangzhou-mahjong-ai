@@ -1,0 +1,1908 @@
+{
+  "source": "Official v34 completed test games; anonymized snapshots, reduced to own kong and replacement draw. Original evidence SHA256 retained.",
+  "cases": [
+    {
+      "case": "rejected-ming-1",
+      "source_sha256": "5f886672addca3d3a1c292e25cc3838444877ab346691d050cbaeb35b333381c",
+      "document": {
+        "snapshot": {
+          "phase": "draw",
+          "round_no": 5,
+          "dealer": 3,
+          "turn": 3,
+          "waited_seat": 3,
+          "wall_remaining": 54,
+          "discards": [
+            [
+              "1w",
+              "1t",
+              "6w",
+              "4w",
+              "1w",
+              "4t"
+            ],
+            [
+              "9w",
+              "2b",
+              "发",
+              "1t",
+              "6b",
+              "南"
+            ],
+            [
+              "8w",
+              "8b",
+              "南",
+              "北",
+              "7w",
+              "中",
+              "4w"
+            ],
+            [
+              "9w",
+              "中",
+              "发",
+              "3t",
+              "9w",
+              "3w",
+              "3w",
+              "5w",
+              "5w"
+            ]
+          ],
+          "melds": [
+            [],
+            [
+              {
+                "kind": "chi",
+                "tiles": [
+                  "7w",
+                  "8w",
+                  "9w"
+                ]
+              },
+              {
+                "kind": "peng",
+                "tiles": [
+                  "东",
+                  "东",
+                  "东"
+                ]
+              }
+            ],
+            [
+              {
+                "kind": "chi",
+                "tiles": [
+                  "2b",
+                  "3b",
+                  "1b"
+                ]
+              },
+              {
+                "kind": "chi",
+                "tiles": [
+                  "1t",
+                  "3t",
+                  "2t"
+                ]
+              }
+            ],
+            [
+              {
+                "kind": "chi",
+                "tiles": [
+                  "5t",
+                  "6t",
+                  "7t"
+                ]
+              },
+              {
+                "kind": "gang_ming",
+                "tiles": [
+                  "西",
+                  "西",
+                  "西",
+                  "西"
+                ]
+              }
+            ]
+          ],
+          "hand_counts": [
+            13,
+            7,
+            7,
+            8
+          ],
+          "my_hand": [
+            "白",
+            "5b",
+            "5b",
+            "7b",
+            "9b",
+            "8b",
+            "7t",
+            "7t"
+          ],
+          "seat": 3,
+          "last_discard": "西",
+          "drawn_tile": "7t",
+          "god": {
+            "baotou": false,
+            "chain_count": 1,
+            "catch_play": false,
+            "god_discarder_seat": -1
+          },
+          "scores": [
+            -231,
+            -28,
+            -133,
+            392
+          ]
+        },
+        "tournament": {
+          "config": {
+            "M": 10,
+            "Rounds": 10,
+            "BaseScore": 7,
+            "Name": "",
+            "Description": "",
+            "Kind": "test",
+            "YouCaiBiKao": true,
+            "StartAt": 1789551707,
+            "RegisterDeadlineAt": 0,
+            "DiscardTimeoutSec": 5,
+            "PengTimeoutSec": 1,
+            "ChiTimeoutSec": 1,
+            "TimeoutMin": 60,
+            "OnlineConfirm": false
+          }
+        },
+        "wire_events": [
+          {
+            "seq": 1473,
+            "type": "gang",
+            "seat": 3,
+            "tile": "西",
+            "data": {
+              "kind": "ming"
+            },
+            "ts": 1789548855,
+            "_round_no": 5
+          },
+          {
+            "seq": 1474,
+            "type": "tile_drawn",
+            "seat": 3,
+            "tile": "7t",
+            "data": {
+              "gang_replenish": true
+            },
+            "ts": 1789548855,
+            "_round_no": 5
+          }
+        ]
+      },
+      "response": {
+        "accepted": false,
+        "http_status": 409,
+        "error_code": "INVALID_ACTION"
+      },
+      "expected_discard": "7t"
+    },
+    {
+      "case": "rejected-bu-2",
+      "source_sha256": "5b7d0c5d54ef1b3825f226b333bc9e1c82cde7bb4bd218331344e901e4cd7884",
+      "document": {
+        "snapshot": {
+          "phase": "draw",
+          "round_no": 8,
+          "dealer": 0,
+          "turn": 2,
+          "waited_seat": 2,
+          "wall_remaining": 30,
+          "discards": [
+            [
+              "7b",
+              "东",
+              "西",
+              "中",
+              "7w",
+              "1t",
+              "2t",
+              "3t",
+              "9t",
+              "3t",
+              "2w",
+              "中",
+              "1b",
+              "9t",
+              "2b"
+            ],
+            [
+              "南",
+              "1w",
+              "中",
+              "1t",
+              "5w",
+              "6t",
+              "1w",
+              "3w",
+              "3w",
+              "中",
+              "6w",
+              "6t"
+            ],
+            [
+              "2w",
+              "8t",
+              "东",
+              "西",
+              "1t",
+              "8w",
+              "9t",
+              "5t",
+              "9b",
+              "4w",
+              "9b",
+              "6b",
+              "7t"
+            ],
+            [
+              "2t",
+              "东",
+              "2t",
+              "南",
+              "北",
+              "4w",
+              "8b",
+              "西",
+              "8b",
+              "北",
+              "6t",
+              "1w"
+            ]
+          ],
+          "melds": [
+            [
+              {
+                "kind": "chi",
+                "tiles": [
+                  "6t",
+                  "8t",
+                  "7t"
+                ]
+              },
+              {
+                "kind": "chi",
+                "tiles": [
+                  "7t",
+                  "8t",
+                  "9t"
+                ]
+              }
+            ],
+            [],
+            [
+              {
+                "kind": "chi",
+                "tiles": [
+                  "6b",
+                  "7b",
+                  "8b"
+                ]
+              },
+              {
+                "kind": "chi",
+                "tiles": [
+                  "2t",
+                  "3t",
+                  "1t"
+                ]
+              },
+              {
+                "kind": "gang_bu",
+                "tiles": [
+                  "4t",
+                  "4t",
+                  "4t",
+                  "4t"
+                ]
+              }
+            ],
+            [
+              {
+                "kind": "chi",
+                "tiles": [
+                  "7b",
+                  "8b",
+                  "9b"
+                ]
+              }
+            ]
+          ],
+          "hand_counts": [
+            7,
+            13,
+            5,
+            10
+          ],
+          "my_hand": [
+            "白",
+            "4b",
+            "4b",
+            "5b",
+            "7b"
+          ],
+          "seat": 2,
+          "last_discard": "6t",
+          "drawn_tile": "7b",
+          "god": {
+            "baotou": false,
+            "chain_count": 1,
+            "catch_play": false,
+            "god_discarder_seat": -1
+          },
+          "scores": [
+            -114,
+            -63,
+            -63,
+            240
+          ]
+        },
+        "tournament": {
+          "config": {
+            "M": 10,
+            "Rounds": 10,
+            "BaseScore": 3,
+            "Name": "",
+            "Description": "",
+            "Kind": "test",
+            "YouCaiBiKao": true,
+            "StartAt": 1789561858,
+            "RegisterDeadlineAt": 0,
+            "DiscardTimeoutSec": 5,
+            "PengTimeoutSec": 1,
+            "ChiTimeoutSec": 1,
+            "TimeoutMin": 60,
+            "OnlineConfirm": false
+          }
+        },
+        "wire_events": [
+          {
+            "seq": 2792,
+            "type": "gang",
+            "seat": 2,
+            "tile": "4t",
+            "data": {
+              "kind": "bu"
+            },
+            "ts": 1789559683,
+            "_round_no": 8
+          },
+          {
+            "seq": 2793,
+            "type": "tile_drawn",
+            "seat": 2,
+            "tile": "7b",
+            "data": {
+              "gang_replenish": true
+            },
+            "ts": 1789559683,
+            "_round_no": 8
+          }
+        ]
+      },
+      "response": {
+        "accepted": false,
+        "http_status": 409,
+        "error_code": "INVALID_ACTION"
+      },
+      "expected_discard": "7b"
+    },
+    {
+      "case": "rejected-bu-3",
+      "source_sha256": "94c7040168e97c5389dc3a6e847057da51d4f6b7601cf4515137979f3cd3773c",
+      "document": {
+        "snapshot": {
+          "phase": "draw",
+          "round_no": 10,
+          "dealer": 1,
+          "turn": 3,
+          "waited_seat": 3,
+          "wall_remaining": 36,
+          "discards": [
+            [
+              "2w",
+              "7t",
+              "7t",
+              "北",
+              "南",
+              "2w",
+              "6b",
+              "9b",
+              "4b",
+              "1b"
+            ],
+            [
+              "1b",
+              "3w",
+              "6b",
+              "9t",
+              "南",
+              "8t",
+              "中",
+              "中",
+              "9t",
+              "2w",
+              "6b"
+            ],
+            [
+              "3w",
+              "6w",
+              "8t",
+              "南",
+              "9b",
+              "8w",
+              "8t",
+              "北",
+              "4t",
+              "中",
+              "3t",
+              "4w"
+            ],
+            [
+              "4b",
+              "9t",
+              "南",
+              "6b",
+              "西",
+              "7t",
+              "北",
+              "2b",
+              "中",
+              "3w",
+              "5w",
+              "5w"
+            ]
+          ],
+          "melds": [
+            [
+              {
+                "kind": "peng",
+                "tiles": [
+                  "东",
+                  "东",
+                  "东"
+                ]
+              },
+              {
+                "kind": "chi",
+                "tiles": [
+                  "5w",
+                  "6w",
+                  "4w"
+                ]
+              }
+            ],
+            [
+              {
+                "kind": "chi",
+                "tiles": [
+                  "3t",
+                  "4t",
+                  "2t"
+                ]
+              },
+              {
+                "kind": "chi",
+                "tiles": [
+                  "4t",
+                  "6t",
+                  "5t"
+                ]
+              }
+            ],
+            [
+              {
+                "kind": "gang_bu",
+                "tiles": [
+                  "5b",
+                  "5b",
+                  "5b",
+                  "5b"
+                ]
+              },
+              {
+                "kind": "peng",
+                "tiles": [
+                  "1t",
+                  "1t",
+                  "1t"
+                ]
+              }
+            ],
+            [
+              {
+                "kind": "peng",
+                "tiles": [
+                  "2t",
+                  "2t",
+                  "2t"
+                ]
+              },
+              {
+                "kind": "gang_bu",
+                "tiles": [
+                  "1w",
+                  "1w",
+                  "1w",
+                  "1w"
+                ]
+              },
+              {
+                "kind": "peng",
+                "tiles": [
+                  "7w",
+                  "7w",
+                  "7w"
+                ]
+              }
+            ]
+          ],
+          "hand_counts": [
+            7,
+            7,
+            7,
+            5
+          ],
+          "my_hand": [
+            "9w",
+            "9w",
+            "白",
+            "6w",
+            "6w"
+          ],
+          "seat": 3,
+          "last_discard": "4w",
+          "drawn_tile": "6w",
+          "god": {
+            "baotou": false,
+            "chain_count": 1,
+            "catch_play": false,
+            "god_discarder_seat": -1
+          },
+          "scores": [
+            270,
+            -60,
+            -105,
+            -105
+          ]
+        },
+        "tournament": {
+          "config": {
+            "M": 10,
+            "Rounds": 10,
+            "BaseScore": 3,
+            "Name": "",
+            "Description": "",
+            "Kind": "test",
+            "YouCaiBiKao": true,
+            "StartAt": 1789560067,
+            "RegisterDeadlineAt": 0,
+            "DiscardTimeoutSec": 5,
+            "PengTimeoutSec": 1,
+            "ChiTimeoutSec": 1,
+            "TimeoutMin": 60,
+            "OnlineConfirm": false
+          }
+        },
+        "wire_events": [
+          {
+            "seq": 3374,
+            "type": "gang",
+            "seat": 3,
+            "tile": "1w",
+            "data": {
+              "kind": "bu"
+            },
+            "ts": 1789558206,
+            "_round_no": 10
+          },
+          {
+            "seq": 3375,
+            "type": "tile_drawn",
+            "seat": 3,
+            "tile": "6w",
+            "data": {
+              "gang_replenish": true
+            },
+            "ts": 1789558206,
+            "_round_no": 10
+          }
+        ]
+      },
+      "response": {
+        "accepted": false,
+        "http_status": 409,
+        "error_code": "INVALID_ACTION"
+      },
+      "expected_discard": "6w"
+    },
+    {
+      "case": "rejected-ming-4",
+      "source_sha256": "fd990b2a78e32aff4c7d51fe1384a4bd107081d4e03191e8e3f331539e37d669",
+      "document": {
+        "snapshot": {
+          "phase": "draw",
+          "round_no": 5,
+          "dealer": 1,
+          "turn": 3,
+          "waited_seat": 3,
+          "wall_remaining": 43,
+          "discards": [
+            [
+              "2w",
+              "东",
+              "发",
+              "4w",
+              "2w",
+              "7t",
+              "6w"
+            ],
+            [
+              "9t",
+              "南",
+              "7w",
+              "北",
+              "南",
+              "中",
+              "发",
+              "5w",
+              "9t",
+              "3t"
+            ],
+            [
+              "3w",
+              "7w",
+              "2b",
+              "4w",
+              "9w",
+              "4w",
+              "6b",
+              "1w",
+              "8t"
+            ],
+            [
+              "8w",
+              "5t",
+              "东",
+              "北",
+              "中",
+              "5t",
+              "东",
+              "8w",
+              "4t",
+              "9t"
+            ]
+          ],
+          "melds": [
+            [
+              {
+                "kind": "gang_an",
+                "tiles": [
+                  "西",
+                  "西",
+                  "西",
+                  "西"
+                ]
+              }
+            ],
+            [
+              {
+                "kind": "chi",
+                "tiles": [
+                  "5w",
+                  "6w",
+                  "7w"
+                ]
+              },
+              {
+                "kind": "gang_an",
+                "tiles": [
+                  "1b",
+                  "1b",
+                  "1b",
+                  "1b"
+                ]
+              },
+              {
+                "kind": "chi",
+                "tiles": [
+                  "6t",
+                  "7t",
+                  "8t"
+                ]
+              }
+            ],
+            [
+              {
+                "kind": "gang_an",
+                "tiles": [
+                  "8b",
+                  "8b",
+                  "8b",
+                  "8b"
+                ]
+              }
+            ],
+            [
+              {
+                "kind": "chi",
+                "tiles": [
+                  "3b",
+                  "4b",
+                  "5b"
+                ]
+              },
+              {
+                "kind": "gang_ming",
+                "tiles": [
+                  "9b",
+                  "9b",
+                  "9b",
+                  "9b"
+                ]
+              }
+            ]
+          ],
+          "hand_counts": [
+            10,
+            4,
+            10,
+            8
+          ],
+          "my_hand": [
+            "3w",
+            "6b",
+            "白",
+            "1w",
+            "发",
+            "5b",
+            "白",
+            "7b"
+          ],
+          "seat": 3,
+          "last_discard": "9b",
+          "drawn_tile": "7b",
+          "god": {
+            "baotou": false,
+            "chain_count": 1,
+            "catch_play": false,
+            "god_discarder_seat": -1
+          },
+          "scores": [
+            -48,
+            60,
+            -6,
+            -6
+          ]
+        },
+        "tournament": {
+          "config": {
+            "M": 10,
+            "Rounds": 10,
+            "BaseScore": 3,
+            "Name": "",
+            "Description": "",
+            "Kind": "test",
+            "YouCaiBiKao": true,
+            "StartAt": 1789560067,
+            "RegisterDeadlineAt": 0,
+            "DiscardTimeoutSec": 5,
+            "PengTimeoutSec": 1,
+            "ChiTimeoutSec": 1,
+            "TimeoutMin": 60,
+            "OnlineConfirm": false
+          }
+        },
+        "wire_events": [
+          {
+            "seq": 1678,
+            "type": "gang",
+            "seat": 3,
+            "tile": "9b",
+            "data": {
+              "kind": "ming"
+            },
+            "ts": 1789557328,
+            "_round_no": 5
+          },
+          {
+            "seq": 1679,
+            "type": "tile_drawn",
+            "seat": 3,
+            "tile": "7b",
+            "data": {
+              "gang_replenish": true
+            },
+            "ts": 1789557328,
+            "_round_no": 5
+          }
+        ]
+      },
+      "response": {
+        "accepted": false,
+        "http_status": 409,
+        "error_code": "INVALID_ACTION"
+      },
+      "expected_discard": "7b"
+    },
+    {
+      "case": "rejected-ming-5",
+      "source_sha256": "a45deb1bbc433c28f06bb8be45fe88f8344feeab0c8605b451d4ed5f2e95d09f",
+      "document": {
+        "snapshot": {
+          "phase": "draw",
+          "round_no": 7,
+          "dealer": 1,
+          "turn": 0,
+          "waited_seat": 0,
+          "wall_remaining": 25,
+          "discards": [
+            [
+              "2w",
+              "5w",
+              "9b",
+              "3w",
+              "南",
+              "中",
+              "9b",
+              "发",
+              "6w",
+              "5b",
+              "8t",
+              "东",
+              "东",
+              "9w",
+              "9t"
+            ],
+            [
+              "1w",
+              "东",
+              "北",
+              "中",
+              "3b",
+              "5b",
+              "2w",
+              "中",
+              "3w",
+              "7b",
+              "9w",
+              "7b",
+              "发",
+              "发",
+              "9t"
+            ],
+            [
+              "6w",
+              "7w",
+              "北",
+              "8b",
+              "1b",
+              "中",
+              "9w",
+              "4b",
+              "3b",
+              "8b",
+              "9t",
+              "7w",
+              "7w",
+              "4w"
+            ],
+            [
+              "1t",
+              "东",
+              "北",
+              "3w",
+              "5w",
+              "7t",
+              "6b",
+              "发",
+              "南",
+              "4w",
+              "1w",
+              "3w",
+              "2w"
+            ]
+          ],
+          "melds": [
+            [
+              {
+                "kind": "peng",
+                "tiles": [
+                  "西",
+                  "西",
+                  "西"
+                ]
+              },
+              {
+                "kind": "chi",
+                "tiles": [
+                  "6t",
+                  "7t",
+                  "5t"
+                ]
+              },
+              {
+                "kind": "chi",
+                "tiles": [
+                  "2t",
+                  "3t",
+                  "1t"
+                ]
+              },
+              {
+                "kind": "gang_ming",
+                "tiles": [
+                  "2b",
+                  "2b",
+                  "2b",
+                  "2b"
+                ]
+              }
+            ],
+            [],
+            [
+              {
+                "kind": "peng",
+                "tiles": [
+                  "6b",
+                  "6b",
+                  "6b"
+                ]
+              }
+            ],
+            [
+              {
+                "kind": "chi",
+                "tiles": [
+                  "4b",
+                  "5b",
+                  "3b"
+                ]
+              },
+              {
+                "kind": "peng",
+                "tiles": [
+                  "1b",
+                  "1b",
+                  "1b"
+                ]
+              }
+            ]
+          ],
+          "hand_counts": [
+            2,
+            13,
+            10,
+            7
+          ],
+          "my_hand": [
+            "3b",
+            "白"
+          ],
+          "seat": 0,
+          "last_discard": "2b",
+          "drawn_tile": "白",
+          "god": {
+            "baotou": false,
+            "chain_count": 1,
+            "catch_play": false,
+            "god_discarder_seat": -1
+          },
+          "scores": [
+            -66,
+            132,
+            -24,
+            -42
+          ]
+        },
+        "tournament": {
+          "config": {
+            "M": 10,
+            "Rounds": 10,
+            "BaseScore": 3,
+            "Name": "",
+            "Description": "",
+            "Kind": "test",
+            "YouCaiBiKao": true,
+            "StartAt": 1789560067,
+            "RegisterDeadlineAt": 0,
+            "DiscardTimeoutSec": 5,
+            "PengTimeoutSec": 1,
+            "ChiTimeoutSec": 1,
+            "TimeoutMin": 60,
+            "OnlineConfirm": false
+          }
+        },
+        "wire_events": [
+          {
+            "seq": 2373,
+            "type": "gang",
+            "seat": 0,
+            "tile": "2b",
+            "data": {
+              "kind": "ming"
+            },
+            "ts": 1789557679,
+            "_round_no": 7
+          },
+          {
+            "seq": 2374,
+            "type": "tile_drawn",
+            "seat": 0,
+            "tile": "白",
+            "data": {
+              "gang_replenish": true
+            },
+            "ts": 1789557679,
+            "_round_no": 7
+          }
+        ]
+      },
+      "response": {
+        "accepted": false,
+        "http_status": 409,
+        "error_code": "INVALID_ACTION"
+      },
+      "expected_discard": "白"
+    },
+    {
+      "case": "rejected-bu-6",
+      "source_sha256": "e0054cf870fb8648247bef69bd51e479c893ed01bc92dab73cc388407fcbc943",
+      "document": {
+        "snapshot": {
+          "phase": "draw",
+          "round_no": 10,
+          "dealer": 0,
+          "turn": 1,
+          "waited_seat": 1,
+          "wall_remaining": 63,
+          "discards": [
+            [
+              "南",
+              "2w",
+              "9w",
+              "6w",
+              "中",
+              "1b"
+            ],
+            [
+              "9t",
+              "7w",
+              "7b",
+              "5b",
+              "9b"
+            ],
+            [
+              "9w",
+              "9w",
+              "北",
+              "5b",
+              "1t"
+            ],
+            [
+              "9t",
+              "5w",
+              "北"
+            ]
+          ],
+          "melds": [
+            [
+              {
+                "kind": "chi",
+                "tiles": [
+                  "2w",
+                  "3w",
+                  "4w"
+                ]
+              },
+              {
+                "kind": "peng",
+                "tiles": [
+                  "8w",
+                  "8w",
+                  "8w"
+                ]
+              },
+              {
+                "kind": "peng",
+                "tiles": [
+                  "东",
+                  "东",
+                  "东"
+                ]
+              }
+            ],
+            [
+              {
+                "kind": "peng",
+                "tiles": [
+                  "6b",
+                  "6b",
+                  "6b"
+                ]
+              },
+              {
+                "kind": "gang_bu",
+                "tiles": [
+                  "8b",
+                  "8b",
+                  "8b",
+                  "8b"
+                ]
+              }
+            ],
+            [
+              {
+                "kind": "chi",
+                "tiles": [
+                  "2t",
+                  "3t",
+                  "4t"
+                ]
+              }
+            ],
+            []
+          ],
+          "hand_counts": [
+            4,
+            8,
+            10,
+            13
+          ],
+          "my_hand": [
+            "6w",
+            "白",
+            "5t",
+            "5t",
+            "6w",
+            "6t",
+            "白",
+            "4t"
+          ],
+          "seat": 1,
+          "last_discard": "1b",
+          "drawn_tile": "4t",
+          "god": {
+            "baotou": false,
+            "chain_count": 1,
+            "catch_play": false,
+            "god_discarder_seat": -1
+          },
+          "scores": [
+            57,
+            15,
+            -9,
+            -63
+          ]
+        },
+        "tournament": {
+          "config": {
+            "M": 10,
+            "Rounds": 10,
+            "BaseScore": 3,
+            "Name": "",
+            "Description": "",
+            "Kind": "test",
+            "YouCaiBiKao": true,
+            "StartAt": 1789560067,
+            "RegisterDeadlineAt": 0,
+            "DiscardTimeoutSec": 5,
+            "PengTimeoutSec": 1,
+            "ChiTimeoutSec": 1,
+            "TimeoutMin": 60,
+            "OnlineConfirm": false
+          }
+        },
+        "wire_events": [
+          {
+            "seq": 3019,
+            "type": "gang",
+            "seat": 1,
+            "tile": "8b",
+            "data": {
+              "kind": "bu"
+            },
+            "ts": 1789558031,
+            "_round_no": 10
+          },
+          {
+            "seq": 3020,
+            "type": "tile_drawn",
+            "seat": 1,
+            "tile": "4t",
+            "data": {
+              "gang_replenish": true
+            },
+            "ts": 1789558031,
+            "_round_no": 10
+          }
+        ]
+      },
+      "response": {
+        "accepted": false,
+        "http_status": 409,
+        "error_code": "INVALID_ACTION"
+      },
+      "expected_discard": "4t"
+    },
+    {
+      "case": "rejected-bu-7",
+      "source_sha256": "6168c53b3805d224eed5eb8f3930898122375072c799b216821727ed96903a3e",
+      "document": {
+        "snapshot": {
+          "phase": "draw",
+          "round_no": 2,
+          "dealer": 2,
+          "turn": 2,
+          "waited_seat": 2,
+          "wall_remaining": 29,
+          "discards": [
+            [
+              "9t",
+              "东",
+              "东",
+              "南",
+              "西",
+              "9b",
+              "4w",
+              "南",
+              "7w",
+              "7b",
+              "6w",
+              "2t",
+              "7w"
+            ],
+            [
+              "7t",
+              "西",
+              "4w",
+              "6w",
+              "5w",
+              "8w",
+              "8b",
+              "3t",
+              "4w",
+              "6b",
+              "5w",
+              "5b",
+              "7w",
+              "7t"
+            ],
+            [
+              "2w",
+              "南",
+              "北",
+              "5w",
+              "发",
+              "5t",
+              "2w",
+              "9t",
+              "4w",
+              "8t",
+              "8b",
+              "4t",
+              "2b"
+            ],
+            [
+              "2b",
+              "9b",
+              "9b",
+              "8b",
+              "8t",
+              "3b",
+              "东",
+              "西",
+              "9t",
+              "9b",
+              "南",
+              "4b"
+            ]
+          ],
+          "melds": [
+            [
+              {
+                "kind": "peng",
+                "tiles": [
+                  "3w",
+                  "3w",
+                  "3w"
+                ]
+              },
+              {
+                "kind": "peng",
+                "tiles": [
+                  "1t",
+                  "1t",
+                  "1t"
+                ]
+              }
+            ],
+            [
+              {
+                "kind": "peng",
+                "tiles": [
+                  "2t",
+                  "2t",
+                  "2t"
+                ]
+              }
+            ],
+            [
+              {
+                "kind": "gang_bu",
+                "tiles": [
+                  "中",
+                  "中",
+                  "中",
+                  "中"
+                ]
+              },
+              {
+                "kind": "gang_ming",
+                "tiles": [
+                  "1b",
+                  "1b",
+                  "1b",
+                  "1b"
+                ]
+              }
+            ],
+            [
+              {
+                "kind": "peng",
+                "tiles": [
+                  "1w",
+                  "1w",
+                  "1w"
+                ]
+              }
+            ]
+          ],
+          "hand_counts": [
+            7,
+            10,
+            8,
+            10
+          ],
+          "my_hand": [
+            "白",
+            "3b",
+            "3b",
+            "7t",
+            "5b",
+            "7t",
+            "5b",
+            "4b"
+          ],
+          "seat": 2,
+          "last_discard": "7t",
+          "drawn_tile": "4b",
+          "god": {
+            "baotou": false,
+            "chain_count": 1,
+            "catch_play": false,
+            "god_discarder_seat": -1
+          },
+          "scores": [
+            -48,
+            -6,
+            60,
+            -6
+          ]
+        },
+        "tournament": {
+          "config": {
+            "M": 10,
+            "Rounds": 10,
+            "BaseScore": 3,
+            "Name": "",
+            "Description": "",
+            "Kind": "test",
+            "YouCaiBiKao": true,
+            "StartAt": 1789560067,
+            "RegisterDeadlineAt": 0,
+            "DiscardTimeoutSec": 5,
+            "PengTimeoutSec": 1,
+            "ChiTimeoutSec": 1,
+            "TimeoutMin": 60,
+            "OnlineConfirm": false
+          }
+        },
+        "wire_events": [
+          {
+            "seq": 459,
+            "type": "gang",
+            "seat": 2,
+            "tile": "中",
+            "data": {
+              "kind": "bu"
+            },
+            "ts": 1789556698,
+            "_round_no": 2
+          },
+          {
+            "seq": 460,
+            "type": "tile_drawn",
+            "seat": 2,
+            "tile": "4b",
+            "data": {
+              "gang_replenish": true
+            },
+            "ts": 1789556698,
+            "_round_no": 2
+          }
+        ]
+      },
+      "response": {
+        "accepted": false,
+        "http_status": 409,
+        "error_code": "INVALID_ACTION"
+      },
+      "expected_discard": "4b"
+    },
+    {
+      "case": "rejected-bu-8",
+      "source_sha256": "0064ea24b76a21bc804f80dd2512f3cad187885ec410601f97f81f59d724bea6",
+      "document": {
+        "snapshot": {
+          "phase": "draw",
+          "round_no": 7,
+          "dealer": 1,
+          "turn": 3,
+          "waited_seat": 3,
+          "wall_remaining": 32,
+          "discards": [
+            [
+              "9w",
+              "8b",
+              "1w",
+              "南",
+              "发",
+              "南",
+              "东",
+              "1t",
+              "北",
+              "4w",
+              "3b",
+              "西",
+              "5b"
+            ],
+            [
+              "8b",
+              "1w",
+              "1t",
+              "6t",
+              "6b",
+              "6b",
+              "北",
+              "9b",
+              "中",
+              "4w",
+              "东",
+              "2b",
+              "4w"
+            ],
+            [
+              "9b",
+              "东",
+              "南",
+              "西",
+              "北",
+              "1w",
+              "2w",
+              "7t",
+              "2b",
+              "4t",
+              "南",
+              "3b"
+            ],
+            [
+              "6w",
+              "中",
+              "8t",
+              "3w",
+              "6b",
+              "9t",
+              "8b",
+              "3b",
+              "2b",
+              "7t",
+              "9t",
+              "9w"
+            ]
+          ],
+          "melds": [
+            [
+              {
+                "kind": "peng",
+                "tiles": [
+                  "2t",
+                  "2t",
+                  "2t"
+                ]
+              },
+              {
+                "kind": "chi",
+                "tiles": [
+                  "7t",
+                  "9t",
+                  "8t"
+                ]
+              },
+              {
+                "kind": "peng",
+                "tiles": [
+                  "6w",
+                  "6w",
+                  "6w"
+                ]
+              }
+            ],
+            [
+              {
+                "kind": "chi",
+                "tiles": [
+                  "4t",
+                  "6t",
+                  "5t"
+                ]
+              },
+              {
+                "kind": "peng",
+                "tiles": [
+                  "5w",
+                  "5w",
+                  "5w"
+                ]
+              }
+            ],
+            [
+              {
+                "kind": "chi",
+                "tiles": [
+                  "1t",
+                  "3t",
+                  "2t"
+                ]
+              },
+              {
+                "kind": "chi",
+                "tiles": [
+                  "4b",
+                  "5b",
+                  "3b"
+                ]
+              }
+            ],
+            [
+              {
+                "kind": "gang_bu",
+                "tiles": [
+                  "1b",
+                  "1b",
+                  "1b",
+                  "1b"
+                ]
+              },
+              {
+                "kind": "chi",
+                "tiles": [
+                  "5t",
+                  "6t",
+                  "4t"
+                ]
+              }
+            ]
+          ],
+          "hand_counts": [
+            4,
+            7,
+            7,
+            8
+          ],
+          "my_hand": [
+            "2w",
+            "西",
+            "7b",
+            "西",
+            "2w",
+            "7b",
+            "白",
+            "白"
+          ],
+          "seat": 3,
+          "last_discard": "3b",
+          "drawn_tile": "白",
+          "god": {
+            "baotou": false,
+            "chain_count": 1,
+            "catch_play": false,
+            "god_discarder_seat": -1
+          },
+          "scores": [
+            -45,
+            33,
+            26,
+            -14
+          ]
+        },
+        "tournament": {
+          "config": {
+            "M": 10,
+            "Rounds": 10,
+            "BaseScore": 1,
+            "Name": "",
+            "Description": "",
+            "Kind": "test",
+            "YouCaiBiKao": true,
+            "StartAt": 1789555608,
+            "RegisterDeadlineAt": 0,
+            "DiscardTimeoutSec": 5,
+            "PengTimeoutSec": 1,
+            "ChiTimeoutSec": 1,
+            "TimeoutMin": 60,
+            "OnlineConfirm": false
+          }
+        },
+        "wire_events": [
+          {
+            "seq": 2124,
+            "type": "gang",
+            "seat": 3,
+            "tile": "1b",
+            "data": {
+              "kind": "bu"
+            },
+            "ts": 1789553150,
+            "_round_no": 7
+          },
+          {
+            "seq": 2125,
+            "type": "tile_drawn",
+            "seat": 3,
+            "tile": "白",
+            "data": {
+              "gang_replenish": true
+            },
+            "ts": 1789553150,
+            "_round_no": 7
+          }
+        ]
+      },
+      "response": {
+        "accepted": false,
+        "http_status": 409,
+        "error_code": "INVALID_ACTION"
+      },
+      "expected_discard": "白"
+    },
+    {
+      "case": "rejected-bu-9",
+      "source_sha256": "e316e10742b89f944d31a28c61cca3acb717c6e2f781c38557051998b83f4f91",
+      "document": {
+        "snapshot": {
+          "phase": "draw",
+          "round_no": 8,
+          "dealer": 2,
+          "turn": 2,
+          "waited_seat": 2,
+          "wall_remaining": 24,
+          "discards": [
+            [
+              "6b",
+              "8b",
+              "发",
+              "中",
+              "8w",
+              "6t",
+              "4t",
+              "4t",
+              "2w",
+              "3t",
+              "西",
+              "4w",
+              "4w",
+              "南"
+            ],
+            [
+              "4w",
+              "9b",
+              "3w",
+              "西",
+              "8t",
+              "东",
+              "西",
+              "7w",
+              "6w",
+              "8w",
+              "3t",
+              "8b",
+              "1w",
+              "9w",
+              "1t"
+            ],
+            [
+              "1w",
+              "1w",
+              "3w",
+              "8t",
+              "1w",
+              "9w",
+              "4t",
+              "6w",
+              "7w",
+              "3w",
+              "发",
+              "6w",
+              "7b",
+              "7w"
+            ],
+            [
+              "8w",
+              "3b",
+              "2b",
+              "3w",
+              "5w",
+              "5w",
+              "1b",
+              "5w",
+              "9t",
+              "9b",
+              "8t",
+              "5b",
+              "3t",
+              "4w",
+              "6b"
+            ]
+          ],
+          "melds": [
+            [
+              {
+                "kind": "chi",
+                "tiles": [
+                  "4t",
+                  "5t",
+                  "3t"
+                ]
+              }
+            ],
+            [
+              {
+                "kind": "peng",
+                "tiles": [
+                  "2w",
+                  "2w",
+                  "2w"
+                ]
+              }
+            ],
+            [
+              {
+                "kind": "gang_bu",
+                "tiles": [
+                  "2t",
+                  "2t",
+                  "2t",
+                  "2t"
+                ]
+              }
+            ],
+            [
+              {
+                "kind": "chi",
+                "tiles": [
+                  "7b",
+                  "8b",
+                  "9b"
+                ]
+              },
+              {
+                "kind": "chi",
+                "tiles": [
+                  "8b",
+                  "9b",
+                  "7b"
+                ]
+              }
+            ]
+          ],
+          "hand_counts": [
+            10,
+            10,
+            11,
+            7
+          ],
+          "my_hand": [
+            "4b",
+            "4b",
+            "5b",
+            "白",
+            "白",
+            "1t",
+            "3b",
+            "2b",
+            "3b",
+            "4b",
+            "1b"
+          ],
+          "seat": 2,
+          "last_discard": "2t",
+          "drawn_tile": "1b",
+          "god": {
+            "baotou": false,
+            "chain_count": 1,
+            "catch_play": false,
+            "god_discarder_seat": -1
+          },
+          "scores": [
+            -26,
+            6,
+            35,
+            -15
+          ]
+        },
+        "tournament": {
+          "config": {
+            "M": 10,
+            "Rounds": 10,
+            "BaseScore": 1,
+            "Name": "",
+            "Description": "",
+            "Kind": "test",
+            "YouCaiBiKao": true,
+            "StartAt": 1789555608,
+            "RegisterDeadlineAt": 0,
+            "DiscardTimeoutSec": 5,
+            "PengTimeoutSec": 1,
+            "ChiTimeoutSec": 1,
+            "TimeoutMin": 60,
+            "OnlineConfirm": false
+          }
+        },
+        "wire_events": [
+          {
+            "seq": 2410,
+            "type": "gang",
+            "seat": 2,
+            "tile": "2t",
+            "data": {
+              "kind": "bu"
+            },
+            "ts": 1789553306,
+            "_round_no": 8
+          },
+          {
+            "seq": 2411,
+            "type": "tile_drawn",
+            "seat": 2,
+            "tile": "1b",
+            "data": {
+              "gang_replenish": true
+            },
+            "ts": 1789553306,
+            "_round_no": 8
+          }
+        ]
+      },
+      "response": {
+        "accepted": false,
+        "http_status": 409,
+        "error_code": "INVALID_ACTION"
+      },
+      "expected_discard": "1b"
+    }
+  ]
+}

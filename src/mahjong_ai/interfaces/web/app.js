@@ -44,6 +44,7 @@ const eventNames = {
   configuration: "并发已更新",
   branch_archived: "归档状态已更新",
   plan_declared: "研究判断已记录",
+  conclusion_recorded: "累计研究结论已更新",
 };
 const roundEvents = new Set([
   "round_started",
@@ -687,6 +688,21 @@ function showDetail(button) {
   $("archiveNote").hidden = Boolean(row?.archived);
   $("archiveBranch").disabled = Boolean(busy());
   $("detailContent").innerHTML =
+    "<h3>累计研究结论</h3>" +
+    ((state.research_conclusions || [])
+      .filter((r) => r.branch === detailBranch)
+      .map((r) => {
+        const a = r.assessment;
+        const status = {verified: "已验证", refuted: "已否定", inconclusive: "证据不足", untested: "未有效验证"};
+        const failure = {none: "无", implementation: "实现问题", resource_limit: "资源限制", infrastructure: "基础设施", unknown: "原因未明"};
+        const outcome = {evaluated: "完整评估", evaluated_with_errors: "评估含运行错误", not_evaluated: "未完成有效评估"};
+        return `<details open><summary>第 ${r.iteration} 次 · ${esc(a ? status[a.status] : "待复盘")} · ${esc(outcome[r.outcome])}</summary><dl class="plan-detail">${[
+          ["假设", r.hypothesis],
+          ["结论", a?.conclusion || "等待 Agent 复盘，执行失败不等于方向无效。"],
+          ["适用条件", a?.conditions || "见下方实际评估条件"],
+          ["失败归因", a ? `${failure[a.failure_kind]}${a.failure_reason ? "：" + a.failure_reason : ""}` : "尚未归因"],
+        ].map(([label, text]) => `<div><dt>${label}</dt><dd>${esc(text)}</dd></div>`).join("")}</dl><details><summary>评估条件与执行证据 · ${r.revision_count} 次结论记录</summary><pre>${esc(JSON.stringify(r.evidence, null, 2))}</pre></details></details>`;
+      }).join("") || "<p class='muted'>尚无已完成尝试的研究结论。</p>") +
     "<h3 id='detailPlan'>研究判断</h3>" +
     (state.iterations
       .filter((i) => i.branch === detailBranch && i.plan)

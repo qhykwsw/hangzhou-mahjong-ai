@@ -46,6 +46,9 @@ def test_multigame_rotating_seats_keeps_identity_ledger_and_one_terminal_update(
         assert {o.stage.seat for o in p.observed} == {(i - g) % 4 for g in range(3)}
         assert all(o.stage.stage_rounds_total == 9 for o in p.observed)
         assert all(
+            e.hand_no <= o.stage.round_no for o in p.observed for e in o.public_events
+        )
+        assert all(
             o.stage.rank_by_seat == score_ranks(o.stage.effective_scores)
             for o in p.observed
         )

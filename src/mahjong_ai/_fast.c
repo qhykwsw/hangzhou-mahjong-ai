@@ -362,7 +362,8 @@ static long fan_value(const int *counts, int drawn_tile, int open_melds,
     memcpy(waiting, counts, sizeof(waiting));
     waiting[drawn_tile]--;
     int bt = baotou_shape(waiting, open_melds);
-    if (you_cai_bi_kao && counts[WHITE] && !(bt || kong_draw)) return 0;
+    /* Match the live-server gate in domain/rules.py, including kong draws. */
+    if (you_cai_bi_kao && counts[WHITE] && !bt) return 0;
 
     long fan = 1;
     if (open_melds == 0) {

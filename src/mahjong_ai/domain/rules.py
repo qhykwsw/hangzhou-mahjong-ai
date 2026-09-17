@@ -1,4 +1,4 @@
-"""Local implementation of the published tile and fan rules.
+"""Local rules calibrated against the official server and published guide.
 
 This module is pure: no wall, RNG, opponent state, network, or policy code.
 """
@@ -183,7 +183,11 @@ def _calculate_fan_cached(
     waiting.remove(drawn_tile)
     bt = is_baotou(waiting, open_melds)
     c = counts(hand)
-    if you_cai_bi_kao and c[WHITE] and not (bt or kong_draw):
+    # Live v34 rejects non-baotou white hands even on a kong replacement.
+    # The guide's kong exemption is contradicted by captured rejection/timeout
+    # evidence (tests/fixtures/official-v34-youcai-rejected-hu.json).
+    # kong_draw records context; the multiplier comes from chain_count.
+    if you_cai_bi_kao and c[WHITE] and not bt:
         return None
     detail = []
     fan = 1

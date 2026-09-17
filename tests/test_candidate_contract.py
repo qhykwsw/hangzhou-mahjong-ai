@@ -54,3 +54,55 @@ def test_unrestricted_baseline_builds_and_plays_legal_action(tmp_path):
     )
     observation = HandState(RoundConfig(), 42).observation()
     assert policy.act(observation) in observation.legal_actions
+
+
+@pytest.mark.parametrize("style", ["efficiency", "fan", "adaptive"])
+def test_focused_baselines_satisfy_contract_and_complete_a_hand(tmp_path, style):
+    import numpy as np
+    from mahjong_ai.domain.engine import HandState
+    from mahjong_ai.domain.types import RoundConfig
+
+    namespace = {}
+    combination = "heuristic-" + style
+    exec(baseline_source(combination), namespace)
+    policy = namespace["build"](tmp_path)
+    module = SimpleNamespace(**namespace)
+    validate_capability(module, policy, combination, tmp_path)
+    policy.reset(42)
+    hand = HandState(RoundConfig(rounds=1), 42)
+    while not hand.settled:
+        observation = hand.observation()
+        assert np.isfinite(policy.utilities(observation)).all()
+        action = policy.act(observation)
+        assert action in observation.legal_actions
+        hand.step(action)
+    hand.assert_conservation()
+    policy.style = "balanced"
+    with pytest.raises(ValueError, match=r"policy\.style"):
+        validate_capability(module, policy, combination, tmp_path)
+
+
+def test_efficiency_ignores_score_pressure_while_adaptive_responds():
+    from dataclasses import replace
+    import numpy as np
+    from mahjong_ai.domain.engine import HandState
+    from mahjong_ai.domain.types import RoundConfig
+    from mahjong_ai.strategies.heuristic import HeuristicPolicy
+
+    observation = HandState(RoundConfig(rounds=8), 42).observation()
+    seat = observation.stage.seat
+    scores = tuple(100 if i == seat else 0 for i in range(4))
+    leading = replace(
+        observation,
+        stage=replace(observation.stage, score_by_seat=scores, round_no=8),
+    )
+    trailing = replace(
+        leading,
+        stage=replace(leading.stage, score_by_seat=tuple(-v for v in scores)),
+    )
+    efficiency = HeuristicPolicy("efficiency")
+    adaptive = HeuristicPolicy("adaptive")
+    np.testing.assert_array_equal(
+        efficiency.utilities(leading), efficiency.utilities(trailing)
+    )
+    assert not np.allclose(adaptive.utilities(leading), adaptive.utilities(trailing))

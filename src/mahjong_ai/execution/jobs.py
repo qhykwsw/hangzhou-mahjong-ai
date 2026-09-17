@@ -373,6 +373,22 @@ def play(task, root):
     _attach_group_readouts(summary, task["assignments"], receipts)
     result = {"status": "completed", "summary": summary, "matches": len(receipts)}
     if task.get("candidate"):
+        # Only expose the focal policy's errors to its research branch. Full
+        # tracebacks and other branches' diagnostics stay in host receipts.
+        diagnostics = []
+        for receipt in receipts:
+            for row in receipt.get("diagnostics", []):
+                if row["candidate_id"] != task["candidate"]:
+                    continue
+                error = row["error"]
+                entry = {
+                    "type": error.get("type"),
+                    "message": error.get("message", "")[:2000],
+                }
+                if entry not in diagnostics:
+                    diagnostics.append(entry)
+        result["diagnostics"] = diagnostics[:10]
+        result["diagnostics_truncated"] = max(0, len(diagnostics) - 10)
         focal_receipts = [
             {
                 **receipt,

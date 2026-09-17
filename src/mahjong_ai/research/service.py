@@ -19,6 +19,7 @@ from mahjong_ai.persistence.artifacts import (
 )
 from mahjong_ai.execution.candidate_runtime import tree_hash
 from mahjong_ai.strategies.catalog import baseline_source
+from mahjong_ai.research.conclusions import ledger, validate_assessment
 from mahjong_ai.research.config import (
     configuration,
     merge,
@@ -177,35 +178,56 @@ class Research:
                 for combination in config["combinations"]:
                     self.add_combination(state, combination, config["models"])
                 if not state["bootstrap"]:
-                    for style in ("conservative", "balanced", "adventurous"):
-                        key = "heuristic-" + style
-                        cid = "bootstrap--" + style
-                        folder = self.layout.strategies / key / "bootstrap"
-                        folder.mkdir(parents=True, exist_ok=True)
-                        (folder / "strategy.py").write_text(baseline_source(key))
-                        from mahjong_ai.strategies.common import PolicySpec
-
-                        spec = PolicySpec(
-                            family="code",
-                            version=cid,
-                            package_path=str(folder),
-                            package_hash=tree_hash(folder),
-                            runtime_path=state["runtime_path"],
-                        ).as_dict()
-                        state["candidates"][cid] = dict(
-                            id=cid,
-                            branch=None,
-                            combination=key,
-                            status="ready",
-                            workspace=str(folder),
-                            spec=spec,
-                            parent=None,
-                            hypothesis="启动启发式",
-                            requirements=[],
-                            runtime_path=state["runtime_path"],
-                        )
-                        state["bootstrap"].append(cid)
+                    self.ensure_bootstrap(state, state["runtime_path"])
         return self.read()
+
+    def ensure_bootstrap(self, state, runtime):
+        """New experiments get fresh startup opponents when their runtime changes."""
+        from mahjong_ai.strategies.common import PolicySpec
+
+        if state["bootstrap"] and all(
+            state["candidates"][cid]["runtime_path"] == runtime
+            for cid in state["bootstrap"]
+        ):
+            return
+        generation = Path(runtime).name if state["bootstrap"] else None
+        bootstrap = []
+        for style in ("conservative", "balanced", "adventurous"):
+            key = "heuristic-" + style
+            cid = "bootstrap--" + style + ("--" + generation if generation else "")
+            bootstrap.append(cid)
+            if cid in state["candidates"]:
+                continue
+            # Keep new packages outside the old package tree so its hash and
+            # recorded source path stay unchanged, including across restarts.
+            folder = self.layout.strategies / key
+            folder = (
+                folder / "bootstrap-versions" / generation
+                if generation
+                else folder / "bootstrap"
+            )
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / "strategy.py").write_text(baseline_source(key))
+            spec = PolicySpec(
+                family="code",
+                version=cid,
+                package_path=str(folder),
+                package_hash=tree_hash(folder),
+                runtime_path=runtime,
+            ).as_dict()
+            state["candidates"][cid] = dict(
+                id=cid,
+                branch=None,
+                combination=key,
+                status="ready",
+                workspace=str(folder),
+                spec=spec,
+                parent=None,
+                hypothesis="启动启发式",
+                requirements=[],
+                runtime_path=runtime,
+            )
+        state["bootstrap"] = bootstrap
 
     def sync_resident_releases(self, s):
         """Mirror active resident releases as read-only external candidates.
@@ -342,6 +364,7 @@ class Research:
                 raise ValueError("请选择互不重复、已注册且未归档的迭代分支")
             if set(config["branch_iterations"]) - set(selected):
                 raise ValueError("单支迭代额度只能指向本次选中的迭代对象")
+            self.ensure_bootstrap(s, runtime)
             pool = (
                 self.default_opponents(s, config["opponent_limit"])
                 if opponents is None
@@ -741,6 +764,12 @@ class Research:
             text[key] = value.strip()[:4000]
         with self.edit(experiment) as (s, db):
             iteration = self.require_turn(s, branch)
+            pending = [r["record_id"] for r in ledger(s, branch) if not r["assessment"]]
+            if pending:
+                raise ValueError(
+                    "先用 research_record_conclusion 整理累计研究结论，再声明下一步计划："
+                    + ", ".join(pending)
+                )
             now = time.time()
             plan = dict(text, declared_at=now, updated_at=now)
             if iteration.get("plan"):
@@ -758,6 +787,50 @@ class Research:
             )
             number = iteration["number"]
         return {"iteration": number, "plan": plan}
+
+    def record_conclusion(
+        self,
+        experiment,
+        branch,
+        record_id,
+        status,
+        conclusion,
+        conditions,
+        failure_kind="none",
+        failure_reason="",
+    ):
+        """Review own completed evidence; preserve revisions and dropped-reply idempotency."""
+        with self.edit(experiment) as (s, db):
+            current = self.require_turn(s, branch)
+            record = next(
+                (r for r in ledger(s, branch) if r["record_id"] == record_id), None
+            )
+            if record is None:
+                raise ValueError("只能总结本分支已完成尝试的 record_id")
+            value = validate_assessment(
+                record, status, conclusion, conditions, failure_kind, failure_reason
+            )
+            iteration = s["iterations"][record["iteration_id"]]
+            history = iteration.setdefault("conclusions", {}).setdefault(record_id, [])
+            if not history or any(history[-1][k] != v for k, v in value.items()):
+                history.append(
+                    {**value, "recorded_in": current["id"], "at": time.time()}
+                )
+                self.event(
+                    db,
+                    s,
+                    "conclusion_recorded",
+                    {
+                        "branch": branch,
+                        "record_id": record_id,
+                        "status": status,
+                    },
+                )
+            return {
+                "record_id": record_id,
+                "assessment": deepcopy(history[-1]),
+                "revision_count": len(history),
+            }
 
     def fork(self, experiment, branch, name, hypothesis, parent=None):
         if not re.fullmatch("[A-Za-z0-9_-]{1,64}", name):
@@ -874,16 +947,23 @@ class Research:
         if draft["status"] != "draft":
             return {"candidate": draft["id"], "ok": True, "frozen": True}
         combination = s["branches"][branch]["combination"]
-        return {
-            "candidate": draft["id"],
-            **self.preflight(
-                Path(draft["workspace"]),
-                draft["requirements"],
-                combination,
-                s["definitions"][combination],
-                s["config"]["game"],
-            ),
-        }
+        result = self.preflight(
+            Path(draft["workspace"]),
+            draft["requirements"],
+            combination,
+            s["definitions"][combination],
+            s["config"]["game"],
+        )
+        self.record_check(experiment, branch, draft["id"], result)
+        return {"candidate": draft["id"], **result}
+
+    def record_check(self, experiment, branch, cid, result):
+        with self.edit(experiment) as (s, db):
+            candidate = self.own(s, branch, cid)
+            checks = candidate.setdefault("checks", [])
+            value = {"ok": result["ok"], "error": result.get("error")}
+            if not checks or any(checks[-1][k] != v for k, v in value.items()):
+                checks.append({**value, "at": time.time()})
 
     def preflight(self, source, requirements, combination, definition=None, game=None):
         """Run a draft the way its job will: build probe plus one training episode.
@@ -1007,6 +1087,7 @@ class Research:
                 snapshot["definitions"][combination],
                 snapshot["config"]["game"],
             )
+            self.record_check(experiment, branch, cid, check)
             if not check["ok"]:
                 raise ValueError(
                     f"候选 {cid} 未通过运行自检，本次提交被拒绝："
@@ -1436,6 +1517,15 @@ class Research:
             status="completed", error=result.get("error"), usage=result.get("usage", {})
         )
         it = s["iterations"].get(job.get("iteration"))
+        if it and result.get("error"):
+            failure = {
+                "stage": job["kind"],
+                "candidate_id": job.get("candidate"),
+                "reason": result["error"],
+            }
+            failures = it.setdefault("execution_failures", [])
+            if failure not in failures:
+                failures.append(failure)
         if it and job["kind"] in ("agent", "prepare"):
             it["spent"] += result.get("usage", {}).get("wall_seconds", 0.0)
         if job["kind"] == "agent":
@@ -1525,6 +1615,8 @@ class Research:
                 return
             job["summary"] = result["summary"]
             if job["scope"] == "paired":
+                job["diagnostics"] = result.get("diagnostics", [])
+                job["diagnostics_truncated"] = result.get("diagnostics_truncated", 0)
                 job["focal"] = result["focal"]
                 jobs = [
                     j
@@ -1714,53 +1806,6 @@ class Research:
     def handoff(s, branch):
         """Compact state transfer that replaces the previous iteration's conversation."""
         b = s["branches"][branch]
-        own = sorted(
-            (
-                i
-                for i in s["iterations"].values()
-                if i["branch"] == branch and i["id"] != b.get("iteration")
-            ),
-            key=lambda i: i["number"],
-        )
-        recent = []
-        for it in own[-3:]:
-            row = {
-                "iteration": it["number"],
-                "round": it["cycle"],
-                "status": it["status"],
-                "improved": it.get("improved"),
-                "candidates": list(it.get("candidates") or []),
-                "spent_minutes": round((it.get("spent") or 0) / 60),
-            }
-            if it.get("error"):
-                row["error"] = str(it["error"])[:200]
-            if it.get("plan"):
-                row["direction"] = it["plan"]["direction"][:200]
-            if it.get("results"):
-                row["paired"] = {
-                    cid: {
-                        "mean_utility": round(v["mean_utility"], 3),
-                        "hand_mean_utility": (
-                            None
-                            if v.get("hand_mean_utility") is None
-                            else round(v["hand_mean_utility"], 3)
-                        ),
-                        "hand_mean_score": (
-                            None
-                            if v.get("hand_mean_score") is None
-                            else round(v["hand_mean_score"], 3)
-                        ),
-                        "standard_error": (
-                            None
-                            if v.get("standard_error") is None
-                            else round(v["standard_error"], 3)
-                        ),
-                        "appearances": v["appearances"],
-                        "hand_appearances": v.get("hand_appearances"),
-                    }
-                    for cid, v in it["results"].items()
-                }
-            recent.append(row)
         incumbent = s["candidates"].get(b["representative"]) or {}
         ranking = [
             dict(
@@ -1782,12 +1827,12 @@ class Research:
             "improved_iterations": b["improved"],
             "failed_iterations": b["failed"],
             "note": "本轮是新的研究会话，上一轮的对话已归档；"
-            "下面是结构化交接，细节用 research_status / research_history 查。",
+            "下面是累计研究结论与执行证据；先整理未复盘记录，再提出新计划。",
             "incumbent": {
                 "candidate_id": b["representative"],
                 "hypothesis": (incumbent.get("hypothesis") or "")[:1200],
             },
-            "recent_iterations": recent,
+            "research_conclusions": ledger(s, branch),
             "last_ranking": ranking,
         }
 
@@ -1952,6 +1997,7 @@ class Research:
 
         return dict(
             experiment=public_experiment,
+            research_conclusions=ledger(s, branch),
             config=deepcopy(s["config"]),
             combinations=list(s["definitions"].values()),
             branches=branches,

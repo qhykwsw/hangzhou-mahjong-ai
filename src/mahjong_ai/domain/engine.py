@@ -7,7 +7,8 @@ import random
 from dataclasses import replace
 from typing import Protocol, Sequence
 
-from mahjong_ai.domain.rules import WHITE, counts, calculate_fan, is_baotou, payments
+from mahjong_ai.domain.rules import WHITE, counts, calculate_fan, payments
+from mahjong_ai.domain.observations import can_discard_piao, policy_events
 from mahjong_ai.domain.types import (
     Action,
     Meld,
@@ -19,7 +20,7 @@ from mahjong_ai.domain.types import (
 )
 
 
-ENGINE_VERSION = "hangzhou-local-v5"
+ENGINE_VERSION = "hangzhou-local-v7"
 
 
 def derive_seed(*parts) -> int:
@@ -85,19 +86,25 @@ class HandState:
         self.delta = (0, 0, 0, 0)
         self.settled = False
         self.steps = 0
-        self._draw(dealer)
+        self._draw(dealer, initial=True)
 
     def _event(self, kind, seat=None, tile=None, tiles=(), private=None, scores=()):
         self.events.append(
             (
                 PublicEvent(
-                    kind, seat, tile, tuple(tiles), self.hand_no, tuple(scores)
+                    kind,
+                    seat,
+                    tile,
+                    tuple(tiles),
+                    self.hand_no,
+                    tuple(scores),
+                    concealed=kind == "gang" and private is not None,
                 ),
                 private,
             )
         )
 
-    def _draw(self, seat, kong=False):
+    def _draw(self, seat, kong=False, initial=False):
         if len(self.wall) <= 20:
             self._finish(None)
             return
@@ -110,7 +117,8 @@ class HandState:
             self.white_acquired[seat] += 1
         self.kong_draw = kong
         self.phase = "draw"
-        self._event("draw", seat, self.drawn, private=seat)
+        if not initial:
+            self._event("draw", seat, self.drawn, private=seat)
 
     def current_fan(self):
         if self.phase != "draw":
@@ -142,7 +150,7 @@ class HandState:
                     result.append(Action("discard", self.drawn))
             else:
                 result.extend(Action("discard", t) for t in sorted(set(h)))
-            if self.drawn is not None and len(self.wall) > 20:
+            if len(self.wall) > 20:
                 result.extend(
                     Action("gang", t, kind="concealed") for t in range(33) if c[t] == 4
                 )
@@ -200,7 +208,7 @@ class HandState:
                 in_tiebreak=self.in_tiebreak,
             ),
             tuple(sorted(self.hands[seat])),
-            tuple(public),
+            policy_events(public, seat),
             self.legal_actions(),
             melds,
             tuple(tuple(x) for x in self.discards),
@@ -214,6 +222,7 @@ class HandState:
             fan.fan if fan else 0,
             self.config.you_cai_bi_kao,
             god_discarder_seat=self.catch_owner if self.catch_owner is not None else -1,
+            base_score=self.config.base_score,
         )
 
     def timeout_action(self):
@@ -243,18 +252,16 @@ class HandState:
             self.fan = self.current_fan()
             self._finish(s)
         elif action.action == "discard":
-            waiting = list(h)
-            if self.drawn is not None:
-                waiting.remove(self.drawn)
-            was_bt = self.drawn is not None and is_baotou(waiting, len(self.melds[s]))
-            h.remove(action.tile)
-            # The exempt player can resume piao after a chi/peng without drawing.
-            called_in_circle = self.catch_owner == s and self.drawn is None
-            piao = (
-                action.tile == WHITE
-                and (was_bt or called_in_circle)
-                and is_baotou(h, len(self.melds[s]))
+            piao = action.tile == WHITE and can_discard_piao(
+                h,
+                self.drawn,
+                len(self.melds[s]),
+                [e for e, _ in self.events],
+                s,
+                self.hand_no,
+                catch_exempt=self.catch_owner == s,
             )
+            h.remove(action.tile)
             if piao:
                 self.chain[s] += 1
                 self.piao[s] += 1

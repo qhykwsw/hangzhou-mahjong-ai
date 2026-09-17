@@ -17,7 +17,7 @@ def server(project, experiment_id, branch):
 
     @mcp.tool(annotations=ro)
     def research_status() -> dict:
-        """读取本分支每次迭代的执行反馈（实际训练场数与经过秒数）、候选、额度与共同排名。"""
+        """读取本分支累计研究结论、待复盘证据、执行反馈、候选、额度与共同排名。"""
         return arena.snapshot(experiment_id, branch)
 
     @mcp.tool(annotations=ro)
@@ -36,16 +36,18 @@ def server(project, experiment_id, branch):
             "items": rows[offset : offset + limit],
             "rounds": state["history"][-3:],
             "iterations": state["iterations"],
+            "research_conclusions": state["research_conclusions"],
         }
 
     @mcp.tool(annotations=ro)
     def research_read_source(name: str = "contract") -> dict:
-        """读取含杭州麻将规则要点的 contract、capabilities，或公开的 types/rules/policy/training/simulation 等 SDK 源码；rules 为判胡与番型实现。"""
+        """读取 contract、capabilities 或公开 SDK：heuristic 提供牌效优先、番型经营、局势自适应及风险风格基线；types 包含 base_score 和暗杠事件标识，observations 提供统一事件与吃后财飘判断，rules 为判胡与番型，simulation 为合法观察采样。"""
         if name == "contract":
             return {"content": CONTRACT}
         if name not in (
             "types",
             "rules",
+            "observations",
             "policy",
             "candidate_worker",
             "shape",
@@ -63,6 +65,7 @@ def server(project, experiment_id, branch):
                 / {
                     "types": "domain/types.py",
                     "rules": "domain/rules.py",
+                    "observations": "domain/observations.py",
                     "policy": "strategies/common.py",
                     "candidate_worker": "execution/candidate_worker.py",
                     "shape": "sdk/shape.py",
@@ -77,8 +80,33 @@ def server(project, experiment_id, branch):
         }
 
     @mcp.tool(annotations=rw)
+    def research_record_conclusion(
+        record_id: str,
+        status: str,
+        conclusion: str,
+        conditions: str,
+        failure_kind: str = "none",
+        failure_reason: str = "",
+    ) -> dict:
+        """整理本分支已完成尝试的累计结论，record_id 来自 research_status 的 research_conclusions。
+        status: verified/refuted/inconclusive/untested。conditions 写明适用条件与局限。
+        failure_kind: none/implementation/resource_limit/infrastructure/unknown；有失败须说明 failure_reason。
+        未完整评估或评估含报错、超时、代打时，不得标 verified/refuted。重复同内容幂等，修改保留历史。
+        声明新计划前须整理所有 assessment 为空的记录。"""
+        return arena.record_conclusion(
+            experiment_id,
+            branch,
+            record_id,
+            status,
+            conclusion,
+            conditions,
+            failure_kind,
+            failure_reason,
+        )
+
+    @mcp.tool(annotations=rw)
     def research_declare_plan(assessment: str, direction: str, reason: str) -> dict:
-        """迭代的第一步，必须在写草稿之前完成：对现役做法与其轨迹的判断、本次尝试的方向和原因。展示在研究控制台上。"""
+        """先整理待复盘的累计研究结论，再声明现役判断、本次方向和原因；必须在写草稿之前完成。"""
         return arena.declare_plan(experiment_id, branch, assessment, direction, reason)
 
     @mcp.tool(annotations=rw)
@@ -105,9 +133,9 @@ def server(project, experiment_id, branch):
         """为草稿声明精确 name==version 的 wheel 依赖。"""
         return arena.dependencies(experiment_id, branch, candidate_id, requirements)
 
-    @mcp.tool(annotations=ro)
+    @mcp.tool(annotations=rw)
     def research_check_candidate(candidate_id: str) -> dict:
-        """按真实任务的方式试跑草稿：导入、build、打一场训练。提交前必须修好所有失败，否则整批会被拒绝。"""
+        """试跑草稿并记录自检成败与错误：导入、build、必要时打一场训练。提交前必须修好所有失败。"""
         return arena.check(experiment_id, branch, candidate_id)
 
     @mcp.tool(annotations=rw)

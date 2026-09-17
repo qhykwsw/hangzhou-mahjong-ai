@@ -40,6 +40,41 @@ def small_config():
     )
 
 
+def test_new_runtime_gets_new_bootstrap_versions_without_rewriting_old_ones(
+    tmp_path, monkeypatch
+):
+    from copy import deepcopy
+    import shutil
+    from mahjong_ai.execution.candidate_runtime import tree_hash
+    from mahjong_ai.strategies.common import PolicySpec
+    from mahjong_ai.domain.engine import HandState
+    from mahjong_ai.domain.types import RoundConfig
+
+    r = Research(tmp_path)
+    initial = r.register(small_config())
+    old = {cid: deepcopy(initial["candidates"][cid]) for cid in initial["bootstrap"]}
+    hashes = {cid: tree_hash(c["workspace"]) for cid, c in old.items()}
+    runtime = Path(initial["runtime_path"]).with_name("next-runtime")
+    shutil.copytree(initial["runtime_path"], runtime)
+    monkeypatch.setattr(r, "freeze_runtime", lambda: ("next-runtime", str(runtime)))
+    r.create(small_config())
+    current = r.read()
+    assert set(current["bootstrap"]).isdisjoint(old)
+    for cid, candidate in old.items():
+        assert current["candidates"][cid] == candidate
+        assert tree_hash(candidate["workspace"]) == hashes[cid]
+    for cid in current["bootstrap"]:
+        spec = current["candidates"][cid]["spec"]
+        assert spec["runtime_path"] == str(runtime)
+        policy = PolicySpec(**spec).build()
+        try:
+            policy.reset(1)
+            obs = HandState(RoundConfig(), 1).observation()
+            assert policy.act(obs) in obs.legal_actions
+        finally:
+            policy.close()
+
+
 @pytest.fixture
 def research(tmp_path):
     return start_research(tmp_path)
@@ -535,7 +570,7 @@ def test_each_iteration_starts_a_fresh_thread_with_handoff(research):
     assert task["thread_id"] is None
     handoff = task["handoff"]
     assert handoff["branch"] == branch
-    assert handoff["recent_iterations"][-1]["iteration"] == 1
+    assert handoff["research_conclusions"][-1]["iteration"] == 1
     assert (
         handoff["incumbent"]["candidate_id"]
         == state["branches"][branch]["representative"]
@@ -587,6 +622,9 @@ def test_submission_rejects_draft_that_does_not_run(research):
         r.submit(run, branch, ["broken"])
     state = r.read(run)
     assert state["candidates"][branch + "--broken"]["status"] == "draft"
+    checks = state["candidates"][branch + "--broken"]["checks"]
+    assert len(checks) == 1 and checks[0]["ok"] is False
+    assert "build" in checks[0]["error"]
     iteration = state["iterations"][state["branches"][branch]["iteration"]]
     assert iteration["status"] == "researching"
     root = (
@@ -762,6 +800,16 @@ def finish_branch_with_receipts(r, experiment, controller, branch, name, improve
 
     with r.edit(experiment) as (s, db):
         job = r.start_iteration(s, branch)
+    for record in r.handoff(r.read(), branch)["research_conclusions"]:
+        if not record["assessment"]:
+            r.record_conclusion(
+                experiment,
+                branch,
+                record["record_id"],
+                "inconclusive",
+                "Controlled receipts exercise the workflow, not policy quality.",
+                "Synthetic evaluation only.",
+            )
     r.declare_plan(experiment, branch, "controlled", "single variant", "receipts")
     candidate = r.fork(experiment, branch, name, "controlled experiment")[
         "candidate_id"

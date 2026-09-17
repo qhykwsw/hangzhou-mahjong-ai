@@ -10,7 +10,8 @@ from typing import Protocol
 
 import numpy as np
 
-from mahjong_ai.domain.rules import WHITE, counts, hand_potential, is_baotou
+from mahjong_ai.domain.rules import WHITE, counts, hand_potential
+from mahjong_ai.domain.observations import can_discard_piao
 from mahjong_ai.domain.types import (
     Action,
     Observation,
@@ -19,7 +20,7 @@ from mahjong_ai.domain.types import (
     RANK_OBJECTIVE,
 )
 
-FEATURE_VERSION = "public-state-action-rank-v2"
+FEATURE_VERSION = "public-state-action-rank-v3"
 ACTIONS = ("discard", "chi", "peng", "gang", "hu", "pass")
 
 
@@ -105,13 +106,17 @@ def action_summary(obs: Observation, action: Action):
     before = hand_potential(tuple(sorted(h)), opened)
     piao = False
     if action.action == "discard":
+        if action.tile == WHITE:
+            piao = can_discard_piao(
+                obs.hand,
+                obs.drawn_tile,
+                opened,
+                obs.public_events,
+                obs.stage.seat,
+                obs.stage.round_no,
+                catch_exempt=obs.catch_play and not obs.catch_restricted,
+            )
         h.remove(action.tile)
-        if action.tile == WHITE and obs.drawn_tile is not None:
-            waiting = list(obs.hand)
-            waiting.remove(obs.drawn_tile)
-            piao = is_baotou(waiting, opened) and is_baotou(h, opened)
-        elif action.tile == WHITE and obs.catch_play and not obs.catch_restricted:
-            piao = is_baotou(h, opened)
     elif action.action in ("peng", "chi"):
         used = action.tiles if action.action == "chi" else (action.tile,) * 2
         for t in used:

@@ -103,7 +103,8 @@ def agent_prompt(task):
         + task["brief"]
         + (
             "\n先读取状态、本分支现役代表和全部相关历史。必须派生新草稿后修改和提交。"
-            "动手写代码之前，先用 research_declare_plan 写下三件事：assessment（现役策略现在具体"
+            "先用 research_record_conclusion 整理累计研究结论中 assessment 为空的记录，"
+            "区分假设效果和实现、资源、基础设施失败。再用 research_declare_plan 写下三件事：assessment（现役策略现在具体"
             "在做什么、它这一路的实测轨迹说明什么）、direction（本次要尝试的方向）、reason（为什么"
             "这个方向最值得做）。没有计划就创建不了候选；这段文字会展示在网页卡片上给用户看，要写具体"
             "机制和证据，用中文写，不要写“优化策略”这类空话。"
@@ -126,8 +127,8 @@ def agent_prompt(task):
         )
     if task.get("handoff"):
         prompt += (
-            "\n本分支的结构化交接（每次迭代开新会话，上一轮对话已归档，"
-            "不要引用你记不得的细节，需要就去查 research_status / research_history）：\n"
+            "\n本分支的结构化交接（每次迭代开新会话，携带累计研究结论与待复盘证据，"
+            "结论不按最近三次截断；不要引用旧聊天中记不得的细节，需要就查 research_status / research_history）：\n"
             + json.dumps(task["handoff"], ensure_ascii=False)
         )
     if task.get("previous_iteration_feedback"):

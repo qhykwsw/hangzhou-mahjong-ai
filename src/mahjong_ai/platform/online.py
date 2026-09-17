@@ -19,6 +19,7 @@ from urllib.parse import quote
 
 from mahjong_ai.domain.engine import HandState, derive_seed
 from mahjong_ai.domain.rules import tile_id
+from mahjong_ai.domain.observations import meld_origins, policy_events
 from mahjong_ai.persistence.artifacts import (
     atomic_json,
     digest,
@@ -304,8 +305,28 @@ class SnapshotAdapter:
                 tuple(_tile(t) for t in e.get("tiles", [])),
                 e["hand_no"],
                 tuple(e.get("scores", [])),
+                concealed=e.get("concealed", False),
             )
             for e in s["public_events"]
+        )
+        events = policy_events(events, seat)
+        origins = meld_origins(events, s["round_no"])
+        from dataclasses import replace
+
+        melds = tuple(
+            tuple(
+                replace(
+                    m,
+                    tiles=tuple(sorted(m.tiles)),
+                    from_seat=(
+                        m.from_seat
+                        if m.from_seat is not None
+                        else origins.get((player, m.kind, tuple(sorted(m.tiles))))
+                    ),
+                )
+                for m in row
+            )
+            for player, row in enumerate(melds)
         )
         config = RoundConfig(
             rounds=s["rounds_total"],
@@ -367,6 +388,7 @@ class SnapshotAdapter:
             fan.fan if fan else 0,
             s["you_cai_bi_kao"],
             god_discarder_seat=owner,
+            base_score=config.base_score,
         )
 
 

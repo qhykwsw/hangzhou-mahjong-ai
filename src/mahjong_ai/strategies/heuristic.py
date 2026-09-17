@@ -2,11 +2,19 @@
 
 import numpy as np
 import math
-from mahjong_ai.strategies.common import RulePolicy
+from mahjong_ai.strategies.common import RulePolicy, risk_preference
+from mahjong_ai.domain.observations import can_discard_piao
 from mahjong_ai.sdk.shape import analyze, remaining_tiles
 from mahjong_ai.domain.rules import WHITE
 
-STYLES = {"balanced": (1.0, 1.0), "adventurous": (2.2, 0.4), "conservative": (0.4, 2.2)}
+STYLES = {
+    "balanced": (1.0, 1.0),
+    "adventurous": (2.2, 0.4),
+    "conservative": (0.4, 2.2),
+    "efficiency": (0.0, 0.0),
+    "fan": (4.0, 0.3),
+    "adaptive": (1.0, 1.0),
+}
 
 
 class HeuristicPolicy(RulePolicy):
@@ -27,10 +35,7 @@ class HeuristicPolicy(RulePolicy):
         values = []
         own = obs.stage.seat
         open_count = len(obs.melds[own])
-        lead = obs.stage.own_score - max(
-            v for i, v in enumerate(obs.stage.effective_scores) if i != own
-        )
-        protect = self.risk_aversion * (1 + obs.stage.progress if lead > 0 else 1)
+        reward, protect = self._preferences(obs)
         for action in obs.legal_actions:
             if action.action == "hu":
                 values.append(100000.0)
@@ -65,9 +70,37 @@ class HeuristicPolicy(RulePolicy):
             else:
                 value = -1000.0
             if action.action == "discard" and action.tile == WHITE:
-                value += self.reward_preference * (obs.chain_count + 1) - protect * 1.5
+                if self.style in ("fan", "adaptive"):
+                    piao = can_discard_piao(
+                        obs.hand,
+                        obs.drawn_tile,
+                        open_count,
+                        obs.public_events,
+                        own,
+                        obs.stage.round_no,
+                        catch_exempt=obs.catch_play and not obs.catch_restricted,
+                    )
+                    if piao:
+                        value += reward * (obs.chain_count + 1) - protect * 1.5
+                else:
+                    value += reward * (obs.chain_count + 1) - protect * 1.5
             values.append(value)
         return np.asarray(values)
+
+    def _preferences(self, obs):
+        if self.style == "adaptive":
+            # Public score gaps and remaining rounds govern the speed/value tradeoff.
+            risk = risk_preference(obs)
+            reward = math.exp(1.5 * risk)
+            protect = math.exp(-1.5 * risk)
+            if obs.stage.dealer == obs.stage.seat:
+                protect *= 1.25
+            return reward, protect
+        lead = obs.stage.own_score - max(
+            v for i, v in enumerate(obs.stage.effective_scores) if i != obs.stage.seat
+        )
+        protect = self.risk_aversion * (1 + obs.stage.progress if lead > 0 else 1)
+        return self.reward_preference, protect
 
     def _value(self, hand, opened, available, obs, protect):
         row = analyze(
@@ -81,6 +114,6 @@ class HeuristicPolicy(RulePolicy):
         return (
             -self.speed * row["shanten"]
             + self.ukeire * row["ukeire"]
-            + self.fan_weight * self.reward_preference * row["fan_value"]
+            + self.fan_weight * self._preferences(obs)[0] * row["fan_value"]
             - protect * max(0, row["shanten"]) * (0.5 + obs.stage.progress)
         )

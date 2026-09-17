@@ -15,7 +15,20 @@ COMBINATIONS = {
     "ppo": ("ppo", "前馈 PPO", {"algorithm": "ppo"}),
     "search-rollout": ("search", "采样续打", {"algorithm": "rollout"}),
     "search-mcts": ("search", "蒙特卡洛树搜索", {"algorithm": "mcts"}),
+    "heuristic-efficiency": ("heuristic", "牌效优先", {"style": "efficiency"}),
+    "heuristic-fan": ("heuristic", "番型经营", {"style": "fan"}),
+    "heuristic-adaptive": ("heuristic", "局势自适应", {"style": "adaptive"}),
 }
+# Framework fallback roster; projects select their own combinations explicitly.
+DEFAULT_COMBINATIONS = (
+    "heuristic-balanced",
+    "heuristic-adventurous",
+    "heuristic-conservative",
+    "heuristic-unrestricted",
+    "value-lightgbm",
+    "value-mlp",
+    "ppo",
+)
 MODELS = {
     "astra": {
         "model": "gpt-6-astra",
@@ -55,7 +68,7 @@ DEFAULTS = {
             "parameters": params,
         }
         for key, (_, _, params) in COMBINATIONS.items()
-        if not key.startswith("search-")
+        if key in DEFAULT_COMBINATIONS
     ],
     "models": MODELS,
     "game": {"rounds": 8, "games_per_round": 1, "stage": "qualifier", "base_score": 1},
@@ -140,7 +153,15 @@ def validate(config):
         required = {
             "heuristic": (
                 "style",
-                ("balanced", "adventurous", "conservative", "unrestricted"),
+                (
+                    "balanced",
+                    "adventurous",
+                    "conservative",
+                    "unrestricted",
+                    "efficiency",
+                    "fan",
+                    "adaptive",
+                ),
             ),
             "value": ("algorithm", ("lightgbm", "mlp")),
             "ppo": ("algorithm", ("ppo",)),

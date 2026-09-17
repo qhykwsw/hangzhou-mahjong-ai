@@ -91,3 +91,48 @@ def test_generic_training_can_compute_artifact_without_rl_games(tmp_path):
     )
     assert result["episodes"] == []
     assert (model / "lookup.txt").read_text() == "computed lookup"
+
+
+def test_paired_receipt_diagnostics_only_expose_focal_error_messages(tmp_path):
+    import json
+    from mahjong_ai.execution.jobs import play
+
+    players = ["candidate", "opponent-1", "opponent-2", "opponent-3"]
+    receipt = {
+        "players": players,
+        "ranks": [4, 3, 2, 1],
+        "scores": [-3, -1, 1, 3],
+        "hands": 1,
+        "hand_deltas": [[-3, -1, 1, 3]],
+        "diagnostics": [
+            {
+                "candidate_id": "candidate",
+                "error": {
+                    "type": "ValueError",
+                    "message": "illegal decision",
+                    "stderr": "private host detail",
+                },
+            },
+            {
+                "candidate_id": "opponent-1",
+                "error": {
+                    "type": "ValueError",
+                    "message": "other branch implementation detail",
+                },
+            },
+        ],
+    }
+    (tmp_path / "matches").mkdir()
+    (tmp_path / "matches/000000.json").write_text(json.dumps(receipt))
+    result = play(
+        {
+            "candidate": "candidate",
+            "policies": dict.fromkeys(players),
+            "assignments": [{"index": 0, "block": 0, "focal": 0, "players": players}],
+        },
+        tmp_path,
+    )
+    assert result["diagnostics"] == [
+        {"type": "ValueError", "message": "illegal decision"}
+    ]
+    assert "other branch" not in str(result) and "private host" not in str(result)

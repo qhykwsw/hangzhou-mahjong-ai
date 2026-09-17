@@ -1,253 +1,257 @@
-"""Check official completed replay blocks against local tile and score rules.
+"""Replay completed official games through the real local state machine.
 
-Input uses the public portal replay contract. Replays are post-game evidence and
-must never enter a live player's Observation as hidden information.
+Recorded draws constrain a hypothetical wall; unobserved tiles fill its middle.
+Sequential response passes only advance the local queue, not certify timing.
+Replay data is post-game audit evidence and never a live policy observation.
 """
-
-from __future__ import annotations
 
 from collections import Counter
 
-from mahjong_ai.domain.rules import WHITE, calculate_fan, is_baotou, payments, tile_id
+from mahjong_ai.domain.engine import HandState
+from mahjong_ai.domain.rules import tile_id
+from mahjong_ai.domain.types import Action, RoundConfig
+
+
+def _initial_state(blocks, events, config):
+    hands = [[tile_id(t) for t in h] for h in blocks[0]["start_hands"]]
+    if len(hands) != 4 or sorted(map(len, hands)) != [13, 13, 13, 14]:
+        raise ValueError("four initial hands with one 14-tile dealer required")
+    dealer = next(s for s, hand in enumerate(hands) if len(hand) == 14)
+    available = Counter({t: 4 for t in range(34)})
+    available.subtract(t for hand in hands for t in hand)
+    normal, supplement = [], []
+    kong_pending = False
+    for event in events:
+        if event["type"] == "gang":
+            kong_pending = True
+        elif event["type"] == "tile_drawn":
+            tile = tile_id(event["tile"])
+            (supplement if kong_pending else normal).append(tile)
+            available[tile] -= 1
+            kong_pending = False
+    if min(available.values()) < 0:
+        raise ValueError("recorded initial hands and draws exceed four copies")
+    state = HandState(config, 0, dealer=dealer, hand_no=blocks[0]["round_no"])
+    state.hands = [list(h) for h in hands]
+    state.initial_hands = [list(h) for h in hands]
+    state.drawn = hands[dealer][-1]
+    state.wall = supplement + list(available.elements()) + normal[::-1]
+    state.white_acquired = [h.count(33) for h in hands]
+    state.events = []
+    state.assert_conservation()
+    return state
+
+
+def _action(event):
+    kind, data = event["type"], event.get("data") or {}
+    tile = tile_id(event["tile"])
+    if kind == "tile_discarded":
+        return Action("discard", tile)
+    if kind == "chi":
+        used = [tile_id(t) for t in data["tiles"]]
+        used.remove(tile)
+        return Action("chi", tile, tuple(sorted(used)))
+    if kind == "gang":
+        return Action(
+            "gang",
+            tile,
+            kind={"an": "concealed", "bu": "added", "ming": "exposed"}[data["kind"]],
+        )
+    return Action("peng", tile)
+
+
+def _discard_timeout_follows(events, index):
+    """White discards may auto-draw before the originating timeout is logged."""
+    event = events[index]
+    offset = index + 1
+    while offset < len(events) and events[offset]["type"] in (
+        "tile_drawn",
+        "game_ended",
+    ):
+        offset += 1
+    if offset == len(events):
+        return False
+    timeout = events[offset]
+    return (
+        timeout["type"] == "timeout"
+        and timeout.get("seat") == event.get("seat")
+        and (timeout.get("data") or {}).get("kind") == "discard"
+    )
 
 
 def audit_replay(replay, base_score=1, you_cai_bi_kao=False):
     groups = {}
+    event_types = Counter()
     for block in replay["blocks"]:
         groups.setdefault(block["round_no"], []).append(block)
-    checks, outcomes, missing, event_types = [], [], [], Counter()
+        event_types.update(e["type"] for e in block.get("events", []))
+    failures, missing, outcomes = [], [], []
+    checks = 0
+    timeout_checks = 0
 
-    def check(condition, message, hand, seq=None):
-        checks.append(
-            {"ok": bool(condition), "check": message, "round_no": hand, "seq": seq}
-        )
+    def check(condition, message, number, seq=None):
+        nonlocal checks
+        checks += 1
+        if not condition:
+            failures.append(
+                {"ok": False, "check": message, "round_no": number, "seq": seq}
+            )
+        return condition
 
-    previous_dealer = previous_winner = None
-    previous_was_draw = None
-    for number in sorted(groups):
+    config = RoundConfig(base_score=base_score, you_cai_bi_kao=you_cai_bi_kao)
+    previous = None
+    cumulative = [0] * 4
+    numbers = sorted(groups)
+    complete_prefix = bool(numbers) and numbers == list(range(1, numbers[-1] + 1))
+    for number in numbers:
         blocks = sorted(groups[number], key=lambda b: b["seq_start"])
         events = sorted(
             [e for b in blocks for e in b.get("events", [])], key=lambda e: e["seq"]
         )
         if not blocks[0].get("start_hands"):
             missing.append({"round_no": number, "reason": "missing initial hands"})
+            complete_prefix = False
             continue
-        hands = [[tile_id(t) for t in h] for h in blocks[0]["start_hands"]]
-        if len(hands) != 4:
-            raise ValueError("replay must have four initial hands")
-        initial_dealers = [s for s, h in enumerate(hands) if len(h) == 14]
-        if len(initial_dealers) != 1:
-            missing.append(
-                {"round_no": number, "reason": "cannot identify 14-tile initial dealer"}
-            )
+        try:
+            state = _initial_state(blocks, events, config)
+        except (ValueError, KeyError, AssertionError, TypeError) as exc:
+            check(False, str(exc), number)
+            complete_prefix = False
             continue
-        dealer = initial_dealers[0]
-        if previous_dealer is not None:
-            expected = previous_dealer if previous_was_draw else previous_winner
+        if previous is not None and previous[0] == number - 1:
             check(
-                dealer == expected, "dealer transition matches local convention", number
-            )
-        melds, rivers = [[] for _ in range(4)], [[] for _ in range(4)]
-        draws = [None] * 4
-        draws[dealer] = hands[dealer][-1]
-        chains, piaos, kong_draw = [0] * 4, [0] * 4, [False] * 4
-        catch_owner = None
-        last_discarder = None
-        ended = False
-
-        def remove(seat, tile, amount, seq):
-            check(
-                hands[seat].count(tile) >= amount,
-                "consumed tile exists in hand",
+                state.dealer == previous[1],
+                "dealer transition matches local convention",
                 number,
-                seq,
             )
-            for _ in range(amount):
-                if tile in hands[seat]:
-                    hands[seat].remove(tile)
-
-        for i, event in enumerate(events):
+        observed_draws = 0
+        ended = False
+        for index, event in enumerate(events):
             seq, kind, seat = event["seq"], event["type"], event.get("seat")
             data = event.get("data") or {}
-            event_types[kind] += 1
-            if i:
+            if index:
                 check(
-                    seq == events[i - 1]["seq"] + 1,
+                    seq == events[index - 1]["seq"] + 1,
                     "event sequence contiguous",
                     number,
                     seq,
                 )
-            tile = tile_id(event["tile"]) if event.get("tile") else None
-            if kind == "tile_drawn":
-                if catch_owner == seat and not kong_draw[seat]:
-                    catch_owner = None
-                hands[seat].append(tile)
-                draws[seat] = tile
-            elif kind == "tile_discarded":
-                if catch_owner is not None and catch_owner != seat:
-                    check(
-                        tile == draws[seat],
-                        "catch-play player discards drawn tile",
-                        number,
-                        seq,
-                    )
-                waiting = list(hands[seat])
-                if draws[seat] in waiting:
-                    waiting.remove(draws[seat])
-                before_bt = draws[seat] is not None and is_baotou(
-                    waiting, len(melds[seat])
-                )
-                remove(seat, tile, 1, seq)
-                called_in_circle = catch_owner == seat and draws[seat] is None
-                piao = (
-                    tile == WHITE
-                    and (before_bt or called_in_circle)
-                    and is_baotou(hands[seat], len(melds[seat]))
-                )
-                chains[seat] = chains[seat] + 1 if piao else 0
-                piaos[seat] = piaos[seat] + 1 if piao else 0
-                rivers[seat].append(tile)
-                last_discarder = seat
-                draws[seat], kong_draw[seat] = None, False
-                if tile == WHITE:
-                    catch_owner = seat
-                elif catch_owner == seat:
-                    catch_owner = None
-            elif kind in ("chi", "peng", "gang"):
-                gang_kind = data.get("kind") if kind == "gang" else None
-                if kind != "gang" or gang_kind != "an":
-                    check(
-                        catch_owner is None or catch_owner == seat,
-                        "catch-play claims require exempt player",
-                        number,
-                        seq,
-                    )
-                if kind == "chi":
-                    tiles = [tile_id(t) for t in data["tiles"]]
-                    consumed = list(tiles)
-                    consumed.remove(tile)
-                    for t in consumed:
-                        remove(seat, t, 1, seq)
-                    check(
-                        sum(m["kind"] == "chi" for m in melds[seat]) < 2,
-                        "at most two chi",
-                        number,
-                        seq,
-                    )
-                    melds[seat].append({"kind": "chi", "tiles": tiles})
-                elif kind == "peng":
-                    remove(seat, tile, 2, seq)
-                    melds[seat].append({"kind": "peng", "tiles": [tile] * 3})
-                elif gang_kind in ("an", "ming"):
-                    remove(seat, tile, 4 if gang_kind == "an" else 3, seq)
-                    melds[seat].append({"kind": "gang", "tiles": [tile] * 4})
-                elif gang_kind == "bu":
-                    remove(seat, tile, 1, seq)
-                    old = next(
-                        (
-                            m
-                            for m in melds[seat]
-                            if m["kind"] == "peng" and m["tiles"][0] == tile
-                        ),
-                        None,
-                    )
-                    check(
-                        old is not None,
-                        "added kong expands an existing peng",
-                        number,
-                        seq,
-                    )
-                    if old:
-                        old.update(kind="gang", tiles=[tile] * 4)
-                else:
-                    raise ValueError(
-                        "unknown official gang kind; inspect replay contract"
-                    )
-                if kind in ("chi", "peng") or gang_kind == "ming":
-                    check(
-                        last_discarder is not None and tile in rivers[last_discarder],
-                        "claim consumes river tile",
-                        number,
-                        seq,
-                    )
-                    if last_discarder is not None and tile in rivers[last_discarder]:
-                        rivers[last_discarder].remove(tile)
-                if kind == "gang":
-                    chains[seat] += 1
-                    kong_draw[seat] = True
-                else:
-                    if catch_owner != seat:
-                        chains[seat] = piaos[seat] = 0
-                    kong_draw[seat] = False
-                draws[seat] = None
-                last_discarder = None
-            elif kind == "round_ended":
-                ended = True
-                draw = data["draw"]
-                if "dealer" in data:
-                    check(
-                        data["dealer"] == dealer,
-                        "event dealer matches initial hand",
-                        number,
-                        seq,
-                    )
-                result = {
-                    "round_no": number,
-                    "dealer": dealer,
-                    "winner": None if draw else seat,
-                }
-                if not draw:
-                    local = calculate_fan(
-                        hands[seat],
-                        draws[seat],
-                        len(melds[seat]),
-                        chains[seat],
-                        piaos[seat],
-                        you_cai_bi_kao,
-                        kong_draw[seat],
-                    )
-                    check(
-                        local is not None,
-                        "official winner is locally eligible to hu",
-                        number,
-                        seq,
-                    )
-                    if local:
+            try:
+                if kind == "tile_drawn":
+                    draws = [e for e, _ in state.events if e.kind == "draw"]
+                    while len(draws) <= observed_draws and state.phase.startswith(
+                        "response_"
+                    ):
+                        state.step(Action("pass"))
+                        draws = [e for e, _ in state.events if e.kind == "draw"]
+                    if len(draws) <= observed_draws or (
+                        draws[observed_draws].seat,
+                        draws[observed_draws].tile,
+                    ) != (seat, tile_id(event["tile"])):
+                        raise ValueError(
+                            "official draw differs from local draw transition"
+                        )
+                    observed_draws += 1
+                elif kind in ("tile_discarded", "chi", "peng", "gang"):
+                    action = _action(event)
+                    advances = 0
+                    while (
+                        state.turn != seat or action not in state.legal_actions()
+                    ) and state.phase.startswith("response_"):
+                        state.step(Action("pass"))
+                        advances += 1
+                        if advances > 4:
+                            raise ValueError("cannot reach official response window")
+                    if state.turn != seat:
+                        raise ValueError("official actor differs from local turn")
+                    if kind == "tile_discarded" and _discard_timeout_follows(
+                        events, index
+                    ):
+                        timeout_checks += 1
                         check(
-                            data["fan"] == local.fan,
+                            state.timeout_action() == action,
+                            "official discard timeout matches local fallback",
+                            number,
+                            seq,
+                        )
+                    state.step(action)
+                elif kind == "round_ended":
+                    if data["draw"]:
+                        while state.phase.startswith("response_"):
+                            state.step(Action("pass"))
+                        if not state.settled or state.winner is not None:
+                            raise ValueError(
+                                "official draw settlement differs from local state"
+                            )
+                    else:
+                        if state.turn != seat:
+                            raise ValueError("official winner differs from local actor")
+                        state.step(Action("hu"))
+                        check(
+                            state.fan.fan == data["fan"],
                             "official fan matches local calculator",
                             number,
                             seq,
                         )
-                        result.update(
-                            local_fan=local.fan,
-                            official_fan=data["fan"],
-                            local_payments=payments(
-                                seat, dealer, local.fan, base_score
-                            ),
+                    check(
+                        data.get("dealer", state.dealer) == state.dealer,
+                        "event dealer matches initial hand",
+                        number,
+                        seq,
+                    )
+                    if "scores" not in data:
+                        missing.append(
+                            {"round_no": number, "reason": "missing settlement scores"}
                         )
-                outcomes.append(result)
-                previous_dealer, previous_winner, previous_was_draw = dealer, seat, draw
-            if kind in ("tile_drawn", "tile_discarded", "chi", "peng", "gang"):
-                visible = [t for row in hands for t in row] + [
-                    t for row in rivers for t in row
-                ]
-                visible += [t for row in melds for m in row for t in m["tiles"]]
+                    else:
+                        check(
+                            tuple(data["scores"]) == state.delta,
+                            "official score delta matches local settlement",
+                            number,
+                            seq,
+                        )
+                    cumulative = [
+                        s + delta for s, delta in zip(cumulative, state.delta)
+                    ]
+                    result = {
+                        "round_no": number,
+                        "dealer": state.dealer,
+                        "winner": state.winner,
+                        "local_payments": state.delta,
+                    }
+                    if state.fan:
+                        result.update(local_fan=state.fan.fan, official_fan=data["fan"])
+                    outcomes.append(result)
+                    previous = (
+                        number,
+                        state.dealer if state.winner is None else state.winner,
+                    )
+                    ended = True
+                elif kind == "game_ended":
+                    if complete_prefix:
+                        check(
+                            tuple(data["final_scores"]) == tuple(cumulative),
+                            "official final scores match local ledger",
+                            number,
+                            seq,
+                        )
+                    continue
+                else:
+                    # The actual discard/draw is logged separately from timeouts.
+                    continue
+                state.assert_conservation()
                 check(
-                    all(n <= 4 for n in Counter(visible).values()),
-                    "no more than four copies of a tile",
-                    number,
-                    seq,
+                    True, "official transition legal and tiles conserved", number, seq
                 )
-                check(
-                    20 <= 136 - len(visible) <= 83,
-                    "wall remains within physical limits",
-                    number,
-                    seq,
-                )
+            except (ValueError, KeyError, AssertionError, TypeError, IndexError) as exc:
+                check(False, f"official transition rejected: {exc}", number, seq)
+                complete_prefix = False
+                break
         if not ended:
-            missing.append({"round_no": number, "reason": "missing round_ended"})
-    failures = [c for c in checks if not c["ok"]]
+            missing.append(
+                {"round_no": number, "reason": "missing or unreachable round_ended"}
+            )
+            complete_prefix = False
     return {
         "status": "failed"
         if failures
@@ -255,12 +259,13 @@ def audit_replay(replay, base_score=1, you_cai_bi_kao=False):
         if missing or not outcomes
         else "passed",
         "hands": len(outcomes),
-        "checks": len(checks),
+        "checks": checks,
+        "timeout_checks": timeout_checks,
         "failures": failures,
         "missing": missing,
         "outcomes": outcomes,
         "event_types": dict(event_types),
-        "scope": "observed replay transitions, fan and physical invariants; unobserved paths remain unverified",
+        "scope": "real engine replay: observed actions, draws, discard timeout choices, fan, score deltas, dealer and conservation; response timing and unobserved paths unverified",
     }
 
 
@@ -270,7 +275,7 @@ def main(argv=None):
     from mahjong_ai.persistence.artifacts import read_json, atomic_json
 
     p = argparse.ArgumentParser(
-        description="Audit completed official replay JSON against local rules"
+        description="Audit completed official replay JSON against the real local engine"
     )
     p.add_argument("replay")
     p.add_argument("--base-score", type=int, default=1)

@@ -5,7 +5,7 @@ import pytest
 
 from mahjong_ai.platform.live_workflow import load_credentials, summarize_player
 from mahjong_ai.platform.replay_audit import audit_replay
-from mahjong_ai.domain.rules import calculate_fan, tile_id, tile_code
+from mahjong_ai.domain.rules import calculate_fan, tile_id, tile_code, payments
 from mahjong_ai.persistence.artifacts import atomic_json
 
 
@@ -80,7 +80,12 @@ def winning_replay():
                         "seq": 1,
                         "type": "round_ended",
                         "seat": 0,
-                        "data": {"draw": False, "dealer": 0, "fan": fan},
+                        "data": {
+                            "draw": False,
+                            "dealer": 0,
+                            "fan": fan,
+                            "scores": list(payments(0, 0, fan)),
+                        },
                     }
                 ],
             }

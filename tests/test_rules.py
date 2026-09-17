@@ -49,8 +49,11 @@ def test_self_draw_gate_and_you_cai_configuration():
     result = calculate_fan(h, tile_id("1w"))
     assert result and not result.baotou
     assert calculate_fan(h, tile_id("1w"), you_cai_bi_kao=True) is None
-    assert calculate_fan(
-        h, tile_id("1w"), you_cai_bi_kao=True, kong_draw=True, chain_count=1
+    assert (
+        calculate_fan(
+            h, tile_id("1w"), you_cai_bi_kao=True, kong_draw=True, chain_count=1
+        )
+        is None
     )
 
 

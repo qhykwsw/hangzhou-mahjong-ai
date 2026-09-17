@@ -258,7 +258,9 @@ def test_replay_audit_preserves_piao_across_exempt_peng():
     for i, (event, _) in enumerate(state.events, 1):
         data = {"tiles": [tile_code(t) for t in event.tiles]}
         if event.kind == "hand_ended":
-            data.update(draw=False, dealer=0, fan=state.fan.fan)
+            data.update(
+                draw=False, dealer=0, fan=state.fan.fan, scores=list(state.delta)
+            )
         events.append(
             {
                 "seq": i,

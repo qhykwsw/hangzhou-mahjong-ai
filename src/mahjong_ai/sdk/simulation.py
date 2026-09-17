@@ -47,6 +47,7 @@ def sample_world(obs, seed):
         rounds=obs.stage.rounds_total,
         stage=obs.stage.kind,
         you_cai_bi_kao=obs.you_cai_bi_kao,
+        base_score=obs.base_score,
     )
     state.dealer = obs.stage.dealer
     state.hand_no = obs.stage.round_no
@@ -62,9 +63,7 @@ def sample_world(obs, seed):
     state.events = [
         (
             e,
-            e.seat
-            if e.kind in ("draw", "deal") or e.kind == "gang" and not e.tiles
-            else None,
+            e.seat if e.kind in ("draw", "deal") or e.concealed else None,
         )
         for e in obs.public_events
     ]
@@ -75,6 +74,11 @@ def sample_world(obs, seed):
     state.phase = obs.phase
     state.turn = seat
     state.drawn = obs.drawn_tile
+    # Public hands are sorted. A known draw is the last inserted tile used by
+    # the official timeout fallback; sorting must not turn it into another tile.
+    if state.drawn is not None:
+        state.hands[seat].remove(state.drawn)
+        state.hands[seat].append(state.drawn)
     state.kong_draw = False
     state.chain = [0] * 4
     state.piao = [0] * 4

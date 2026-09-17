@@ -133,6 +133,7 @@ class PublicEvent:
     tiles: tuple[int, ...] = ()
     hand_no: int = 0
     scores: tuple[int, ...] = ()
+    concealed: bool = False
 
 
 @dataclass(frozen=True)
@@ -153,6 +154,7 @@ class Observation:
     hu_fan: int = 0
     you_cai_bi_kao: bool = False
     god_discarder_seat: int = -1  # public physical seat; -1 when no catch-play circle
+    base_score: int = 1
 
     @property
     def catch_restricted(self) -> bool:

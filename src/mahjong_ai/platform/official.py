@@ -99,6 +99,7 @@ class OfficialAdapter:
                     "tiles": tiles,
                     "hand_no": e.get("_round_no", snap["round_no"]),
                     "scores": data.get("scores") or [],
+                    "concealed": e["type"] == "gang" and data.get("kind") == "an",
                 }
             )
         melds = []
@@ -113,7 +114,12 @@ class OfficialAdapter:
                 if concealed and s != seat:
                     tiles = []
                 normalized.append(
-                    {"kind": kind, "tiles": tiles, "concealed": concealed}
+                    {
+                        "kind": kind,
+                        "tiles": tiles,
+                        "concealed": concealed,
+                        "from_seat": m.get("from_seat"),
+                    }
                 )
             melds.append(normalized)
         stage = tournament.get("stage") or {}

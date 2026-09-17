@@ -85,7 +85,7 @@ def run_settlement(engine, policies, config, seed, *, policy_seeds=None):
                 config,
                 derive_seed(seed, "wall", hand_no),
                 dealer,
-                hand_no,
+                local_hand,
                 game_scores,
                 history,
                 extra,

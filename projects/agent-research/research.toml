@@ -1,14 +1,14 @@
-total_rounds = 20
-iterations_per_round = 5
+total_rounds = 10
+iterations_per_round = 3
 opponent_limit = 4
 iteration_seconds = 3600
-agent_concurrency = 8
+agent_concurrency = 4
 training_workers = 12
 match_workers = 12
 candidate_limit = 1
-evaluation_games = 16
+evaluation_games = 1024
 evaluation_shards = 4
-competition_games_per_branch = 32
+competition_games_per_branch = 1024
 training_games = 16
 initialization_seconds = 3600
 
@@ -19,31 +19,31 @@ value = 256
 ppo = 256
 
 [[combinations]]
-id = "heuristic-balanced"
-branches = 2
-branch_ids = ["01", "02"]
-models = ["deepseek", "deepseek"]
-parameters = { style = "balanced" }
+id = "heuristic-efficiency"
+branches = 1
+branch_ids = ["01"]
+models = ["deepseek"]
+parameters = { style = "efficiency" }
 
 [[combinations]]
-id = "heuristic-adventurous"
-branches = 2
-branch_ids = ["01", "02"]
-models = ["deepseek", "deepseek"]
-parameters = { style = "adventurous" }
+id = "heuristic-fan"
+branches = 1
+branch_ids = ["01"]
+models = ["deepseek"]
+parameters = { style = "fan" }
 
 [[combinations]]
-id = "heuristic-conservative"
-branches = 2
-branch_ids = ["01", "02"]
-models = ["deepseek", "deepseek"]
-parameters = { style = "conservative" }
+id = "heuristic-adaptive"
+branches = 1
+branch_ids = ["01"]
+models = ["deepseek"]
+parameters = { style = "adaptive" }
 
 [[combinations]]
 id = "heuristic-unrestricted"
-branches = 2
-branch_ids = ["01", "02"]
-models = ["deepseek", "deepseek"]
+branches = 1
+branch_ids = ["01"]
+models = ["deepseek"]
 parameters = { style = "unrestricted" }
 
 [game]

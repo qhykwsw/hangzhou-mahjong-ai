@@ -1,0 +1,171 @@
+{
+  "source": "Production v34 accepted post-peng kong, 2026-09-16; identifiers omitted.",
+  "snapshot": {
+    "game_id": "t_5787cb442f1a_r1_b2_t0",
+    "phase": "draw",
+    "round_no": 1,
+    "dealer": 0,
+    "turn": 1,
+    "waited_seat": 1,
+    "wall_remaining": 52,
+    "discards": [
+      [
+        "中",
+        "5w",
+        "3b",
+        "5b",
+        "南",
+        "5t",
+        "发",
+        "2w"
+      ],
+      [
+        "1b",
+        "5t",
+        "5t",
+        "9t",
+        "东",
+        "南",
+        "南",
+        "西",
+        "发"
+      ],
+      [
+        "1b",
+        "东",
+        "东",
+        "西",
+        "3b",
+        "发",
+        "南",
+        "5w"
+      ],
+      [
+        "中",
+        "1b",
+        "4b",
+        "9t",
+        "6w",
+        "7w"
+      ]
+    ],
+    "melds": [
+      [
+        {
+          "kind": "chi",
+          "tiles": [
+            "1w",
+            "3w",
+            "2w"
+          ]
+        },
+        {
+          "kind": "chi",
+          "tiles": [
+            "6b",
+            "7b",
+            "8b"
+          ]
+        },
+        {
+          "kind": "peng",
+          "tiles": [
+            "4t",
+            "4t",
+            "4t"
+          ]
+        },
+        {
+          "kind": "peng",
+          "tiles": [
+            "1t",
+            "1t",
+            "1t"
+          ]
+        }
+      ],
+      [
+        {
+          "kind": "peng",
+          "tiles": [
+            "1w",
+            "1w",
+            "1w"
+          ]
+        },
+        {
+          "kind": "peng",
+          "tiles": [
+            "北",
+            "北",
+            "北"
+          ]
+        }
+      ],
+      [
+        {
+          "kind": "peng",
+          "tiles": [
+            "8w",
+            "8w",
+            "8w"
+          ]
+        }
+      ],
+      [
+        {
+          "kind": "peng",
+          "tiles": [
+            "2b",
+            "2b",
+            "2b"
+          ]
+        }
+      ]
+    ],
+    "hand_counts": [
+      1,
+      8,
+      10,
+      10
+    ],
+    "my_hand": [
+      "5b",
+      "4w",
+      "4w",
+      "7b",
+      "6b",
+      "北",
+      "4b",
+      "4w"
+    ],
+    "seat": 1,
+    "last_discard": "北",
+    "drawn_tile": "",
+    "god": {
+      "baotou": false,
+      "chain_count": 0,
+      "catch_play": false,
+      "god_discarder_seat": -1
+    },
+    "scores": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  "action": {
+    "action": "gang",
+    "tile": "北"
+  },
+  "accepted": true,
+  "tournament": {
+    "config": {
+      "Kind": "test",
+      "Rounds": 2,
+      "BaseScore": 7,
+      "YouCaiBiKao": true
+    }
+  }
+}
