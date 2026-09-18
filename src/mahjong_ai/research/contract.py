@@ -110,6 +110,8 @@ ctx.checkpoint_metadata 提供恢复信息。
 execution_limit_seconds。时间单位是秒；preparation 包含依赖准备、采集对局、训练与校验，不含
 排队和配对评估；null 表示没有记录到测量值。根据实际耗时与结果自行调整后续 training_games，并
 把代码、对手变化和剩余执行预算考虑在内；不要假设上次任务用满了时限。
+本次迭代的总预算与剩余时间写在提示开头，研究工具的每次返回也附带 budget（remaining_seconds、
+limit_seconds、advice）。到点会强制终止，未提交的草稿全部作废：先提交最小可行改动，有余时再派生改进。
 可训练模型不能在没有实际训练的情况下完成。用真实动作记录实际回报，搜索估计的标签要另行标注
 来源。保留 training.json 里的算法与完成的更新次数。依赖使用精确的 name==version wheel。
 

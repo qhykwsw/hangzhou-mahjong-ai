@@ -1,10 +1,11 @@
 ---
-status: partially superseded by ADR-0006
+status: partially superseded by ADR-0006, ADR-0010
 ---
 
 # 周期内冻结参照并配对评估，周期末同步结算
 
 > 周期屏障、保护淘汰或模型切换时机以 [ADR-0006](0006-decouple-strategy-history-from-experiments.md) 为准；本文保留当时取舍，组合身份、训练和分支隔离约束继续适用。
+> 排名与选优口径以 [ADR-0010](0010-table-score-as-primary-evaluation-metric.md) 为准：场均桌面分取代下文的平均名次效用。
 
 每个淘汰周期从分支现役代表构建冻结参照池，各分支使用覆盖不同策略组合的固定对手样本，每轮更换评估牌局，现役代表与本轮候选共享相同对手版本、初始牌局及座位安排。比较前后改动无需穷举所有历史版本；配对减少评估噪声，但不保证有限样本能分辨所有微小改进。
 

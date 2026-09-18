@@ -21,6 +21,7 @@ selfplay/
 │   ├── export.py       # torch → ONNX 与一致性校验
 │   ├── evaluate.py     # 离线评估：固定对手、分块置信区间、多策略互打
 │   ├── sweep_nodes.py  # 逐节点评估：导出联赛快照与 best，同种子配对初筛，前几名大乱斗复核
+│   ├── eval_stability.py  # 评估规模测量：多种子长评估取前缀，给出各场数下的标准误与排名稳定性
 │   └── configs/        # 三种架构与冒烟配置
 ├── scripts/            # 参赛流程：大乱斗选优、冻结、上线与自动续跑
 ├── tests/              # 项目内测试
@@ -40,6 +41,8 @@ PYTHONPATH=src python3 projects/personal/selfplay/train/evaluate.py --policy pro
 PYTHONPATH=src python3 projects/personal/selfplay/train/evaluate.py --policy <export...> --brawl auto builtin --games 2048
 # 逐节点评估（--wait-pid 等训练进程退出再开始；--entries 冻结的对手名单写在 <run>/sweep/opponents.json）
 PYTHONPATH=src python3 projects/personal/selfplay/train/sweep_nodes.py --run projects/personal/selfplay/runs/transformer-main --wait-pid <训练 PID>
+# 评估规模测量（结果写到 runs/stability/summary.md；--analyze 只重算不重跑）
+PYTHONPATH=src python3 projects/personal/selfplay/train/eval_stability.py --seeds 11 12 13 14 15
 # 发布：把导出复制到 models/ 后走通用流程
 cp projects/personal/selfplay/runs/resnet/export/{policy.onnx,meta.json} projects/personal/selfplay/models/
 .venv/bin/mahjong-ai release-build --project projects/personal/selfplay --version v0.1.0
