@@ -75,12 +75,8 @@ DEFAULTS = {
     "timeouts": {"discard": 3.0, "response": 1.0},
     "resources": {"memory_mb": 4096, "threads": 1, "device": "cpu"},
 }
-IMMEDIATE = {
-    "agent_concurrency",
-    "training_workers",
-    "match_workers",
-    "total_rounds",
-}
+MACHINE = {"agent_concurrency", "training_workers", "match_workers"}
+IMMEDIATE = MACHINE | {"total_rounds"}
 
 
 def merge(base, patch):
@@ -221,4 +217,9 @@ def validate(config):
 def configuration(project, overrides=None):
     path = Path(project) / "research.toml"
     raw = tomllib.loads(path.read_text()) if path.exists() else {}
-    return validate(merge(merge(DEFAULTS, raw), overrides or {}))
+    # 本机并发按 CPU 调整，放在不进 Git 的 .local/ 里；只允许并发键，评估条件各机一致。
+    local = Path(project) / ".local/machine.toml"
+    machine = tomllib.loads(local.read_text()) if local.exists() else {}
+    if set(machine) - MACHINE:
+        raise ValueError(f"{local} only accepts " + ", ".join(sorted(MACHINE)))
+    return validate(merge(merge(merge(DEFAULTS, raw), machine), overrides or {}))

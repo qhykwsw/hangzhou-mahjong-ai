@@ -48,7 +48,7 @@
 
 ## 配置与资源
 
-配置合并顺序为框架默认值、项目 [research.toml](../../projects/agent-research/research.toml)、创建实验时的网页设置。权威默认值和校验见 [config.py](../../src/mahjong_ai/research/config.py)。下表是当前项目的创建配置；已有实验按自身冻结配置运行，不能用项目文件的现值推断历史实验参数。
+配置合并顺序为框架默认值、项目 [research.toml](../../projects/agent-research/research.toml)、本机 `projects/agent-research/.local/machine.toml`、创建实验时的网页设置。`machine.toml` 不进 Git，只接受 `agent_concurrency`、`training_workers`、`match_workers` 三个并发键，用于不同核数的机器各自设定默认并发；评估条件不能按机器改变，写入其他键会拒绝启动。权威默认值和校验见 [config.py](../../src/mahjong_ai/research/config.py)。下表是当前项目的创建配置（并发一栏是 `research.toml` 的值，按 28 线程机器设定）；已有实验按自身冻结配置运行，不能用项目文件的现值推断历史实验参数。
 
 | 设置 | 当前项目配置 |
 | --- | --- |

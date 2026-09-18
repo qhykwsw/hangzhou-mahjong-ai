@@ -87,7 +87,7 @@ def test_trusted_dependency_command_can_use_network_and_subprocesses(tmp_path):
         server.bind(("127.0.0.1", 0))
         server.listen()
         result = run_sandbox(
-            f"import socket, subprocess; socket.create_connection({server.getsockname()!r}, timeout=2).close(); subprocess.run(['/bin/true'], check=True)",
+            f"import socket, subprocess, sys; socket.create_connection({server.getsockname()!r}, timeout=2).close(); subprocess.run([sys.executable, '-c', ''], check=True)",
             [],
             [tmp_path],
             network=True,
