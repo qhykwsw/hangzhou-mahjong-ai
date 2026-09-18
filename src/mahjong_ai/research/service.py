@@ -64,14 +64,34 @@ def _competition_registry(research):
         return None
 
 
-def paired_readout(reference, candidate, metric="field"):
+# 主口径是场桌面分（平台第一排序键）；名次效用与逐局读数只作对照。
+# 旧实验的回执没有场分数块均值，回退到它自己冻结时用的名次效用口径。
+PAIRED_KEYS = {
+    "score": ("field_score_group_means", "field_group_means"),
+    "field": ("field_group_means", None),
+    "hand": ("hand_group_means", None),
+    "hand_score": ("score_group_means", None),
+}
+
+
+def _primary_mean(row):
+    """主口径均值：有场均分就用它，旧实验回退名次效用。"""
+    if row is None:
+        return None
+    return row["mean_score"] if row.get("mean_score") is not None else row.get("mean_utility")
+
+
+def paired_readout(reference, candidate, metric="score"):
     """同一副牌、同一对手下的配对数：逐块差值的均值与聚类标准误。
 
-    主口径是场（平台按场结算，场内局与局不对等）；逐局配对读数只作辅助。
+    主口径是场桌面分（平台按场结算并按总分排序）；名次与逐局读数只作辅助。
     """
     if not reference or not candidate:
         return None
-    key = "hand_group_means" if metric == "hand" else "field_group_means"
+    primary, fallback = PAIRED_KEYS[metric]
+    key = primary
+    if fallback and not (reference.get(primary) and candidate.get(primary)):
+        key = fallback
     lookup = dict(zip(reference.get("group_blocks") or [], reference.get(key) or []))
     diffs = [
         value - lookup[block]
@@ -1540,7 +1560,11 @@ class Research:
             for cid in it["candidates"]:
                 reference = it["results"].get(it["incumbent"])
                 result = it["results"].get(cid)
-                for metric, field in (("field", "paired"), ("hand", "hand_paired")):
+                for metric, field in (
+                    ("score", "paired"),
+                    ("field", "utility_paired"),
+                    ("hand", "hand_paired"),
+                ):
                     paired = paired_readout(reference, result, metric)
                     if paired and result is not None:
                         result[field] = paired
@@ -1555,7 +1579,7 @@ class Research:
                 winner = max(
                     [it["incumbent"], *qualified],
                     key=lambda cid: (
-                        it["results"][cid]["mean_utility"],
+                        _primary_mean(it["results"][cid]),
                         cid == it["incumbent"],
                         -choices.index(cid),
                     ),
@@ -1701,8 +1725,12 @@ class Research:
                 # would otherwise create fewer tasks than the configured pool.
                 # Blocks and seeds remain unchanged, so this only changes task
                 # boundaries and is still reproducible.
+                # 分片只改任务边界，不改 block 与种子，所以用实时的 match_workers：
+                # 轮次冻结的那份配置会让热改后的并发度白白空着。
                 shards = evaluation_shard_count(
-                    cycle["config"], len(groups), len(candidates)
+                    dict(cycle["config"], match_workers=s["config"]["match_workers"]),
+                    len(groups),
+                    len(candidates),
                 )
                 for cid in candidates:
                     blocks = []
@@ -1768,6 +1796,9 @@ class Research:
             key: sum(part.get(key, 0) for part in parts)
             for key in (
                 "appearances",
+                "score_appearances",
+                "score_sum",
+                "place_sum",
                 "utility_sum",
                 "hand_appearances",
                 "hand_utility_sum",
@@ -1778,6 +1809,17 @@ class Research:
             )
         }
         merged["candidate_id"] = parts[-1]["candidate_id"]
+        merged["mean_score"] = (
+            merged["score_sum"] / merged["score_appearances"]
+            if merged["score_appearances"]
+            and merged["score_appearances"] == merged["appearances"]
+            else None
+        )
+        merged["mean_place_points"] = (
+            merged["place_sum"] / merged["appearances"]
+            if merged["appearances"]
+            else None
+        )
         merged["mean_utility"] = (
             merged["utility_sum"] / merged["appearances"]
             if merged["appearances"]
@@ -1797,6 +1839,7 @@ class Research:
         # 份赛程，配对比较靠这份编号对齐，不靠数组位置猜测。
         metrics = (
             ("", "group_means", "field_group_means"),
+            ("field_score_", "field_score_group_means", "field_score_group_means"),
             ("hand_", "hand_group_means", "hand_group_means"),
             ("score_", "score_group_means", "score_group_means"),
         )
@@ -1834,7 +1877,7 @@ class Research:
     @staticmethod
     def competition_table(s, cycle):
         rows = {}
-        groups, hand_groups, score_groups = {}, {}, {}
+        groups, score_field_groups, hand_groups, score_groups = {}, {}, {}, {}
         for j in s["jobs"].values():
             if (
                 j.get("scope") != "competition"
@@ -1850,6 +1893,13 @@ class Research:
                         raise ValueError("共同竞技回执必须是完整的四座轮换组")
                     field_groups = [r["utility_sum"] / 4]
                 groups.setdefault(r["candidate_id"], []).extend(field_groups)
+                field_score_groups = r.get("field_score_group_means")
+                if not field_score_groups and r.get("score_appearances"):
+                    field_score_groups = [r["score_sum"] / 4]
+                if field_score_groups:
+                    score_field_groups.setdefault(r["candidate_id"], []).extend(
+                        field_score_groups
+                    )
                 hand_mean = r.get("hand_mean_utility")
                 score_mean = r.get("hand_mean_score")
                 hand_group_means = r.get("hand_group_means")
@@ -1870,6 +1920,9 @@ class Research:
                         k: 0
                         for k in (
                             "appearances",
+                            "score_appearances",
+                            "score_sum",
+                            "place_sum",
                             "utility_sum",
                             "hand_appearances",
                             "hand_utility_sum",
@@ -1896,6 +1949,9 @@ class Research:
                             hand_groups.get(cid) or [], prefix="hand_"
                         ),
                         **metric_uncertainty(
+                            score_field_groups.get(cid) or [], prefix="field_score_"
+                        ),
+                        **metric_uncertainty(
                             score_groups.get(cid) or [], prefix="score_"
                         ),
                         candidate_id=cid,
@@ -1906,6 +1962,13 @@ class Research:
                         combination=b["combination"],
                         model=b["model"],
                         effort=b["effort"],
+                        mean_score=(
+                            r["score_sum"] / r["score_appearances"]
+                            if r["score_appearances"]
+                            and r["score_appearances"] == r["appearances"]
+                            else None
+                        ),
+                        mean_place_points=r["place_sum"] / r["appearances"],
                         mean_utility=r["utility_sum"] / r["appearances"],
                         hand_mean_utility=(
                             r["hand_utility_sum"] / hand_appearances
@@ -1922,7 +1985,13 @@ class Research:
         return sorted(
             result,
             key=lambda r: (
-                -r["mean_utility"],
+                # 平台口径：总分优先、场名次分次之；旧实验回退名次效用。
+                -(_primary_mean(r) if _primary_mean(r) is not None else -1e18),
+                -(
+                    r["mean_place_points"]
+                    if r.get("mean_score") is not None
+                    else (r.get("hand_mean_utility") or -1e18)
+                ),
                 -r["appearances"],
                 r.get("branch") or r.get("entrant_id") or r["candidate_id"],
             ),
@@ -1937,6 +2006,14 @@ class Research:
             dict(
                 rank=index + 1,
                 branch=row["branch"],
+                mean_score=(
+                    None if row.get("mean_score") is None else round(row["mean_score"], 2)
+                ),
+                mean_place_points=(
+                    None
+                    if row.get("mean_place_points") is None
+                    else round(row["mean_place_points"], 3)
+                ),
                 mean_utility=round(row["mean_utility"], 3),
                 hand_mean_utility=(
                     None

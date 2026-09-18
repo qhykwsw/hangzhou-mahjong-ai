@@ -123,7 +123,8 @@ class LearnedPolicy:
     def finish_round(self, result, seat):
         if self.training and result.completed:
             for row in self.trace:
-                row.reward = result.rank_utility(seat)
+                # 主口径是桌面分（平台按总分排序），不是名次效用。
+                row.reward = result.score(seat)
             self.buffer.extend(self.trace)
         self.trace = []
 

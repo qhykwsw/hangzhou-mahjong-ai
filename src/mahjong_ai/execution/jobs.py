@@ -77,12 +77,14 @@ def _attach_group_readouts(summary, assignments, receipts):
                 {
                     "field_sum": 0.0,
                     "field_count": 0,
+                    "field_score_sum": 0.0,
                     "hand_sum": 0.0,
                     "hand_count": 0,
                     "score_sum": 0.0,
                 },
             )
             row["field_sum"] += 4 - receipt["ranks"][seat]
+            row["field_score_sum"] += (receipt.get("scores") or [0] * 4)[seat]
             row["field_count"] += 1
             for delta, ranks in zip(hands, hand_ranks):
                 row["hand_sum"] += 4 - ranks[seat]
@@ -92,6 +94,12 @@ def _attach_group_readouts(summary, assignments, receipts):
         blocks = groups.get(row["candidate_id"], {})
         row["group_means"] = [
             values["field_sum"] / values["field_count"]
+            for _, values in sorted(blocks.items())
+            if values["field_count"]
+        ]
+        # 主口径：每块的场均桌面分（名次效用留作对照）。
+        row["field_score_group_means"] = [
+            values["field_score_sum"] / values["field_count"]
             for _, values in sorted(blocks.items())
             if values["field_count"]
         ]
@@ -401,11 +409,14 @@ def play(task, root):
         ]
         result["focal"] = standings([task["candidate"]], focal_receipts)[0]
         group_blocks = set()
-        groups, hand_groups, score_groups = {}, {}, {}
+        groups, field_score_groups, hand_groups, score_groups = {}, {}, {}, {}
         for assignment, receipt in zip(task["assignments"], receipts):
             block, seat = assignment["block"], assignment["focal"]
             group_blocks.add(block)
             groups.setdefault(block, []).append(4 - receipt["ranks"][seat])
+            field_score_groups.setdefault(block, []).append(
+                (receipt.get("scores") or [0] * 4)[seat]
+            )
             for delta in receipt.get("hand_deltas") or ():
                 ranks = score_ranks(tuple(delta))
                 hand_groups.setdefault(block, []).append(4 - ranks[seat])
@@ -413,13 +424,18 @@ def play(task, root):
         # 逐组读数随回执返回：评估分片合并时按同一口径重算组间标准误。
         blocks = sorted(group_blocks)
         field_means = _block_means(groups)
+        field_score_means = _block_means(field_score_groups)
         hand_means = _block_means(hand_groups)
         score_means = _block_means(score_groups)
         result["focal"].update(group_uncertainty(field_means))
+        result["focal"].update(
+            metric_uncertainty(field_score_means, prefix="field_score_")
+        )
         result["focal"].update(metric_uncertainty(hand_means, prefix="hand_"))
         result["focal"].update(metric_uncertainty(score_means, prefix="score_"))
         result["focal"]["group_blocks"] = blocks
         result["focal"]["group_means"] = field_means
+        result["focal"]["field_score_group_means"] = field_score_means
         result["focal"]["hand_group_means"] = hand_means
         result["focal"]["score_group_means"] = score_means
     return result

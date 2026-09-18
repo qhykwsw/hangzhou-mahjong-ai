@@ -11,6 +11,14 @@ FAILURE_KINDS = {
     "infrastructure",
     "unknown",
 }
+def _primary(row):
+    """主口径均值：场均桌面分，旧实验回退名次效用。"""
+    if not row:
+        return None
+    return row["mean_score"] if row.get("mean_score") is not None else row.get("mean_utility")
+
+
+
 COUNTERS = ("errors", "timeouts", "fallback_actions")
 
 
@@ -83,8 +91,7 @@ def ledger(state, branch=None):
                 for role, row in (("candidate", result), ("incumbent", reference))
             }
             complete = all(
-                row.get("appearances") == expected
-                and row.get("mean_utility") is not None
+                row.get("appearances") == expected and _primary(row) is not None
                 for row in (result, reference)
             )
             contaminated = any(v for row in counters.values() for v in row.values())
@@ -129,9 +136,12 @@ def ledger(state, branch=None):
                         "evaluation_games": expected,
                         "appearances": result.get("appearances", 0),
                         "reference_appearances": reference.get("appearances", 0),
+                        "mean_score": result.get("mean_score"),
+                        "reference_mean_score": reference.get("mean_score"),
                         "mean_utility": result.get("mean_utility"),
                         "reference_mean_utility": reference.get("mean_utility"),
-                        "mean_delta": result["mean_utility"] - reference["mean_utility"]
+                        # 主口径是场均桌面分；旧实验没有分数读数时退回名次效用。
+                        "mean_delta": _primary(result) - _primary(reference)
                         if complete
                         else None,
                         "paired": deepcopy(result.get("paired")),

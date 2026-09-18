@@ -55,6 +55,6 @@ cp projects/personal/selfplay/runs/resnet/export/{policy.onnx,meta.json} project
 ## 关键约定
 
 - 奖励是每局本人收支除以底分，整场之和等于桌面分；向听势能奖励只在训练前两成时间线性退火。
-- 房间规则跟随线上锦标赛配置（2026-09-17 探针：Rounds 16、BaseScore 1、有财必拷响关闭）：八成对局 16 局，其余在 4 到 20 局之间均匀采样以保持通用；有财必拷响默认关闭，`you_cai_bi_kao_prob` 可改；底分固定 1；策略看得到当前局与总局数。配置变化时用 `mahjong-ai online-probe` 重新读取。
+- 房间规则跟随线上锦标赛配置（2026-09-17 探针：二测海选 Rounds 16、BaseScore 1、有财必拷响关闭）：每场局数全部按 `rounds_choices`（默认 16 局，二测锦标赛四个阶段都是 Rounds=16）；`rounds_choices_prob` 小于 1 时其余对局才在 `rounds_min`..`rounds_max` 之间随机，默认不启用；正式赛开赛前用探针确认配置；有财必拷响默认关闭，`you_cai_bi_kao_prob` 可改；底分固定 1；策略看得到当前局与总局数。配置变化时用 `mahjong-ai online-probe` 重新读取。
 - critic 额外读取三家手牌与牌墙构成（`env.encode_oracle`），actor 与发布包不读取。
 - `src/` 里不能出现 torch；训练器从 `src/` 导入编码，保证训练与发布一致。

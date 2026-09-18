@@ -4,7 +4,8 @@ from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from typing import Any
 
-RANK_OBJECTIVE = "four-player-settlement-rank-v1"
+RANK_OBJECTIVE = "four-player-settlement-rank-v1"  # 旧口径，仅用于识别历史检查点
+SCORE_OBJECTIVE = "four-player-settlement-score-v1"  # 主口径：完整结算的桌面分
 
 
 class StageKind(StrEnum):

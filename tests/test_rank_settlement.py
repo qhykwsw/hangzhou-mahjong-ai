@@ -4,7 +4,7 @@ import pytest
 
 from mahjong_ai.domain.engine import MahjongEngine
 from mahjong_ai.strategies.common import RulePolicy, RLPolicy, TrainingRecipe
-from mahjong_ai.domain.types import RoundConfig, StageKind, RANK_OBJECTIVE
+from mahjong_ai.domain.types import RoundConfig, StageKind, SCORE_OBJECTIVE
 from mahjong_ai.domain.settlement import final_ranks, score_ranks
 from mahjong_ai.strategies.training import train
 from mahjong_ai.strategies.seeds import default_opponents
@@ -147,11 +147,12 @@ def test_multigame_training_resume_matches_and_legacy_critic_is_reset(
     full = train(TrainingRecipe(), default_opponents(), cfg, 3, tmp_path / "full", 10)
     assert resumed["episodes"] == full["episodes"]
     assert all(
-        e["games_completed"] == 2 and e["reward"] == e["rank_utility"]
+        e["games_completed"] == 2
+        and e["reward"] == e["score"] / TrainingRecipe().reward_scale
         for e in full["episodes"]
     )
     with np.load(full["model"]) as a, np.load(resumed["model"]) as b:
-        assert str(a["objective"]) == RANK_OBJECTIVE
+        assert str(a["objective"]) == SCORE_OBJECTIVE
         assert all(np.array_equal(a[k], b[k]) for k in a)
         legacy = {k: a[k].copy() for k in a if k != "objective"}
     legacy["value"].fill(123)

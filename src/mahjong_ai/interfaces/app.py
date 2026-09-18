@@ -56,8 +56,14 @@ def application(project, tailscale_url=None):
             await worker
             await asyncio.to_thread(controller.close)
 
+    # 本地控制台不缓存页面与静态资源：改了前端刷新就能看到，不会被浏览器的
+    # 启发式缓存挡住（StaticFiles 默认不发 Cache-Control）。
+    NO_STORE = {"Cache-Control": "no-store"}
+
     async def home(request):
-        return FileResponse(Path(__file__).parent / "web/index.html")
+        return FileResponse(
+            Path(__file__).parent / "web/index.html", headers=NO_STORE
+        )
 
     async def health(request):
         return JSONResponse(
@@ -147,9 +153,13 @@ def application(project, tailscale_url=None):
             Route("/api/control", mutate, methods=["POST"]),
         ],
     )
-    app.mount(
-        "/assets", StaticFiles(directory=Path(__file__).parent / "web"), name="assets"
-    )
+    class Assets(StaticFiles):
+        def file_response(self, *args, **kwargs):
+            response = super().file_response(*args, **kwargs)
+            response.headers["Cache-Control"] = "no-store"
+            return response
+
+    app.mount("/assets", Assets(directory=Path(__file__).parent / "web"), name="assets")
     return app
 
 

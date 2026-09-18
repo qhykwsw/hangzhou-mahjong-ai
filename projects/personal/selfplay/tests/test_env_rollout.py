@@ -11,7 +11,7 @@ from rollout import FIELDS, SampleWriter, SharedBlock
 
 
 def run_tables(n_tables=4, target=1500, seed=3, eval_mode=False, shaping=0.5):
-    cfg = Config(tables_per_worker=n_tables, rounds_min=2, rounds_max=6, rounds_fixed_prob=0.0)
+    cfg = Config(tables_per_worker=n_tables, rounds_min=2, rounds_max=6, rounds_choices_prob=0.0)
     block = SharedBlock(FIELDS, (1, target + 64 * n_tables), create=True)
     writer = SampleWriter(block, 0, target + 64 * n_tables)
     factory = OpponentFactory(BUILTIN)

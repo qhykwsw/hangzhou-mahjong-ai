@@ -235,7 +235,17 @@ def main(argv=None):
                 "standings": standings(
                     list(specs),
                     [
-                        {"players": r["players"], "ranks": r["ranks"]}
+                        {
+                            "players": r["players"],
+                            "ranks": r["ranks"],
+                            "scores": r["scores"],
+                            "hand_deltas": [
+                                list(hand["delta"])
+                                for hand in (r["result"].get("metadata") or {}).get(
+                                    "hands", []
+                                )
+                            ],
+                        }
                         for r in receipts
                         if r["completed"]
                     ],

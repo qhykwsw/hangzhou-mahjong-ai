@@ -238,10 +238,14 @@ function cardProgress(branch) {
   for (const [index, evaluation] of p.evaluation.entries()) {
     const label = evaluation.role === "incumbent" ? "旧基线评测" : p.evaluation.length > 2 ? `候选 ${index} 评测` : "新候选评测";
     const live = evaluation.hand ? ` · 当前场 ${evaluation.hand.hands_completed}/${evaluation.hand.hands_total} 局` : "";
-    const score = evaluation.mean_utility == null ? "" : ` · 场均分 ${evaluation.mean_utility.toFixed(3)}`;
-    const hands = evaluation.hand_mean_utility == null
-      ? ""
-      : ` · 局均分 ${evaluation.hand_mean_utility.toFixed(3)}（${evaluation.hand_appearances} 局）`;
+    const score = evaluation.mean_score == null
+      ? (evaluation.mean_utility == null ? "" : ` · 场均名次效用 ${evaluation.mean_utility.toFixed(3)}`)
+      : ` · 场均桌面分 ${evaluation.mean_score >= 0 ? "+" : ""}${evaluation.mean_score.toFixed(2)}`;
+    const hands = evaluation.mean_place_points == null
+      ? (evaluation.hand_mean_utility == null
+        ? ""
+        : ` · 局均名次效用 ${evaluation.hand_mean_utility.toFixed(3)}（${evaluation.hand_appearances} 局）`)
+      : ` · 场均名次分 ${evaluation.mean_place_points >= 0 ? "+" : ""}${evaluation.mean_place_points.toFixed(2)}`;
     const paired = evaluation.paired == null
       ? ""
       : ` · 场配对 Δ ${evaluation.paired.delta >= 0 ? "+" : ""}${evaluation.paired.delta.toFixed(3)}${evaluation.paired.standard_error == null ? "" : ` ± ${evaluation.paired.standard_error.toFixed(3)}`}`;
@@ -455,10 +459,15 @@ function renderRanking() {
   $("ranking").innerHTML =
     ranking
       .map((r, i) => {
-        const hand = r.hand_mean_utility == null
-          ? ""
-          : `<div class="muted">局均分 ${r.hand_mean_utility.toFixed(3)}（${r.hand_appearances} 局）</div>`;
-        return `<tr><td class="number">${r.rank || i + 1}</td><td>${r.rank_change > 0 ? "↑ " + r.rank_change : r.rank_change < 0 ? "↓ " + -r.rank_change : "—"}</td><td>${esc(combinationName(r.combination))}<div class="muted">${esc(r.branch)}</div></td><td>${esc(r.model)} / ${esc(r.effort)}</td><td>${esc(r.candidate_id.split("--").at(-1))}</td><td class="number">${r.mean_utility.toFixed(3)}${hand}</td><td class="number">${r.standard_error == null ? "样本不足" : "± " + r.standard_error.toFixed(3)}<div class="muted">${r.evaluation_groups == null ? "" : r.evaluation_groups + " 个轮换组"}</div></td><td class="number">${r.appearances} 场${r.hand_appearances == null ? "" : `<div class="muted">${r.hand_appearances} 局</div>`}</td></tr>`;
+        const secondary = r.mean_score == null
+          ? (r.hand_mean_utility == null
+            ? ""
+            : `<div class="muted">局均名次效用 ${r.hand_mean_utility.toFixed(3)}（${r.hand_appearances} 局）</div>`)
+          : `<div class="muted">名次分 ${r.mean_place_points >= 0 ? "+" : ""}${r.mean_place_points.toFixed(2)} · 名次效用 ${r.mean_utility.toFixed(3)}</div>`;
+        const primary = r.mean_score == null
+          ? r.mean_utility.toFixed(3)
+          : `${r.mean_score >= 0 ? "+" : ""}${r.mean_score.toFixed(2)}`;
+        return `<tr><td class="number">${r.rank || i + 1}</td><td>${r.rank_change > 0 ? "↑ " + r.rank_change : r.rank_change < 0 ? "↓ " + -r.rank_change : "—"}</td><td>${esc(combinationName(r.combination))}<div class="muted">${esc(r.branch)}</div></td><td>${esc(r.model)} / ${esc(r.effort)}</td><td>${esc(r.candidate_id.split("--").at(-1))}</td><td class="number">${primary}${secondary}</td><td class="number">${r.standard_error == null ? "样本不足" : "± " + r.standard_error.toFixed(3)}<div class="muted">${r.evaluation_groups == null ? "" : r.evaluation_groups + " 个轮换组"}</div></td><td class="number">${r.appearances} 场${r.hand_appearances == null ? "" : `<div class="muted">${r.hand_appearances} 局</div>`}</td></tr>`;
       })
       .join("") ||
     '<tr><td colspan="8" class="empty">完成分支迭代后，全体代表将在这里产生统一排名。</td></tr>';

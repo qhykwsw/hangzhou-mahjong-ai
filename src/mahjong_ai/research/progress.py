@@ -175,6 +175,10 @@ def branch_progress(state):
                     status=status,
                     completed_games=completed,
                     total_games=cycle["config"]["evaluation_games"],
+                    mean_score=result.get("mean_score") if result else None,
+                    mean_place_points=(
+                        result.get("mean_place_points") if result else None
+                    ),
                     mean_utility=result["mean_utility"] if result else None,
                     hand_mean_utility=(
                         result.get("hand_mean_utility") if result else None

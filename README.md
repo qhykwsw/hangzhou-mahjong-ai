@@ -20,7 +20,7 @@ python3 -m venv .venv
 
 启动打开研究控制台，不自动运行实验。仓库只保存源码和配置，不附带历史实验、训练模型或发布版本。当前配置使用 DeepSeek，开始研究前需在 `CODEX_HOME`（默认 `~/.codex`）配置 `netease-deepseek-flash.config.toml`；仅启动控制台不需要这个配置。
 
-当前项目注册牌效优先、番型经营、局势自适应、自由规则四种组合，各一条 DeepSeek 分支。在卡片列表勾选要迭代的分支后开始；每轮先配对选优，再由全体代表大乱斗产生下一轮对手池。默认研究 10 轮、每轮每支迭代 3 次，配对选优每版本 1024 场、大乱斗每支目标 1024 场，每场 8 局。具体设置以 [research.toml](projects/agent-research/research.toml) 与网页创建实验时的设置为准，完整操作见[研究手册](docs/reference/strategy-agent.md)。
+当前项目注册牌效优先、番型经营、局势自适应、自由规则四种组合，各一条 DeepSeek 分支。在卡片列表勾选要迭代的分支后开始；每轮先配对选优，再由全体代表大乱斗产生下一轮对手池。默认研究 10 轮、每轮每支迭代 3 次，配对选优每版本 1024 场、大乱斗每支目标 4096 场，每场 16 局（跟随锦标赛配置）。具体设置以 [research.toml](projects/agent-research/research.toml) 与网页创建实验时的设置为准，完整操作见[研究手册](docs/reference/strategy-agent.md)。
 
 ```bash
 .venv/bin/mahjong status

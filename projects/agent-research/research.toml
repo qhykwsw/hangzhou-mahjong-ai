@@ -1,14 +1,14 @@
 total_rounds = 10
 iterations_per_round = 3
 opponent_limit = 4
-iteration_seconds = 3600
+iteration_seconds = 600  # 单次分支迭代的执行预算：Agent 必须在 10 分钟内提出并提交候选
 agent_concurrency = 4
 training_workers = 12
-match_workers = 12
+match_workers = 24  # 28 核机器留 4 个给服务与 Agent；同时跑 selfplay 训练（18+2 进程）时临时调回 12
 candidate_limit = 1
 evaluation_games = 1024
 evaluation_shards = 4
-competition_games_per_branch = 1024
+competition_games_per_branch = 4096  # 每支出场数；总场数 = 参赛者数 × 该值 ÷ 4。4096 场可判约 2 分的差距，与配对选优对齐
 training_games = 16
 initialization_seconds = 3600
 
@@ -47,7 +47,7 @@ models = ["deepseek"]
 parameters = { style = "unrestricted" }
 
 [game]
-rounds = 8
+rounds = 16  # 跟随锦标赛配置（二测四个阶段均为 Rounds=16）；自动匹配房的 8 局是自由对战默认，不是赛制
 games_per_round = 1
 stage = "qualifier"
 base_score = 1

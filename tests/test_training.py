@@ -12,7 +12,7 @@ from mahjong_ai.strategies.training import train
 from mahjong_ai.domain.types import RoundConfig
 
 
-def test_model_trains_from_terminal_rank_and_checkpoint_resume_matches_uninterrupted(
+def test_model_trains_from_table_score_and_checkpoint_resume_matches_uninterrupted(
     tmp_path,
 ):
     recipe = TrainingRecipe(seed=33)
@@ -28,7 +28,7 @@ def test_model_trains_from_terminal_rank_and_checkpoint_resume_matches_uninterru
     assert full["status"] == repeat["status"] == "completed"
     assert sum(e["updated"] for e in full["episodes"]) > 0
     assert all(
-        e["reward"] == e["rank_utility"] / recipe.reward_scale
+        e["reward"] == e["score"] / recipe.reward_scale
         for e in full["episodes"]
         if e["updated"]
     )

@@ -18,8 +18,9 @@ class Config:
     # Live tournament config (t_65d538e905c5, 2026-09-17): Rounds 16, BaseScore 1,
     # YouCaiBiKao off.  Most games use the live hand count; a share keeps the
     # policy general across other lengths.
-    rounds_fixed: int = 16
-    rounds_fixed_prob: float = 0.8
+    # 正式赛各阶段的局数以 online-probe 读到的配置为准；二测海选实测 16 局。
+    rounds_choices: tuple = (16,)  # 锦标赛场长：二测四个阶段都是 Rounds=16
+    rounds_choices_prob: float = 1.0  # 全部按线上场长；<1 时其余在 rounds_min..rounds_max 均匀抽
     rounds_min: int = 4
     rounds_max: int = 20
     you_cai_bi_kao_prob: float = 0.0
@@ -105,7 +106,7 @@ def load(path=None, **overrides) -> Config:
     known = {f for f in Config.__dataclass_fields__}
     extra = {k: v for k, v in data.items() if k not in known}
     kwargs = {k: v for k, v in data.items() if k in known}
-    for key in ("stage_probs", "self_seat_probs"):
+    for key in ("stage_probs", "self_seat_probs", "rounds_choices"):
         if key in kwargs:
             kwargs[key] = tuple(kwargs[key])
     cfg = Config(**kwargs)

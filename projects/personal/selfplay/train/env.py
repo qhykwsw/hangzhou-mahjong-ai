@@ -108,8 +108,8 @@ class Table:
             ycbk = bool(self.table_id % 2) if 0.0 < prob < 1.0 else prob >= 1.0
             kind = StageKind.QUALIFIER
         else:
-            if rng.random() < cfg.rounds_fixed_prob:
-                rounds = cfg.rounds_fixed
+            if cfg.rounds_choices and rng.random() < cfg.rounds_choices_prob:
+                rounds = rng.choice(list(cfg.rounds_choices))
             else:
                 rounds = rng.randint(cfg.rounds_min, cfg.rounds_max)
             ycbk = rng.random() < prob

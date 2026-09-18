@@ -314,3 +314,39 @@ def test_public_source_pages_cover_full_source_and_validate_offsets(mcp):
     assert "".join(chunks) == Path(rules.__file__).read_text()
     with pytest.raises(Exception, match="分页"):
         call(mcp, "research_read_source", {"name": "rules", "offset": -1})
+
+
+def test_tool_replies_carry_the_remaining_iteration_budget(mcp, monkeypatch):
+    """非交互会话只能靠工具返回提醒时间，所以每次调用都带 budget。"""
+    import time
+
+    monkeypatch.setenv("MAHJONG_ITERATION_BUDGET", "600")
+    monkeypatch.setenv("MAHJONG_ITERATION_DEADLINE", str(int(time.time() + 500)))
+    budget = call(mcp, "research_status", {})["budget"]
+    assert budget["limit_seconds"] == 600 and 480 <= budget["remaining_seconds"] <= 500
+    assert "留出" in budget["advice"]
+
+    monkeypatch.setenv("MAHJONG_ITERATION_DEADLINE", str(int(time.time() + 60)))
+    assert "最后提交窗口" in call(mcp, "research_status", {})["budget"]["advice"]
+
+    monkeypatch.delenv("MAHJONG_ITERATION_DEADLINE")
+    assert "budget" not in call(mcp, "research_status", {})
+
+
+def test_agent_prompt_states_the_iteration_budget_and_submit_first_order():
+    import time
+
+    from mahjong_ai.execution.agent import agent_prompt
+
+    task = {
+        "brief": "牌效优先",
+        "candidate_limit": 1,
+        "deadline": time.time() + 600,
+        "execution_limit_seconds": 600,
+    }
+    prompt = agent_prompt(task)
+    assert "总预算 600 秒（10 分钟）" in prompt and "剩余约" in prompt
+    assert "最小可行改动" in prompt and "budget.remaining_seconds" in prompt
+    # 续跑调用沿用同一预算，也要带上剩余时间。
+    assert "时间预算" in agent_prompt({**task, "continuation": 1})
+    assert "时间预算" not in agent_prompt({k: v for k, v in task.items() if k != "deadline"})

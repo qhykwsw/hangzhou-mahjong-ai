@@ -18,6 +18,7 @@ from mahjong_ai.domain.types import (
     RoundResult,
     StageKind,
     RANK_OBJECTIVE,
+    SCORE_OBJECTIVE,
 )
 
 FEATURE_VERSION = "public-state-action-rank-v3"
@@ -242,7 +243,9 @@ class RulePolicy:
 class TrainingRecipe:
     algorithm: str = "reinforce-value-baseline"
     learning_rate: float = 0.002
-    reward_scale: float = 1.0
+    # 主口径是桌面分：奖励以一次闲家自摸（8 倍底分）为单位，量级与旧的名次
+    # 效用（0–3）相当。候选可在自己的配方里改这个值。
+    reward_scale: float = 8.0
     entropy: float = 0.01
     hidden_size: int = 16
     seed: int = 0
@@ -310,10 +313,10 @@ class RLPolicy:
                 self.loaded_objective = (
                     str(data["objective"]) if "objective" in data else "legacy-score"
                 )
-                if training and self.loaded_objective != RANK_OBJECTIVE:
+                if training and self.loaded_objective != SCORE_OBJECTIVE:
                     self.params["value"].fill(
                         0
-                    )  # actor warm start; discard the old score critic
+                    )  # actor warm start; a critic trained on another objective is dropped
             p = self.params
             if (
                 p["w"].ndim != 2
@@ -370,7 +373,7 @@ class RLPolicy:
             self.last_update = {"decisions": 0, "updated": False}
             self.trace = []
             return
-        reward = result.rank_utility(seat) / self.recipe.reward_scale
+        reward = result.score(seat) / self.recipe.reward_scale
         p = self.params
         grads = {k: np.zeros_like(v) for k, v in p.items()}
         for x, h, probs, chosen in self.trace:
@@ -415,7 +418,7 @@ class RLPolicy:
                 f,
                 schema=np.array(FEATURE_VERSION),
                 objective=np.array(
-                    RANK_OBJECTIVE
+                    SCORE_OBJECTIVE
                     if self.training
                     else getattr(self, "loaded_objective", "untrained")
                 ),

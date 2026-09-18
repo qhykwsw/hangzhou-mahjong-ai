@@ -1,7 +1,10 @@
 """分支作用域的研究工具；评估条件全部由研究生命周期拥有。"""
 
+import functools
+import os
 from pathlib import Path
 import sys
+import time
 from typing import Literal
 from mcp.server.fastmcp import FastMCP
 from mahjong_ai.research.service import Research
@@ -15,23 +18,72 @@ from mahjong_ai.research.agent_context import (
 )
 
 
+def budget_note():
+    """本次迭代还剩多少时间，以及此刻该做什么。
+
+    非交互会话没法中途插话，工具返回是唯一可靠的提醒通道，所以每次调用都带上。
+    """
+    deadline = os.environ.get("MAHJONG_ITERATION_DEADLINE")
+    if not deadline:
+        return None
+    try:
+        remaining = float(deadline) - time.time()
+    except ValueError:
+        return None
+    total = os.environ.get("MAHJONG_ITERATION_BUDGET")
+    total = float(total) if total and total.replace(".", "", 1).isdigit() else None
+    share = remaining / total if total else None
+    if remaining <= 0:
+        advice = "预算已用尽，本次迭代即将被终止。"
+    elif remaining <= 90 or (share is not None and share <= 0.15):
+        advice = "最后提交窗口：立刻用 research_submit_batch 提交现有草稿，不要再改代码或读资料。"
+    elif share is not None and share <= 0.35:
+        advice = "立刻跑 research_check_candidate 并提交最小可行改动，之后有时间再改进。"
+    elif share is not None and share <= 0.6:
+        advice = "应当已经派生草稿并在写代码了，不要再扩大阅读范围。"
+    else:
+        advice = "可以继续核对状态与设计方案，但要留出实现、自检和提交的时间。"
+    return {
+        "remaining_seconds": int(max(0, remaining)),
+        "limit_seconds": int(total) if total else None,
+        "advice": advice,
+    }
+
+
 def server(project, experiment_id, branch):
     arena = Research(project)
     if branch not in arena.read(experiment_id)["branches"]:
         raise ValueError("未知分支")
     mcp = FastMCP("mahjong_research", instructions=CONTRACT)
     status_readout = StatusReadout()
+
+    def tool(**kwargs):
+        """注册工具，并在返回里附上剩余时间提醒。"""
+
+        def decorate(fn):
+            @functools.wraps(fn)
+            def wrapped(*args, **keywords):
+                result = fn(*args, **keywords)
+                note = budget_note()
+                if note is not None and isinstance(result, dict):
+                    return {**result, "budget": note}
+                return result
+
+            return mcp.tool(**kwargs)(wrapped)
+
+        return decorate
+
     ro = {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False}
     rw = {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False}
 
-    @mcp.tool(annotations=ro)
+    @tool(annotations=ro)
     def research_status(known_revision: str | None = None) -> dict:
         """读取必要状态和待复盘 ID，正文已在开场交接。首次省略 known_revision；后续传上次收到的 revision，仅返回变化或 unchanged。delta.changes 替换对应顶层字段，removed 删除字段。省略版本号可重新取得完整当前状态；版本不可用时自动返回 full。"""
         return status_readout.reply(
             status_view(arena.snapshot(experiment_id, branch), branch), known_revision
         )
 
-    @mcp.tool(annotations=ro)
+    @tool(annotations=ro)
     def research_history(
         query: str = "",
         offset: int = 0,
@@ -43,12 +95,12 @@ def server(project, experiment_id, branch):
             arena.snapshot(experiment_id, branch), branch, kind, query, offset, limit
         )
 
-    @mcp.tool(annotations=ro)
+    @tool(annotations=ro)
     def research_read_conclusion(record_id: str) -> dict:
         """按 record_id 读取本分支单条累计结论、完整机械证据和全部修订；包括没有候选的失败尝试。"""
         return read_conclusion(arena.snapshot(experiment_id, branch), branch, record_id)
 
-    @mcp.tool(annotations=ro)
+    @tool(annotations=ro)
     def research_read_source(
         name: Literal[
             "contract",
@@ -108,7 +160,7 @@ def server(project, experiment_id, branch):
         ).read_text()
         return text_page(content, offset, limit)
 
-    @mcp.tool(annotations=rw)
+    @tool(annotations=rw)
     def research_record_conclusion(
         record_id: str,
         status: str,
@@ -133,19 +185,19 @@ def server(project, experiment_id, branch):
             failure_reason,
         )
 
-    @mcp.tool(annotations=rw)
+    @tool(annotations=rw)
     def research_declare_plan(assessment: str, direction: str, reason: str) -> dict:
         """先整理待复盘的累计研究结论，再声明现役判断、本次方向和原因；必须在写草稿之前完成。"""
         return arena.declare_plan(experiment_id, branch, assessment, direction, reason)
 
-    @mcp.tool(annotations=rw)
+    @tool(annotations=rw)
     def research_create_candidate(
         candidate_id: str, hypothesis: str, parent: str | None = None
     ) -> dict:
         """创建本分支草稿。candidate_id 是 1..64 位字母、数字、下划线或连字符短名，不含分支前缀；parent 可指定本分支历史候选完整 ID。"""
         return arena.fork(experiment_id, branch, candidate_id, hypothesis, parent)
 
-    @mcp.tool(annotations=ro)
+    @tool(annotations=ro)
     def research_read_file(
         candidate_id: str, path: str = "strategy.py", offset: int = 0, limit: int = 4000
     ) -> dict:
@@ -153,24 +205,24 @@ def server(project, experiment_id, branch):
         result = arena.candidate(experiment_id, branch, candidate_id, path=path)
         return {"path": result["path"], **text_page(result["content"], offset, limit)}
 
-    @mcp.tool(annotations=rw)
+    @tool(annotations=rw)
     def research_write_file(candidate_id: str, path: str, content: str) -> dict:
         """写入草稿的源文件；已冻结的提交不能再修改。"""
         return arena.candidate(
             experiment_id, branch, candidate_id, path=path, content=content
         )
 
-    @mcp.tool(annotations=rw)
+    @tool(annotations=rw)
     def research_set_dependencies(candidate_id: str, requirements: list[str]) -> dict:
         """为草稿声明精确 name==version 的 wheel 依赖。"""
         return arena.dependencies(experiment_id, branch, candidate_id, requirements)
 
-    @mcp.tool(annotations=rw)
+    @tool(annotations=rw)
     def research_check_candidate(candidate_id: str) -> dict:
         """试跑草稿并记录错误：导入、build；规则/搜索策略实际打一局，报错、超时、非法动作均拒绝；可训练策略打一场训练。提交前必须修好所有失败。"""
         return arena.check(experiment_id, branch, candidate_id)
 
-    @mcp.tool(annotations=rw)
+    @tool(annotations=rw)
     def research_submit_batch(
         candidates: list[str], training_games: int | None = None
     ) -> dict:

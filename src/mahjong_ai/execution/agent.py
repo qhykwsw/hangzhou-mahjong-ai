@@ -53,7 +53,14 @@ def toml_value(value):
 
 
 def codex_command(
-    project, experiment_id, branch, thread=None, model_config=None, catalog_dir=None
+    project,
+    experiment_id,
+    branch,
+    thread=None,
+    model_config=None,
+    catalog_dir=None,
+    deadline=None,
+    budget=None,
 ):
     from mahjong_ai.execution.models import resolve_model
     from mahjong_ai.research.config import MODELS
@@ -82,7 +89,16 @@ def codex_command(
                 experiment_id,
                 branch,
             ],
-            "env": {"PYTHONPATH": str(Path(__file__).parents[2])},
+            # 每次工具返回都带上剩余时间：非交互会话里这是唯一可靠的提醒通道。
+            "env": {
+                "PYTHONPATH": str(Path(__file__).parents[2]),
+                **(
+                    {"MAHJONG_ITERATION_DEADLINE": f"{deadline:.0f}"}
+                    if deadline
+                    else {}
+                ),
+                **({"MAHJONG_ITERATION_BUDGET": f"{budget:.0f}"} if budget else {}),
+            },
             "required": True,
             "tool_timeout_sec": 45,
             "startup_timeout_sec": 20,
@@ -97,6 +113,24 @@ def codex_command(
     return argv
 
 
+def budget_brief(task):
+    """开场就把时间预算说清楚，并给出「先交最小可行改动，再用剩余时间改进」的节奏。"""
+    deadline, total = task.get("deadline"), task.get("execution_limit_seconds")
+    if not deadline:
+        return ""
+    remaining = max(0, int(deadline - time.time()))
+    limit = f"本次迭代总预算 {int(total)} 秒（{int(total) // 60} 分钟）；" if total else ""
+    return (
+        f"\n\n时间预算：{limit}现在剩余约 {remaining} 秒，到点会强制终止，未提交的草稿全部作废。"
+        "研究 MCP 每次返回都带 budget.remaining_seconds 与 advice，按它调整节奏。"
+        f"要求按这个顺序推进：先在约 {max(60, remaining // 6)} 秒内写完结论与计划，"
+        f"再在剩余约 {max(90, remaining // 3)} 秒时提交第一版最小可行改动，"
+        "提交成功后如果还有时间，可以派生新草稿继续改进并再次提交。"
+        "任何时刻都要保证手上有一个能提交的版本：宁可先交一个小而确定的改动，"
+        "也不要为了更大的改动把时间用光而交不出东西。不要为了省时间跳过自检。"
+    )
+
+
 def agent_prompt(task):
     if task.get("continuation"):
         return (
@@ -105,6 +139,7 @@ def agent_prompt(task):
             "先读取 research_status 对齐实际状态，再完成待复盘结论、计划、"
             "候选实现和自检，调用 research_submit_batch 提交成功后才能结束。"
             "不要重复创建已有草稿或重复提交已接收的批次。原迭代时间上限不变。"
+            + budget_brief(task)
         )
     if task.get("thread_id"):
         return (
@@ -112,6 +147,7 @@ def agent_prompt(task):
             "先调用 research_status 核对当前状态；已知 revision 时传 known_revision，"
             "上下文压缩后需要恢复当前状态时省略版本号，缺少某条证据时主动读取详情。"
             "完成本次候选实现、自检和 research_submit_batch，提交成功后立即结束。"
+            + budget_brief(task)
         )
     prompt = (
         CONTRACT
@@ -134,6 +170,7 @@ def agent_prompt(task):
             "被拒绝必须在本次回复内修好并重新提交，不能带着跑不通的代码结束回复。"
             "比赛完成后的下一次迭代会开启新会话并携带结构化交接。不要向用户提问。"
         )
+        + budget_brief(task)
     )
     if task.get("previous_plan"):
         plan = task["previous_plan"]
@@ -198,6 +235,8 @@ def main():
                         task["thread_id"],
                         task["model_config"],
                         root,
+                        task.get("deadline"),
+                        task.get("execution_limit_seconds"),
                     ),
                     stdin=subprocess.PIPE,
                     stdout=out,

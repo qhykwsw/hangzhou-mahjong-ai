@@ -273,7 +273,13 @@ class Controller:
             remaining = max(0.01, it["config"]["iteration_seconds"] - it["spent"])
         else:
             remaining = max(0.01, s["config"]["initialization_seconds"] - j["spent"])
-        task.update(deadline=time.time() + remaining, owner_pid=os.getpid())
+        # 迭代总预算随任务下发：提示词用它说明节奏，研究 MCP 用它回注剩余时间。
+        limit = it["config"]["iteration_seconds"] if it and j["kind"] == "agent" else None
+        task.update(
+            deadline=time.time() + remaining,
+            execution_limit_seconds=limit,
+            owner_pid=os.getpid(),
+        )
         if j["kind"] == "agent":
             task["thread_id"] = s["branches"][j["branch"]]["thread_id"]
             task["continuation"] = j.get("continuations", 0)

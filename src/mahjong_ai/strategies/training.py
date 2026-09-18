@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from mahjong_ai.domain.types import RANK_OBJECTIVE
+from mahjong_ai.domain.types import SCORE_OBJECTIVE
 from mahjong_ai.domain.engine import ENGINE_VERSION, MahjongEngine, derive_seed
 from mahjong_ai.strategies.common import RLPolicy
 from mahjong_ai.persistence.artifacts import (
@@ -24,7 +24,7 @@ def train(
     model = root / "model.npz"
     state_path = root / "training.json"
     protocol = {
-        "objective": RANK_OBJECTIVE,
+        "objective": SCORE_OBJECTIVE,
         "recipe": recipe.__dict__,
         "opponents": [p.identity for p in opponents],
         "config": config.as_dict(),
