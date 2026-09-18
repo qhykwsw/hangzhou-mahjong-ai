@@ -167,8 +167,8 @@ def main():
             run_dir / "ckpt" / f"{tag}.pt",
         )
 
-    def eval_summary(window_games=300):
-        recent = eval_history[-window_games:]
+    def eval_summary():
+        recent = eval_history[-cfg.eval_window:]
         if not recent:
             return {"eval_games": 0}
         scores = np.asarray([r["score"] for r in recent], dtype=np.float64)
@@ -310,7 +310,8 @@ def main():
             if time.time() - last_ckpt > cfg.checkpoint_minutes * 60:
                 save_checkpoint("latest")
                 last_ckpt = time.time()
-            if summary.get("eval_games", 0) >= 200 and summary["eval_score"] > best_eval:
+            # 窗口攒满才比较，免得早期零星几百场的高点占住 best。
+            if summary.get("eval_games", 0) >= cfg.eval_window and summary["eval_score"] > best_eval:
                 best_eval = summary["eval_score"]
                 save_checkpoint("best")
         save_checkpoint("latest")
@@ -318,7 +319,7 @@ def main():
         export_dir = run_dir / "export"
         export_onnx(model, cfg, export_dir, version=f"{cfg.run_name}-it{iteration}")
         parity = verify_onnx(model, export_dir, cfg)
-        final = {"final": True, "iteration": iteration, "elapsed_min": round(elapsed() / 60, 2), "parity": parity, **eval_summary(1000), "league": league.summary()}
+        final = {"final": True, "iteration": iteration, "elapsed_min": round(elapsed() / 60, 2), "parity": parity, **eval_summary(), "league": league.summary()}
         log(final)
         print(f"[run] finished: {json.dumps({k: v for k, v in final.items() if k != 'league'}, default=str)}", flush=True)
     finally:

@@ -53,7 +53,7 @@ cp projects/personal/selfplay/runs/resnet/export/{policy.onnx,meta.json} project
 
 `scripts/tonight.sh` 把「多方大乱斗 → 冻结胜者（RL 走 release-build，自动研究候选走 `mahjong-ai export`）→ 沙箱试跑 → `--go` 时用 `online-play --join` 上线」串成一条流程；`scripts/go-ertest.sh` 直接用已冻结的参赛包上线并在异常退出时用同一目录自动续跑。两者都读 `.local/credentials/free-play.json` 里的锦标赛令牌。
 
-训练日志在 `runs/<run_name>/log.jsonl`，检查点在 `runs/<run_name>/ckpt/`，联赛快照在 `runs/<run_name>/league/`，结束时导出到 `runs/<run_name>/export/` 并做 torch 与 ONNX 的输出比对。`--resume` 从 `ckpt/latest.pt` 续跑；进度表按「累计时长 ÷ `--hours`」计算，续跑时改 `--hours` 会让学习率、熵系数与塑形权重跳到新位置，且 `best.pt` 在续跑第一轮会被覆盖。联赛快照每 30 分钟一份，移出联赛池后文件仍保留，`sweep_nodes.py` 以它们为节点，结果写到 `runs/<run_name>/sweep/summary.md`；同种子评估可复现，相邻节点配对约把差值标准误降三成。
+训练日志在 `runs/<run_name>/log.jsonl`，检查点在 `runs/<run_name>/ckpt/`，联赛快照在 `runs/<run_name>/league/`，结束时导出到 `runs/<run_name>/export/` 并做 torch 与 ONNX 的输出比对。`--resume` 从 `ckpt/latest.pt` 续跑；进度表按「累计时长 ÷ `--hours`」计算，续跑时改 `--hours` 会让学习率、熵系数与塑形权重跳到新位置，且 `best.pt` 在续跑第一轮会被覆盖。日志的 `eval` 与 `best.pt` 取最近 `eval_window`（默认 1024）场评估：对随机抽取的固定对手、不配对、跨若干次迭代的权重，约 ±1.6，只看趋势；`best.pt` 是这个窗口创新高时的快照，含挑选偏差，只作为 `sweep_nodes.py` 的一个节点，选版以逐节点配对评估和换种子复核为准。联赛快照每 30 分钟一份，移出联赛池后文件仍保留，`sweep_nodes.py` 以它们为节点，结果写到 `runs/<run_name>/sweep/summary.md`；同种子评估可复现，相邻节点配对约把差值标准误降三成。
 
 ## 关键约定
 

@@ -35,6 +35,9 @@ class Config:
     batch_target_fraction: float = 0.67  # stop waiting once this share of workers is ready
     worker_nice: int = 0
     eval_rounds: int = 16
+    # 日志读数与 best.pt 取最近多少场评估；单场标准差约 52，1024 场约 ±1.6。
+    # 与自动研究、evaluate.py、sweep_nodes.py 的 1024 场同量，但这里不配对，读数不能与它们直接比。
+    eval_window: int = 1024
     # ---- league ----
     self_seat_probs: tuple = (0.25, 0.25, 0.25, 0.25)  # P(k current-policy seats), k=1..4
     fixed_opponent_prob_start: float = 0.3
