@@ -8,6 +8,10 @@ from pathlib import Path
 
 import torch
 
+# 淘汰的快照不再参与抽样，但已开局、座位上仍是它的对局还会来请求动作；
+# 保留这么久让它们打完（一场 16 局只要几分钟）。
+RETIRED_SECONDS = 3600
+
 
 class League:
     def __init__(self, cfg, fixed_ids, run_dir, device):
@@ -16,6 +20,7 @@ class League:
         self.run_dir = Path(run_dir)
         self.device = device
         self.checkpoints = {}  # slot -> {"id", "path", "created", "games", "wins", "model"}
+        self.retired = {}  # slot -> (retired_at, model)
         self.stats = {fid: [0, 0] for fid in fixed_ids}  # id -> [games, wins of current policy]
         self.next_slot = 1
         self.next_id = 0
@@ -50,7 +55,7 @@ class League:
         if not candidates:
             return
         victim = max(candidates, key=lambda s: self._winrate(self.checkpoints[s]["id"]))
-        del self.checkpoints[victim]
+        self.retired[victim] = (time.time(), self.checkpoints.pop(victim)["model"])
 
     # ---- stats ------------------------------------------------------------------
     def _winrate(self, ident):
@@ -75,7 +80,12 @@ class League:
                     row[1] += 1 if scores[i] > scores[j] else 0
 
     def opponent_models(self):
-        return {slot: c["model"] for slot, c in self.checkpoints.items()}
+        cutoff = time.time() - RETIRED_SECONDS
+        for slot in [s for s, (at, _) in self.retired.items() if at < cutoff]:
+            del self.retired[slot]
+        models = {slot: model for slot, (_, model) in self.retired.items()}
+        models.update((slot, c["model"]) for slot, c in self.checkpoints.items())
+        return models
 
     def snapshot(self, elapsed_hours):
         cfg = self.cfg
