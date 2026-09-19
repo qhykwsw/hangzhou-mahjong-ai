@@ -44,14 +44,15 @@ def parse():
     p.add_argument("--seed", type=int)
     p.add_argument("--resume", action="store_true")
     p.add_argument("--no-auto-research", action="store_true")
+    p.add_argument("--opponents", help="fixed-opponent entries JSON (replaces builtin + auto-research)")
+    p.add_argument("--fixed-prob-end", type=float, help="share of non-self seats given to fixed opponents after the anneal")
     p.add_argument("--fresh", action="store_true", help="delete an existing run directory first")
     return p.parse_args()
 
 
 def main():
     args = parse()
-    cfg = load(
-        args.config,
+    overrides = dict(
         arch=args.arch,
         run_name=args.run_name,
         hours=args.hours,
@@ -60,7 +61,14 @@ def main():
         tables_per_worker=args.tables,
         samples_per_worker=args.samples,
         seed=args.seed,
+        opponent_entries=args.opponents,
+        fixed_opponent_prob_end=args.fixed_prob_end,
     )
+    cfg = load(args.config, **overrides)
+    saved = cfg.run_dir / "config.json"
+    if args.resume and saved.exists():
+        # 续跑沿用本 run 保存的配置，只让命令行显式给出的参数覆盖，免得漏带参数把对手池等设置换回默认。
+        cfg = load(saved, **overrides)
     if args.no_auto_research:
         cfg.include_auto_research = False
     run_dir = cfg.run_dir

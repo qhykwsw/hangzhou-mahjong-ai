@@ -136,6 +136,8 @@ class League:
 
     def load_state_dict(self, state, model_factory):
         self.stats = {k: list(v) for k, v in state["stats"].items()}
+        for fid in self.fixed_ids:  # 续跑时固定对手名单可能换过
+            self.stats.setdefault(fid, [0, 0])
         self.next_slot = state["next_slot"]
         self.next_id = state["next_id"]
         for slot, c in state["checkpoints"].items():

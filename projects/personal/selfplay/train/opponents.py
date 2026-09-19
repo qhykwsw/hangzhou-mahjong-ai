@@ -90,6 +90,17 @@ class OpponentFactory:
 
 
 def default_entries(cfg, repo_root):
+    if cfg.opponent_entries:
+        source = Path(cfg.opponent_entries)
+        source = source if source.is_absolute() else Path(repo_root) / source
+        entries = json.loads(source.read_text())
+        for entry in entries:
+            if entry["kind"] == "package":
+                path = Path(entry["path"])
+                entry["path"] = str(path if path.is_absolute() else (source.parent / path).resolve())
+                if not (Path(entry["path"]) / "strategy.py").exists():
+                    raise FileNotFoundError(f"opponent package without strategy.py: {entry['path']}")
+        return entries
     entries = list(BUILTIN)
     if cfg.include_auto_research:
         entries.extend(auto_research_representatives(Path(repo_root) / cfg.auto_research_project))

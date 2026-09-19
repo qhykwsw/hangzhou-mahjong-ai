@@ -1,6 +1,7 @@
 """Training configuration: dataclass defaults, TOML overrides, run directories."""
 
 from dataclasses import asdict, dataclass, field
+import json
 from pathlib import Path
 import tomllib
 
@@ -50,6 +51,9 @@ class Config:
     opponent_sampling: str = "sample"  # sample | greedy for checkpoint opponents
     include_auto_research: bool = True
     auto_research_project: str = "projects/agent-research"
+    # 固定对手名单 JSON（与 evaluate.py --entries 同格式，package 路径可相对名单所在目录）。
+    # 设置后只用名单里的对手，内置基线与 include_auto_research 都不再加入；为空时用默认组合。
+    opponent_entries: str = ""
     # ---- reward ----
     shaping_weight: float = 0.5
     shaping_anneal_fraction: float = 0.2  # of total planned hours
@@ -102,7 +106,9 @@ class Config:
 
 def load(path=None, **overrides) -> Config:
     data = {}
-    if path:
+    if path and str(path).endswith(".json"):
+        data = json.loads(Path(path).read_text())  # 某个 run 保存的 config.json
+    elif path:
         with open(path, "rb") as stream:
             data = tomllib.load(stream)
     data.update({k: v for k, v in overrides.items() if v is not None})

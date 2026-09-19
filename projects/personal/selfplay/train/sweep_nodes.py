@@ -6,8 +6,10 @@ Nodes are the half-hourly league snapshots, ckpt/best*.pt and the final export.
 Stage 1 plays every node against one frozen opponent set with one seed, so all
 nodes meet the same tables and walls and are compared per block against the
 anchor.  Stage 2 puts the top nodes, the final export and the anchor into a brawl
-with the auto-research representatives and the built-in baselines under a new
-seed, which removes the selection bias of picking stage-1 maxima.
+with the same fixed opponents under a new seed, which removes the selection bias
+of picking stage-1 maxima.  The opponents are the run's own training opponents:
+its opponent_entries list when set, else the built-in baselines plus the
+auto-research representatives.
 """
 
 import argparse
@@ -27,8 +29,8 @@ for sub in (HERE, PROJECT / "src", REPO / "src"):
     if str(sub) not in sys.path:
         sys.path.insert(0, str(sub))
 
-from config import Config  # noqa: E402
-from opponents import BUILTIN, auto_research_representatives  # noqa: E402
+from config import load  # noqa: E402
+from opponents import default_entries  # noqa: E402
 
 
 def log(message):
@@ -46,11 +48,7 @@ def wait_for(pid):
 
 
 def load_cfg(run_dir):
-    data = json.loads((run_dir / "config.json").read_text())
-    kwargs = {k: v for k, v in data.items() if k in Config.__dataclass_fields__}
-    for key in ("stage_probs", "self_seat_probs"):
-        kwargs[key] = tuple(kwargs[key])
-    cfg = Config(**kwargs)
+    cfg = load(run_dir / "config.json")
     cfg.device = "cpu"
     return cfg
 
@@ -141,13 +139,14 @@ def main():
     run_dir = Path(args.run).resolve()
     out_root = Path(args.out).resolve() if args.out else run_dir / "sweep"
     (out_root / "stage1").mkdir(parents=True, exist_ok=True)
+    cfg = load_cfg(run_dir)
     entries = out_root / "opponents.json"
     if not entries.exists():
-        frozen = list(BUILTIN) + auto_research_representatives(REPO / "projects/agent-research")
-        entries.write_text(json.dumps(frozen, ensure_ascii=False, indent=1))
-    log(f"opponents: {[e['id'] for e in json.loads(entries.read_text())]}")
+        # 与训练用同一份固定对手：run 设了 opponent_entries 就只用它，否则是内置基线加研究代表。
+        entries.write_text(json.dumps(default_entries(cfg, REPO), ensure_ascii=False, indent=1))
+    opponent_ids = [e["id"] for e in json.loads(entries.read_text())]
+    log(f"opponents: {opponent_ids}")
 
-    cfg = load_cfg(run_dir)
     nodes = collect_nodes(run_dir)
     if args.only:
         nodes = [n for n in nodes if n["name"] in args.only]
@@ -197,7 +196,7 @@ def main():
                 picks.append(n)
         log(f"brawl with {[n['name'] for n in picks]}")
         brawl = run_evaluate(
-            ["--policy", *[n["dir"] for n in picks], "--brawl", "auto", "builtin",
+            ["--policy", *[n["dir"] for n in picks], "--brawl", *opponent_ids,
              "--games", str(args.brawl_games), "--seed", str(args.brawl_seed)],
             out_root / "brawl.json", entries, args.workers,
         )

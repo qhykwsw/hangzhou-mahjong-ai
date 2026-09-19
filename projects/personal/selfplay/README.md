@@ -36,6 +36,8 @@ selfplay/
 # 训练（配置见 train/configs/，主训练用 transformer-main.toml）
 PYTHONPATH=src python3 projects/personal/selfplay/train/run.py --config projects/personal/selfplay/train/configs/transformer-main.toml --hours 72
 PYTHONPATH=src python3 projects/personal/selfplay/train/run.py --config projects/personal/selfplay/train/configs/transformer-main.toml --resume
+# 换固定对手：--opponents 指向对手名单 JSON（与 evaluate.py --entries 同格式），--fixed-prob-end 设退火后固定对手占非本人座位的比例
+PYTHONPATH=src python3 projects/personal/selfplay/train/run.py --config projects/personal/selfplay/train/configs/transformer-main.toml --run-name <run> --resume --opponents <entries.json> --fixed-prob-end 0.5
 # 离线评估导出的 actor；--brawl 让多方均衡混战（'auto' = 自动研究现役代表，'builtin' = 四个内置基线）
 PYTHONPATH=src python3 projects/personal/selfplay/train/evaluate.py --policy projects/personal/selfplay/runs/transformer-main/export --games 1024
 PYTHONPATH=src python3 projects/personal/selfplay/train/evaluate.py --policy <export...> --brawl auto builtin --games 2048
@@ -53,11 +55,12 @@ cp projects/personal/selfplay/runs/resnet/export/{policy.onnx,meta.json} project
 
 `scripts/tonight.sh` 把「多方大乱斗 → 冻结胜者（RL 走 release-build，自动研究候选走 `mahjong-ai export`）→ 沙箱试跑 → `--go` 时用 `online-play --join` 上线」串成一条流程；`scripts/go-ertest.sh` 直接用已冻结的参赛包上线并在异常退出时用同一目录自动续跑。两者都读 `.local/credentials/free-play.json` 里的锦标赛令牌。
 
-训练日志在 `runs/<run_name>/log.jsonl`，检查点在 `runs/<run_name>/ckpt/`，联赛快照在 `runs/<run_name>/league/`，结束时导出到 `runs/<run_name>/export/` 并做 torch 与 ONNX 的输出比对。`--resume` 从 `ckpt/latest.pt` 续跑；进度表按「累计时长 ÷ `--hours`」计算，续跑时改 `--hours` 会让学习率、熵系数与塑形权重跳到新位置，且 `best.pt` 在续跑第一轮会被覆盖。日志的 `eval` 与 `best.pt` 取最近 `eval_window`（默认 1024）场评估：对随机抽取的固定对手、不配对、跨若干次迭代的权重，约 ±1.6，只看趋势；`best.pt` 是这个窗口创新高时的快照，含挑选偏差，只作为 `sweep_nodes.py` 的一个节点，选版以逐节点配对评估和换种子复核为准。联赛快照每 30 分钟一份，移出联赛池后文件仍保留，`sweep_nodes.py` 以它们为节点，结果写到 `runs/<run_name>/sweep/summary.md`；同种子评估可复现，相邻节点配对约把差值标准误降三成。
+训练日志在 `runs/<run_name>/log.jsonl`，检查点在 `runs/<run_name>/ckpt/`，联赛快照在 `runs/<run_name>/league/`，结束时导出到 `runs/<run_name>/export/` 并做 torch 与 ONNX 的输出比对。`--resume` 从 `ckpt/latest.pt` 续跑，配置沿用 `runs/<run_name>/config.json`，只有命令行显式给出的参数会覆盖，所以换过的对手名单、比例等不会因漏带参数被换回默认；进度表按「累计时长 ÷ `--hours`」计算，续跑时改 `--hours` 会让学习率、熵系数与塑形权重跳到新位置，且 `best.pt` 在续跑第一轮会被覆盖。日志的 `eval` 与 `best.pt` 取最近 `eval_window`（默认 1024）场评估：对随机抽取的固定对手、不配对、跨若干次迭代的权重，约 ±1.6，只看趋势；`best.pt` 是这个窗口创新高时的快照，含挑选偏差，只作为 `sweep_nodes.py` 的一个节点，选版以逐节点配对评估和换种子复核为准。联赛快照每 30 分钟一份，移出联赛池后文件仍保留，`sweep_nodes.py` 以它们为节点，结果写到 `runs/<run_name>/sweep/summary.md`；同种子评估可复现，相邻节点配对约把差值标准误降三成。
 
 ## 关键约定
 
 - 奖励是每局本人收支除以底分，整场之和等于桌面分；向听势能奖励只在训练前两成时间线性退火。
 - 房间规则跟随线上锦标赛配置（2026-09-17 探针：二测海选 Rounds 16、BaseScore 1、有财必拷响关闭）：每场局数全部按 `rounds_choices`（默认 16 局，二测锦标赛四个阶段都是 Rounds=16）；`rounds_choices_prob` 小于 1 时其余对局才在 `rounds_min`..`rounds_max` 之间随机，默认不启用；正式赛开赛前用探针确认配置；有财必拷响默认关闭，`you_cai_bi_kao_prob` 可改；底分固定 1；策略看得到当前局与总局数。配置变化时用 `mahjong-ai online-probe` 重新读取。
+- 固定对手默认是四个内置基线加本机自动研究的现役代表；设置 `opponent_entries` 后只用名单里的对手，训练、日志评估和 `sweep_nodes.py` 选版都用同一份。训练 `fixed_opponent_anneal_hours` 之后，非本人座位按 `fixed_opponent_prob_end` 的概率坐固定对手，其余坐联赛快照。
 - critic 额外读取三家手牌与牌墙构成（`env.encode_oracle`），actor 与发布包不读取。
 - `src/` 里不能出现 torch；训练器从 `src/` 导入编码，保证训练与发布一致。
