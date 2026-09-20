@@ -606,10 +606,12 @@ class ActionTimeline:
         if jump <= 0:
             return "quiet"
         if now < self.draw_at - self.DRAW_EARLY:
-            # Too early for the timed draw: this is the next seat answering its
-            # chi window, or a claimer discarding. The two are the same frame
-            # count, so look rather than guess.
-            self.answer_skipped = True
+            # The next seat's chi-window answer: a pass needs nothing, a chi is
+            # followed by its discard. Skipping costs nothing as long as the
+            # frame after it is looked at, which claim_pending arranges.
+            if jump == 1 and not self.answer_skipped:
+                self.answer_skipped = self.claim_pending = True
+                return "quiet"
             return "fetch"
         if not self.draw_skipped and (jump == 1 or (jump == 2 and not self.answer_skipped)):
             # The next seat's draw on its timer, alone or together with the
