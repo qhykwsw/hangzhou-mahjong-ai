@@ -7,12 +7,15 @@ player snapshot is required for play; the probe needs no mapping and never acts.
 from __future__ import annotations
 
 import inspect
+import http.client
+import io
 import json
 import re
 import ssl
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -115,30 +118,66 @@ class PlatformClient:
             else ssl.create_default_context()
         )
         self.limiter = RateLimiter()
-        self.local = threading.local()  # per-thread limiter wait of the last /state request
+        self.local = threading.local()  # per-thread connection, limiter wait and 429 count
+        split = urllib.parse.urlsplit(self.base)
+        self.host, self.port = split.hostname, split.port
+
+    def _send(self, method, path, body, headers):
+        """One request over this thread's kept-alive connection.
+
+        Every new connection costs a TLS handshake, and a burst of them stalls
+        several tables at once: 2026-09-20 实测新建连接 p50 17 ms、p95 109 ms、
+        最慢 2.0 s，复用后 4.7 / 10.5 / 17 ms。连接被对端回收时 GET 重连重试一次，
+        提交不重放——结果未知一律由调用方重新同步。
+        """
+        payload = json.dumps(body).encode() if body is not None else None
+        for attempt in (0, 1):
+            connection = getattr(self.local, "connection", None)
+            reused = connection is not None
+            if connection is None:
+                connection = http.client.HTTPSConnection(
+                    self.host, self.port, timeout=35, context=self.context
+                )
+                self.local.connection = connection
+            try:
+                connection.request(method, path, body=payload, headers=headers)
+                response = connection.getresponse()
+                data = response.read()
+            except (OSError, http.client.HTTPException) as exc:
+                connection.close()
+                self.local.connection = None
+                if attempt or not reused or method != "GET":
+                    raise urllib.error.URLError(type(exc).__name__) from None
+                continue
+            if response.status >= 400:
+                raise urllib.error.HTTPError(
+                    self.base + path, response.status, response.reason,
+                    response.headers, io.BytesIO(data),
+                )
+            return json.loads(data) if data else {}
 
     def request(self, method, path, body=None, priority=0):
+        self.local.throttled = 0
         for attempt in range(self.retries + 1):
+            # 只有 /state 轮询计入本地预算：官方额度也是按轮询算的，动作提交笔数少、
+            # 卡着窗口，排进同一队列会让每次拉取都慢一档——实测错过率反而涨到 7%。
             if "/state?" in path:
                 began = time.perf_counter()
                 self.limiter.acquire(priority)
                 self.local.wait_ms = (time.perf_counter() - began) * 1000
-            req = urllib.request.Request(
-                self.base + path,
-                method=method,
-                data=json.dumps(body).encode() if body is not None else None,
-                headers={
-                    "Authorization": "Bearer " + self._token,
-                    "Content-Type": "application/json",
-                },
-            )
             try:
-                with urllib.request.urlopen(
-                    req, timeout=35, context=self.context
-                ) as response:
-                    return json.load(response)
+                return self._send(
+                    method,
+                    path,
+                    body,
+                    {
+                        "Authorization": "Bearer " + self._token,
+                        "Content-Type": "application/json",
+                    },
+                )
             except urllib.error.HTTPError as exc:
                 if exc.code == 429 and attempt < self.retries:
+                    self.local.throttled += 1
                     try:
                         delay = float(exc.headers.get("Retry-After", 2**attempt))
                     except ValueError:
@@ -504,6 +543,7 @@ DIAG_COUNTERS = (
     "rejected",
     "timeline_skips",
     "timeline_fetches",
+    "throttled",
 )
 # Seconds after the peng deadline at which the silent chi window is looked for.
 CHI_CHECK_DELAYS = (0.12, 0.4)
@@ -780,6 +820,7 @@ class TournamentRunner:
                                 "ms": round(fetch_ms, 1),
                                 "wait_ms": getattr(getattr(self.client, "local", None), "wait_ms", None),
                                 "rel_end": round(now - window_end, 3) if window_end else None,
+                                "throttled": getattr(getattr(self.client, "local", None), "throttled", 0),
                                 "outcome": outcome,
                             }
                         )
@@ -924,6 +965,7 @@ class TournamentRunner:
             )
             fetch_ms = (time.perf_counter() - fetch_began) * 1000
             diag["fetch_" + (priority if priority in levels else "high")] += 1
+            diag["throttled"] += getattr(getattr(self.client, "local", None), "throttled", 0)
             fetched_seq = max(fetched_seq, int(res.get("seq", 0) or 0), frames["seq"] if res.get("finished") else 0)
             skip_until = 0
             last_key = None
@@ -1126,6 +1168,7 @@ class TournamentRunner:
                     "POST", f"/api/games/{_id(gid)}/action", wire_action(action)
                 )
                 record.update(accepted=True, response=response)
+                diag["throttled"] += getattr(getattr(self.client, "local", None), "throttled", 0)
                 # Predict how many events must pass before we can be needed
                 # again, so frames in between do not spend /state requests.
                 acted_key = key

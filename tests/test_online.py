@@ -132,31 +132,84 @@ def test_409_resync_does_not_submit_duplicate_action(tmp_path):
     assert calls[post_index + 1][1].endswith("seq=0")
 
 
+def fake_connection(answers, fail=0):
+    """A stand-in HTTPSConnection: `answers` are statuses, `fail` first attempts raise."""
+
+    class Response:
+        def __init__(self, status):
+            self.status, self.reason, self.headers = status, "", {}
+
+        def read(self):
+            return b'{"ok":true}'
+
+    class Connection:
+        opened = 0
+        attempts = 0
+
+        def __init__(self, *args, **kwargs):
+            type(self).opened += 1
+
+        def request(self, *args, **kwargs):
+            type(self).attempts += 1
+            if type(self).attempts <= fail:
+                raise OSError("may contain sensitive provider information")
+
+        def getresponse(self):
+            return Response(answers.pop(0))
+
+        def close(self):
+            pass
+
+    return Connection
+
+
 def test_http_retries_429_but_not_unknown_post_outcome(monkeypatch):
-    import io
-    import urllib.error
     import mahjong_ai.platform.online as online
 
-    calls = 0
-
-    def request(req, **kwargs):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            raise urllib.error.HTTPError(req.full_url, 429, "limited", {}, io.BytesIO())
-        return io.BytesIO(b'{"ok":true}')
-
-    monkeypatch.setattr(online.urllib.request, "urlopen", request)
     monkeypatch.setattr(online.time, "sleep", lambda _: None)
+    monkeypatch.setattr(online.http.client, "HTTPSConnection", fake_connection([429, 200]))
     client = PlatformClient("https://example.invalid", "test-not-a-real-token")
-    assert client.request("POST", "/action", {}) == {"ok": True} and calls == 2
+    assert client.request("POST", "/action", {}) == {"ok": True}
 
-    def failed(*a, **kw):
-        raise urllib.error.URLError("may contain sensitive provider information")
-
-    monkeypatch.setattr(online.urllib.request, "urlopen", failed)
+    monkeypatch.setattr(online.http.client, "HTTPSConnection", fake_connection([200], fail=9))
+    client = PlatformClient("https://example.invalid", "test-not-a-real-token")
     with pytest.raises(ConnectionError, match="outcome may be unknown"):
         client.request("POST", "/action", {})
+
+
+def test_a_recycled_connection_is_reopened_for_the_next_poll(monkeypatch):
+    import mahjong_ai.platform.online as online
+
+    connection = fake_connection([200, 200], fail=0)
+    monkeypatch.setattr(online.http.client, "HTTPSConnection", connection)
+    client = PlatformClient("https://example.invalid", "test-not-a-real-token")
+    client.limiter.acquire = lambda priority=0: None
+    client.request("GET", "/api/games/g/state?seq=0")
+    client.request("GET", "/api/games/g/state?seq=1")
+    assert connection.opened == 1  # 同一线程复用，不再每次握手
+
+    recycled = fake_connection([200], fail=1)
+    monkeypatch.setattr(online.http.client, "HTTPSConnection", recycled)
+    client = PlatformClient("https://example.invalid", "test-not-a-real-token")
+    client.limiter.acquire = lambda priority=0: None
+    client.local.connection = recycled()  # 上一次留下的连接已被对端回收
+    assert client.request("GET", "/api/games/g/state?seq=2") == {"ok": True}
+    assert recycled.opened == 2  # 重连一次，GET 幂等可以重试
+
+
+def test_only_state_polling_spends_the_shared_budget(monkeypatch):
+    import mahjong_ai.platform.online as online
+
+    monkeypatch.setattr(online.http.client, "HTTPSConnection", fake_connection([200, 200, 200]))
+    client = PlatformClient("https://example.invalid", "test-not-a-real-token")
+    taken = []
+    client.limiter.acquire = taken.append
+    client.request("GET", "/api/games/g/state?seq=0", priority=1)
+    client.request("POST", "/api/games/g/action", {"action": "pass"})
+    client.request("GET", "/api/me")
+    # 动作提交与杂项 GET 不排队：2026-09-20 实测把提交并入预算后，窗口错过率从
+    # 0.3% 涨到 7%，拉取被提交系统性推迟，得不偿失。
+    assert taken == [1]
 
 
 def test_stage_loop_registers_before_detail_and_runs_games_concurrently(

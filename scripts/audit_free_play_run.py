@@ -6,16 +6,28 @@ from collections import Counter
 from pathlib import Path
 import json
 import time
+import urllib.error
 
 from mahjong_ai.platform.calibration import _request
 from mahjong_ai.platform.live_workflow import game_rows
 from mahjong_ai.persistence.artifacts import atomic_json, digest, read_json
 
 
+def fetch(base, path, insecure=False, attempts=5):
+    """限流按账号累计，房间刚打完时审计容易撞上 429；退避重试，别浪费清理前的窗口。"""
+    for attempt in range(attempts):
+        try:
+            return _request(base, path, insecure=insecure)
+        except urllib.error.HTTPError as exc:
+            if exc.code != 429 or attempt == attempts - 1:
+                raise
+            time.sleep(1.5 * (attempt + 1))
+
+
 def audit(root, base, insecure=False):
     state = read_json(root / "match.json")
     rows = game_rows(
-        _request(base, f"/api/test-rooms/{state['room_id']}/games", insecure=insecure)
+        fetch(base, f"/api/test-rooms/{state['room_id']}/games", insecure=insecure)
     )
     reports, failures = [], []
     for row in rows:
@@ -28,7 +40,7 @@ def audit(root, base, insecure=False):
             replay = read_json(target)
         else:
             time.sleep(0.25)
-            replay = _request(
+            replay = fetch(
                 base,
                 f"/api/test-rooms/{state['room_id']}/games/{row['batch']}/events",
                 insecure=insecure,
