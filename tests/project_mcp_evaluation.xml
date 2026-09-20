@@ -1,0 +1,43 @@
+<?xml version='1.0' encoding='utf-8'?>
+<evaluation>
+  <qa_pair>
+    <question>固定读取提交 964e182a367ef7f91f8b366a0e530e1495595ef4，使用 list_files 和 read_file 的 revision 参数。结合默认研究配置与研究手册，每个分支完成全部研究轮数时总共执行多少次候选迭代？只答整数。 交叉核对 projects/agent-research/research.toml、docs/reference/strategy-agent.md。</question>
+    <answer>30</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>固定读取提交 964e182a367ef7f91f8b366a0e530e1495595ef4，使用 list_files 和 read_file 的 revision 参数。结合默认配对评估场数与每场局数，一次完整配对评估中每个参与策略覆盖多少局？只答整数。 交叉核对 projects/agent-research/research.toml、README.md。</question>
+    <answer>16384</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>固定读取提交 964e182a367ef7f91f8b366a0e530e1495595ef4，使用 list_files 和 read_file 的 revision 参数。结合默认启用的分支数和轮末共同竞技的每支出场目标，四座全部填满时共同竞技共需多少场？只答整数。 交叉核对 projects/agent-research/research.toml、docs/reference/strategy-agent.md。</question>
+    <answer>4096</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>固定读取提交 964e182a367ef7f91f8b366a0e530e1495595ef4，使用 list_files 和 read_file 的 revision 参数。人工自我对弈的发布清单和训练部署取舍中，推理库的精确依赖字符串是什么？ 交叉核对 projects/personal/selfplay/project.toml、docs/adr/0009-independent-selfplay-trainer-for-personal-project.md。</question>
+    <answer>onnxruntime==1.30.0</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>固定读取提交 964e182a367ef7f91f8b366a0e530e1495595ef4，使用 list_files 和 read_file 的 revision 参数。结合研究配置与候选协议，哪些候选家族默认完全没有训练槽？按字母顺序用逗号连接。 交叉核对 projects/agent-research/research.toml、src/mahjong_ai/research/contract.py。</question>
+    <answer>heuristic,search</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>固定读取提交 964e182a367ef7f91f8b366a0e530e1495595ef4，使用 list_files 和 read_file 的 revision 参数。结合训练奖励实现和桌面分口径决策，一次底分为 1 的闲家自摸得 8 分，经默认奖励缩放后是多少？只答整数。 交叉核对 src/mahjong_ai/strategies/common.py、docs/adr/0010-table-score-as-primary-evaluation-metric.md。</question>
+    <answer>1</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>固定读取提交 964e182a367ef7f91f8b366a0e530e1495595ef4，使用 list_files 和 read_file 的 revision 参数。核对晋级区间实现和主口径决策，配对差使用的双侧置信水平是多少？用小数表示。 交叉核对 src/mahjong_ai/research/selection.py、docs/adr/0010-table-score-as-primary-evaluation-metric.md。</question>
+    <answer>0.95</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>固定读取提交 964e182a367ef7f91f8b366a0e530e1495595ef4，使用 list_files 和 read_file 的 revision 参数。核对自动研究实现和主口径决策，新协议用于桌面分配对分块均值的字段名是什么？ 交叉核对 src/mahjong_ai/research/service.py、docs/adr/0010-table-score-as-primary-evaluation-metric.md。</question>
+    <answer>field_score_group_means</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>固定读取提交 964e182a367ef7f91f8b366a0e530e1495595ef4，使用 list_files 和 read_file 的 revision 参数。核对根约束和人工训练的架构取舍，隐藏信息能否进入人工自我对弈发布的策略头？只答 yes 或 no。 交叉核对 AGENTS.md、docs/adr/0009-independent-selfplay-trainer-for-personal-project.md。</question>
+    <answer>no</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>固定读取提交 964e182a367ef7f91f8b366a0e530e1495595ef4，使用 list_files 和 read_file 的 revision 参数。结合入口手册与策略项目布局，自动研究项目清单所在的相对目录是什么？不加尾随斜杠。 交叉核对 README.md、projects/README.md。</question>
+    <answer>projects/agent-research</answer>
+  </qa_pair>
+</evaluation>

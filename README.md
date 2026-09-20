@@ -39,6 +39,7 @@ python3 -m venv .venv
 | 修改框架或策略 SDK | [开发索引](docs/reference/development.md) |
 | 核对规则、导出或平台对战 | [平台规则与接入](docs/reference/platform.md) |
 | 训练、评估与发布自我对弈策略 | [自我对弈项目](projects/personal/selfplay/README.md) |
+| 让 ChatGPT 只读查询代码、文档与 Git 历史 | [只读 MCP 接入](docs/reference/project-mcp.md) |
 | 理解领域对象和架构取舍 | [术语表](CONTEXT.md) · [决策记录](docs/adr/) |
 | 查阅官方材料 | [原始资料](docs/sources/README.md) |
 
