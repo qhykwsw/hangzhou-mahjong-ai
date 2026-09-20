@@ -30,7 +30,7 @@ for sub in (HERE, PROJECT / "src", REPO / "src"):
 from mahjong_ai.domain.engine import MahjongEngine  # noqa: E402
 from mahjong_ai.domain.types import RoundConfig  # noqa: E402
 from mahjong_ai.evaluation.schedule import schedule  # noqa: E402
-from opponents import BUILTIN, OpponentFactory, auto_research_representatives  # noqa: E402
+from opponents import BUILTIN, OpponentFactory, auto_research_representatives, load_entries  # noqa: E402
 from selfplay_core.policy import OnnxPolicy  # noqa: E402
 
 _factory = None
@@ -115,7 +115,7 @@ def main():
     p.add_argument("--output")
     args = p.parse_args()
     if args.entries:
-        entries = json.loads(Path(args.entries).read_text())
+        entries = load_entries(args.entries)
     else:
         entries = list(BUILTIN)
         if not args.no_auto_research:
