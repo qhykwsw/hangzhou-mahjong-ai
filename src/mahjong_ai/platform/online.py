@@ -538,6 +538,7 @@ class ActionTimeline:
         self.round_no = round_no
         self.pre_watermark = None
         self.burst_decided = False
+        self.claim_pending = False  # a skipped frame that may be a claim; its discard follows
         self.pre_answer_skipped = False
         self.answer_skipped = False  # the next seat's chi-window answer was seen
         self.draw_skipped = False
@@ -588,8 +589,13 @@ class ActionTimeline:
             answered = max(0, self.pre_watermark - self.base - 1)
             expected_timeouts = max(0, self.others - answered)
             burst = seq - self.pre_watermark
-            if burst > expected_timeouts:
-                return "fetch"  # a claim (and its discard) rode along with the timeouts
+            if burst and burst != expected_timeouts:
+                # More frames than silent responders means a claim (and its
+                # discard) rode along; fewer, but not none, means a peng
+                # resolved the window instead of the timeouts. Either way the
+                # claimer's discard is next. No frame at all is the ordinary
+                # case of responders that had already answered before us.
+                return "fetch"
             return "quiet"
         if jump <= 0:
             return "quiet"
@@ -598,7 +604,13 @@ class ActionTimeline:
             # is followed by its discard, which is one more frame.
             if jump == 1 and not self.answer_skipped:
                 self.answer_skipped = True
+                self.claim_pending = True
                 return "quiet"
+            return "fetch"
+        if self.claim_pending:
+            # The skipped answer may have been a chi: what follows it is the
+            # claimer's discard, which opens our window, not the timed draw.
+            self.claim_pending = False
             return "fetch"
         if not self.draw_skipped and (jump == 1 or (jump == 2 and not self.answer_skipped)):
             # The next seat's draw on its timer, alone or together with the

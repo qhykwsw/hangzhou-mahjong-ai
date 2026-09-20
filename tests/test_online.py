@@ -708,9 +708,10 @@ def test_action_timeline_tells_claims_from_answers_and_the_draw():
     # 1. fast bots, nobody claims: both answers were already in our snapshot
     tl = ActionTimeline(10, end, 2, 0, 1)
     assert tl.decide(100.3, 11, 11) == "quiet"  # deadline passed, no burst: nothing to fetch
-    assert tl.decide(100.4, 12, 11) == "quiet"  # the next seat's chi-window pass
-    assert tl.decide(101.0, 13, 12) == "quiet"  # the next seat's draw on the timer
-    assert tl.decide(101.05, 14, 13) == "fetch"  # its discard opens a window
+    assert tl.decide(100.4, 12, 11) == "quiet"  # the next seat's chi-window answer
+    # A chi and a pass look the same here, so the frame after the answer is
+    # looked at: after a chi it is the claimer's discard, opening our window.
+    assert tl.decide(101.0, 13, 12) == "fetch"
     # 2. slow table: nobody answered before the deadline, two timeouts arrive as the burst
     tl = ActionTimeline(10, end, 2, 0, 1)
     assert tl.decide(100.0, 13, 11) == ("defer", end + tl.BURST_END)
@@ -721,9 +722,8 @@ def test_action_timeline_tells_claims_from_answers_and_the_draw():
     tl = ActionTimeline(10, end, 2, 0, 1)
     assert tl.decide(100.0, 13, 11) == ("defer", end + tl.BURST_END)
     assert tl.decide(100.25, 13, 13) == "quiet"
-    assert tl.decide(100.6, 14, 13) == "quiet"  # the next seat's pass
-    assert tl.decide(101.0, 15, 14) == "quiet"  # the draw
-    assert tl.decide(101.02, 17, 15) == "fetch"  # the discard (with a fast answer to it)
+    assert tl.decide(100.6, 14, 13) == "quiet"  # the next seat's answer
+    assert tl.decide(101.0, 15, 14) == "fetch"  # a chi's discard would be here
     # 3. a bot chis right at the deadline and discards at once: burst bigger than the timeouts
     tl = ActionTimeline(10, end, 2, 0, 1)
     assert tl.decide(99.5, 12, 11) == "followup"  # one answer after ours
@@ -743,6 +743,18 @@ def test_action_timeline_tells_claims_from_answers_and_the_draw():
     # 5. two frames at once before the deadline: a peng and its discard
     tl = ActionTimeline(10, end, 2, 0, 1)
     assert tl.decide(99.4, 13, 11) == "fetch"
+    # 3c. seen live 2026-09-20: the chi arrives after the burst and its discard
+    #     lands where the timed draw would be; both frames must not be skipped
+    tl = ActionTimeline(10, end, 2, 0, 1)
+    assert tl.decide(100.0, 13, 11) == ("defer", end + tl.BURST_END)
+    assert tl.decide(100.25, 13, 13) == "quiet"  # the two expected timeouts
+    assert tl.decide(100.6, 14, 13) == "quiet"  # the chi, taken for an answer
+    assert tl.decide(101.02, 15, 14) == "fetch"  # its discard opens our window
+    # 4b. a peng resolves the window before any timeout: fewer burst frames than
+    #     silent responders, and the claimer's discard follows
+    tl = ActionTimeline(10, end, 2, 0, 1)
+    assert tl.decide(100.05, 12, 11) == ("defer", end + tl.BURST_END)
+    assert tl.decide(100.25, 12, 12) == "fetch"  # burst of 1 < 2 expected timeouts
     # a claim seen in a fetched state ends the timeline
     assert tl.stale({"round_no": 1, "melds": [[], [{"kind": "peng"}], [], []]}) is True
     assert tl.stale({"round_no": 1, "melds": [[], [], [], []]}) is False
@@ -753,9 +765,8 @@ def test_action_timeline_tells_claims_from_answers_and_the_draw():
     assert tl.decide(101.02, 16, 15) == "fetch"
     tl = ActionTimeline(10, end, 2, 0, 1)
     tl.sync({"phase": "response_chi", "turn": 1, "hand_counts": [13, 13, 13, 13]}, 2)
-    assert tl.decide(100.5, 14, 13) == "quiet"  # the next seat's pass
-    assert tl.decide(101.0, 15, 14) == "quiet"  # its draw
-    assert tl.decide(101.03, 16, 15) == "fetch"  # its discard
+    assert tl.decide(100.5, 14, 13) == "quiet"  # the next seat's answer
+    assert tl.decide(101.0, 15, 14) == "fetch"  # its discard after a chi, or its draw
 
 
 def test_timeout_burst_pass_and_draw_cost_no_request_until_the_discard(tmp_path):
