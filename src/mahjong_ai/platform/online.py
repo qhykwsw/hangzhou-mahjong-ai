@@ -545,6 +545,8 @@ DIAG_COUNTERS = (
     "timeline_fetches",
     "throttled",
 )
+# Seconds between two warm-up connections, so the warm-up is not itself a burst.
+WARM_SPACING = 0.03
 # Seconds after the peng deadline at which the silent chi window is looked for.
 CHI_CHECK_DELAYS = (0.12, 0.4)
 # Seconds a lone pre-deadline frame waits for the discard that follows a peng.
@@ -695,6 +697,28 @@ class TournamentRunner:
         self.stop = threading.Event()
         self.lock = threading.Lock()
         self.tournament = None
+
+    def _warm_workers(self, pool):
+        """Open every worker thread's connection before the deal.
+
+        新连接要一次 TLS 握手，十桌同时开局会把一批握手和首批全量快照挤在一起；
+        预热放在开桌之前做，此时没有窗口等着，握手贵一点也无所谓。
+        """
+        ready = threading.Barrier(self.workers, timeout=30)
+
+        def warm(index):
+            self.stop.wait(WARM_SPACING * index)
+            try:
+                self.client.request("GET", "/api/me", priority=0)
+            except (ApiError, ConnectionError, threading.BrokenBarrierError):
+                pass  # 预热失败不影响对局，首次拉取会自己建连
+            try:
+                ready.wait()  # 占住线程，保证每个 worker 各拿到一条连接
+            except threading.BrokenBarrierError:
+                pass
+
+        for index in range(self.workers):
+            pool.submit(warm, index)
 
     def _play(self, gid):
         policy = self.policy.build()
@@ -1374,6 +1398,7 @@ class TournamentRunner:
             exclusive_lock(self.root / ".online.lock"),
             ThreadPoolExecutor(max_workers=self.workers) as pool,
         ):
+            warmed = False
             try:
                 while time.monotonic() < deadline:
                     try:
@@ -1416,6 +1441,12 @@ class TournamentRunner:
                             future.result()  # worker failures stop this run, never disappear
                             completed.add(gid)
                             del futures[gid]
+                    if not warmed:
+                        # 只在开桌之前预热：此时没有窗口等着，预热占住线程池也无所谓；
+                        # 房间已经在打就直接开桌，首次拉取自己建连。
+                        warmed = True
+                        if status != "running":
+                            self._warm_workers(pool)
                     if status == "running":
                         me = self.client.request("GET", "/api/me")
                         games = active_games(me, t, scoped)

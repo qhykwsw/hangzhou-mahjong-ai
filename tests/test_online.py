@@ -267,6 +267,32 @@ def test_stage_loop_registers_before_detail_and_runs_games_concurrently(
     assert read_json(tmp_path / "tournament.json")["ranking"][0]["total_score"] == 30
 
 
+def test_connections_warm_up_only_before_the_room_starts(tmp_path, monkeypatch):
+    class Client:
+        def __init__(self, status):
+            self.status = status
+
+        def discover(self, tid=None):
+            return "t", True, {}
+
+        def request(self, method, path, body=None):
+            if path == "/api/me":
+                return {"active_games": []}
+            return {"status": self.status, "qualified": True}
+
+    for status, expected in (("running", 0), ("registering", 1)):
+        runner = TournamentRunner(
+            Client(status), PolicySpec(), adapter(), tmp_path / status, workers=2
+        )
+        warmed = []
+        monkeypatch.setattr(runner, "_warm_workers", lambda pool: warmed.append(pool))
+        monkeypatch.setattr(runner.stop, "wait", lambda timeout: time.sleep(0.01))
+        runner.run(seconds=0.3)
+        # 预热要占住整个线程池：房间已经在打还去预热，等于把每桌的首次拉取推迟到
+        # 第一批窗口之后，2026-09-20 实测开局两分钟错过率因此从 0.9% 涨到 2.4%。
+        assert len(warmed) == expected
+
+
 def test_official_chi_window_can_open_without_a_new_event(tmp_path):
     from mahjong_ai.platform.official import OfficialAdapter
 
