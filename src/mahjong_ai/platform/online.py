@@ -571,11 +571,17 @@ class ActionTimeline:
         again) or ("defer", wake_at) (quiet until then)."""
         jump = seq - prev_seq
         end = self.window_end
+        if jump > 0 and self.claim_pending:
+            # The frame we skipped may have been a claim rather than an answer,
+            # and what follows a claim is the claimer's discard: our window.
+            self.claim_pending = False
+            return "fetch"
         if now < end - self.PRE_MARGIN:
             # Answers only, unless a peng: its discard follows within a moment.
             if jump <= 0:
                 return "quiet"
             if jump == 1 and not self.pre_answer_skipped:
+                self.claim_pending = True  # a peng looks like this too
                 return "followup"
             if jump == 1 and self.pre_answer_skipped:
                 return "fetch"  # a second lone frame may be a slow claimer's discard
@@ -600,17 +606,10 @@ class ActionTimeline:
         if jump <= 0:
             return "quiet"
         if now < self.draw_at - self.DRAW_EARLY:
-            # The next seat's chi-window answer: a pass needs nothing, a chi
-            # is followed by its discard, which is one more frame.
-            if jump == 1 and not self.answer_skipped:
-                self.answer_skipped = True
-                self.claim_pending = True
-                return "quiet"
-            return "fetch"
-        if self.claim_pending:
-            # The skipped answer may have been a chi: what follows it is the
-            # claimer's discard, which opens our window, not the timed draw.
-            self.claim_pending = False
+            # Too early for the timed draw: this is the next seat answering its
+            # chi window, or a claimer discarding. The two are the same frame
+            # count, so look rather than guess.
+            self.answer_skipped = True
             return "fetch"
         if not self.draw_skipped and (jump == 1 or (jump == 2 and not self.answer_skipped)):
             # The next seat's draw on its timer, alone or together with the
