@@ -239,7 +239,13 @@ $("recipeTrials").onclick = async (event) => {
     const evaluation = ev
       ? `<p>挑战者 ${signed(ev.challenger.mean)}，现役 ${signed(ev.incumbent.mean)}，配对差 ${signed(ev.difference.mean)} [${signed(ev.difference.lower)}, ${signed(ev.difference.upper)}]（${ev.games} 场 × 2，${ev.promoted ? "晋级" : "未晋级"}）</p>`
       : "";
-    const columns = ["iteration", "samples", "games", "policy_loss", "value_loss", "entropy", "approx_kl", "clipfrac", "teacher_loss", "left"];
+    // 方案可以用 ctx.log 记任意诊断：常用列在前，其余按字母序补在后面。
+    const preferred = ["iteration", "samples", "games", "sgd_steps", "optimized_samples", "stop_kl", "approx_kl", "clipfrac", "policy_loss", "value_loss", "entropy", "teacher_loss", "collect_seconds", "left"];
+    const present = new Set((t.metrics || []).flatMap((m) => Object.keys(m)));
+    const columns = [
+      ...preferred.filter((c) => present.has(c)),
+      ...[...present].filter((c) => !preferred.includes(c) && !["loss", "budget_exhausted", "critic_only", "early_stop"].includes(c)).sort(),
+    ];
     const metrics = t.metrics?.length
       ? `<div class="tablewrap"><table><thead><tr>${columns.map((c) => `<th>${c}</th>`).join("")}</tr></thead><tbody>${t.metrics
           .map((m) => `<tr>${columns.map((c) => `<td class="number">${m[c] == null ? "" : typeof m[c] === "number" && !Number.isInteger(m[c]) ? m[c].toPrecision(3) : m[c]}</td>`).join("")}</tr>`)
