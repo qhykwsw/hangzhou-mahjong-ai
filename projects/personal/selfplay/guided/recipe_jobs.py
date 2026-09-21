@@ -83,14 +83,21 @@ if not target.exists():
 print(json.dumps({'native':str(target),'sha256':hashlib.sha256(target.read_bytes()).hexdigest()}))
 """
 
+# The start is a training checkpoint ({"actor", "config"}) or an exported Actor
+# directory (actor.pt + meta.json), e.g. a snapshot of an earlier run.
 START_EXPORT = r"""
 import json,sys,torch
 from pathlib import Path
 from guided.trial import export_actor
-source,output=sys.argv[1],sys.argv[2]
-state=torch.load(source,map_location='cpu',weights_only=False)
-cfg={k:state['config'][k] for k in ('dim','layers','heads','lookahead')}
-meta=export_actor(state['actor'],cfg,output)
+source,output=Path(sys.argv[1]),sys.argv[2]
+if source.is_dir():
+    weights=torch.load(source/'actor.pt',map_location='cpu',weights_only=True)
+    cfg=json.loads((source/'meta.json').read_text())['config']
+else:
+    state=torch.load(source,map_location='cpu',weights_only=False)
+    weights,cfg=state['actor'],state['config']
+cfg={k:cfg[k] for k in ('dim','layers','heads','lookahead')}
+meta=export_actor(weights,cfg,output)
 print(json.dumps(meta))
 """
 

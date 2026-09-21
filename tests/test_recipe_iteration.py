@@ -1,7 +1,8 @@
 """Recipe iteration state machine: promotion, crash, retries and discards."""
 
-import shutil
 from pathlib import Path
+import re
+import shutil
 
 import pytest
 
@@ -20,7 +21,7 @@ def make_service(tmp_path, incumbent):
     project = tmp_path / SELFPLAY
     (project / "recipes").mkdir(parents=True)
     config = (REPO / SELFPLAY / "recipes/iteration.toml").read_text()
-    config = config.replace('incumbent = "baseline"', f'incumbent = "{incumbent}"')
+    config = re.sub(r'incumbent = "\w+"', f'incumbent = "{incumbent}"', config)
     (project / "recipes/iteration.toml").write_text(config)
     shutil.copytree(
         REPO / SELFPLAY / "recipes/baseline", project / "recipes/baseline"

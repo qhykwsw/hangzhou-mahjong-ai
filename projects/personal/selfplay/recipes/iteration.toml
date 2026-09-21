@@ -10,8 +10,8 @@ continuations = 2  # 回复结束但未提交时，同一会话最多续写的�
 smoke_limit = 3  # 每次尝试最多计入时限补偿的冒烟检查次数
 
 [trial]
-budget_seconds = 900  # recipe.train 的默认训练时限；方案线可以单独覆盖
-incumbent = "baseline"  # 第 0 版：baseline = 基线方案从起点训练一个时限的产物；start = 起点本身
+budget_seconds = 1800  # recipe.train 的默认训练时限；方案线可以单独覆盖
+incumbent = "start"  # 第 0 版：start = 起点本身；baseline = 基线方案从起点训练一个时限的产物
 smoke_seconds = 60
 evaluation_games = 4096  # 挑战者和现役各打的场数，配对差 95% 区间下界 > 0 才晋级；新旧模型几乎每场都走岔，配对降噪有限，1024 场只能分辨约 2.6 分
 brawl_appearances = 1024  # 五方大乱斗里每方的出场数
@@ -22,8 +22,9 @@ retries = 2  # 基础设施失败（SSH、远端进程丢失）的重试次数�
 id = "large"
 name = "4090 大模型"
 host = "4090"
-budget_seconds = 900  # 大模型约 10～15 分钟拿到主要提升
-start_checkpoint = ".local/guided-main/20260921-162302/reference.pt"  # 远端仓库根下的相对路径
+budget_seconds = 1800
+# 起点：40 分钟模仿后再低学习率纯模仿 20 分钟，已到模仿平台（远端仓库根下的相对路径，两台各自的模型）
+start_checkpoint = ".local/guided-starts/20260922-imitation20/actor"
 execution = { workers = 20, tables = 64, inference_batch_limit = 128 }
 # 训练进程的硬上限：显存按分配器比例封顶（超了是 CUDA OOM，不会溢出到共享内存），
 # 进程组常驻内存超过 WSL 总内存的比例就整组结束。超限记为训练失败。
@@ -33,7 +34,7 @@ limits = { gpu_memory_fraction = 0.9, ram_fraction = 0.75 }
 id = "small"
 name = "4070 小模型"
 host = "4070"
-budget_seconds = 1800  # 小模型约 30 分钟才有显著提升
-start_checkpoint = ".local/guided-main/20260921-162302/reference.pt"
+budget_seconds = 1800
+start_checkpoint = ".local/guided-starts/20260922-imitation20/actor"
 execution = { workers = 22, tables = 16, inference_batch_limit = 64 }
 limits = { gpu_memory_fraction = 0.75, ram_fraction = 0.75 }  # 4070 同时承担桌面显示，留出余量
