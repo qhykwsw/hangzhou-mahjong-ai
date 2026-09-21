@@ -56,7 +56,14 @@
           aria-selected="false"
           aria-controls="rankingPanel"
         >
-          全体排行榜
+          全体排行榜</button
+        ><button
+          id="recipeTab"
+          role="tab"
+          aria-selected="false"
+          aria-controls="recipePanel"
+        >
+          训练方案迭代
         </button>
       </nav>
       <section id="workPanel" role="tabpanel" aria-labelledby="workTab">
@@ -180,6 +187,60 @@
           <div id="experimentHistory"></div>
         </details>
       </section>
+      <section
+        id="recipePanel"
+        role="tabpanel"
+        aria-labelledby="recipeTab"
+        hidden
+      >
+        <div class="sectionhead">
+          <h2>训练方案迭代 <span id="recipeStatus" class="count"></span></h2>
+          <div class="toolbar">
+            <button id="recipeStart" class="primary">开始新实验</button
+            ><button data-recipe="pause">暂停</button
+            ><button data-recipe="resume">继续</button
+            ><button data-recipe="pause_after">当前尝试后停</button
+            ><button data-recipe="stop_now">立即结束当前尝试</button
+            ><button data-recipe="extend">追加尝试</button
+            ><button data-recipe="close">结束实验</button>
+          </div>
+        </div>
+        <p id="recipeSummary" class="muted"></p>
+        <div id="recipeLines" class="recipe-lines"></div>
+        <div class="sectionhead">
+          <h2>方案尝试</h2>
+          <span class="muted"
+            >每次尝试从固定起点限时训练，与现役模型在同样的牌局上配对评估；点击一行查看计划、改动与训练诊断</span
+          >
+        </div>
+        <div class="tablewrap">
+          <table>
+            <thead>
+              <tr>
+                <th>方案线</th>
+                <th>尝试</th>
+                <th>结果</th>
+                <th>本次方向</th>
+                <th>配对差（场均桌面分）</th>
+                <th>训练</th>
+                <th>完成时间</th>
+              </tr>
+            </thead>
+            <tbody id="recipeTrials"></tbody>
+          </table>
+        </div>
+        <details>
+          <summary>事件记录</summary>
+          <div id="recipeEvents"></div>
+        </details>
+      </section>
+      <dialog id="recipeDialog">
+        <div class="sectionhead">
+          <h2 id="recipeDialogTitle"></h2>
+          <button id="closeRecipeDialog">关闭</button>
+        </div>
+        <div id="recipeDialogContent"></div>
+      </dialog>
       <dialog id="detailDialog">
         <div class="sectionhead">
           <h2 id="detailTitle"></h2>
@@ -235,5 +296,6 @@
       </dialog>
     </main>
     <script src="/assets/app.js"></script>
+    <script src="/assets/recipes.js"></script>
   </body>
 </html>

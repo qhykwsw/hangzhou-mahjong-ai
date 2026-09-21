@@ -685,9 +685,9 @@ $("resourceForm").onsubmit = async (e) => {
     notice(error.message);
   }
 };
-for (const name of ["work", "ranking"])
+for (const name of ["work", "ranking", "recipe"])
   $(name + "Tab").onclick = () => {
-    for (const key of ["work", "ranking"]) {
+    for (const key of ["work", "ranking", "recipe"]) {
       $(key + "Tab").setAttribute("aria-selected", String(key === name));
       $(key + "Panel").hidden = key !== name;
     }

@@ -770,3 +770,81 @@ select:disabled {
     font-size: 12px;
   }
 }
+.recipe-lines {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 14px;
+  margin-bottom: 22px;
+}
+.recipe-line {
+  background: var(--white);
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+.recipe-curve {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.recipe-curve .tick {
+  font-size: 10px;
+  fill: var(--muted);
+}
+.recipe-curve .axis-zero {
+  stroke: var(--line);
+  stroke-dasharray: 3 3;
+}
+.recipe-curve .rule-line {
+  fill: none;
+  stroke: #b8c7cc;
+  stroke-width: 1;
+}
+.recipe-curve .rule-dot {
+  fill: #b8c7cc;
+}
+.recipe-curve .own-line {
+  fill: none;
+  stroke: var(--teal);
+  stroke-width: 2;
+}
+.recipe-curve .own-ci {
+  stroke: var(--teal);
+  stroke-width: 1.5;
+  opacity: 0.55;
+}
+.recipe-curve .own-dot {
+  fill: var(--teal);
+}
+.recipe-conclusion {
+  border-top: 1px solid var(--line);
+  padding: 6px 0;
+}
+.recipe-conclusion p {
+  margin: 2px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.recipe-row {
+  cursor: pointer;
+}
+.recipe-row:hover {
+  background: #f0f8f7;
+}
+.recipe-row.promoted td:nth-child(3) {
+  color: var(--teal);
+  font-weight: 600;
+}
+.recipe-row.crashed td:nth-child(3),
+.recipe-row.unsubmitted td:nth-child(3) {
+  color: var(--red);
+}
+.recipe-direction {
+  max-width: 420px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#recipeDialog {
+  width: min(1100px, 94vw);
+}

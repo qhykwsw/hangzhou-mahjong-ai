@@ -61,7 +61,10 @@ def codex_command(
     catalog_dir=None,
     deadline=None,
     budget=None,
+    server=None,
+    tool_timeout=45,
 ):
+    """server replaces the research MCP: {"name", "module", "args"}."""
     from mahjong_ai.execution.models import resolve_model
     from mahjong_ai.research.config import MODELS
 
@@ -79,15 +82,21 @@ def codex_command(
         "features.skill_search": False,
         "features.skip_host_skill_discovery": True,
         "web_search": "disabled",
-        "mcp_servers.mahjong_research": {
+        "mcp_servers." + (server or {}).get("name", "mahjong_research"): {
             "command": sys.executable,
             "args": [
                 "-B",
                 "-m",
-                "mahjong_ai.interfaces.mcp",
-                str(project),
-                experiment_id,
-                branch,
+                *(
+                    [server["module"], *server["args"]]
+                    if server
+                    else [
+                        "mahjong_ai.interfaces.mcp",
+                        str(project),
+                        experiment_id,
+                        branch,
+                    ]
+                ),
             ],
             # 每次工具返回都带上剩余时间：非交互会话里这是唯一可靠的提醒通道。
             "env": {
@@ -100,7 +109,7 @@ def codex_command(
                 **({"MAHJONG_ITERATION_BUDGET": f"{budget:.0f}"} if budget else {}),
             },
             "required": True,
-            "tool_timeout_sec": 45,
+            "tool_timeout_sec": tool_timeout,
             "startup_timeout_sec": 20,
         },
     }
@@ -119,7 +128,9 @@ def budget_brief(task):
     if not deadline:
         return ""
     remaining = max(0, int(deadline - time.time()))
-    limit = f"本次迭代总预算 {int(total)} 秒（{int(total) // 60} 分钟）；" if total else ""
+    limit = (
+        f"本次迭代总预算 {int(total)} 秒（{int(total) // 60} 分钟）；" if total else ""
+    )
     return (
         f"\n\n时间预算：{limit}现在剩余约 {remaining} 秒，到点会强制终止，未提交的草稿全部作废。"
         "研究 MCP 每次返回都带 budget.remaining_seconds 与 advice，按它调整节奏。"
@@ -212,7 +223,21 @@ def main():
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
     started = time.monotonic()
-    prompt = agent_prompt(task)
+    prompt = task.get("prompt") or agent_prompt(task)
+
+    def deadline():
+        """Remote checks recorded in extension.json do not count against the limit."""
+        extra = 0.0
+        path = root / "extension.json"
+        if path.exists():
+            try:
+                extra = float(read_json(path)["seconds"]) - task.get(
+                    "extension_base", 0.0
+                )
+            except (ValueError, KeyError):
+                extra = 0.0
+        return task["deadline"] + max(0.0, extra)
+
     log = root / "codex.jsonl"
     workspace = root / "workspace"
     workspace.mkdir(exist_ok=True)
@@ -237,6 +262,8 @@ def main():
                         root,
                         task.get("deadline"),
                         task.get("execution_limit_seconds"),
+                        task.get("mcp_server"),
+                        task.get("tool_timeout_seconds", 45),
                     ),
                     stdin=subprocess.PIPE,
                     stdout=out,
@@ -250,7 +277,7 @@ def main():
                 while process.poll() is None:
                     if (
                         cancelled
-                        or time.time() >= task["deadline"]
+                        or time.time() >= deadline()
                         or os.getppid() != task["owner_pid"]
                         or (root / "cancel.flag").exists()
                         or (root / "submitted.flag").exists()
@@ -278,7 +305,7 @@ def main():
         while time.monotonic() < end:
             if (
                 cancelled
-                or time.time() >= task["deadline"] - 30
+                or time.time() >= deadline() - 30
                 or os.getppid() != task["owner_pid"]
                 or (root / "cancel.flag").exists()
                 or (root / "submitted.flag").exists()
@@ -298,7 +325,7 @@ def main():
         if not transient_failure(window):
             break
         delay = RETRY_DELAYS[attempt]
-        if time.time() + delay >= task["deadline"] - 30:
+        if time.time() + delay >= deadline() - 30:
             break
         with log.open("a") as handle:
             handle.write(

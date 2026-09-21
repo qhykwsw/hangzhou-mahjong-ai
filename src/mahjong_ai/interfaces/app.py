@@ -25,14 +25,28 @@ from mahjong_ai.research.config import configuration, COMBINATIONS
 from mahjong_ai.execution.controller import Controller
 from mahjong_ai.persistence.artifacts import atomic_json, exclusive_lock, read_json
 from mahjong_ai.interfaces.service_host import open_url, start_service, stop_service
+from mahjong_ai.project import ProjectDescriptor
+from mahjong_ai.recipes.service import RecipeIteration
+from mahjong_ai.recipes.store import PROJECT as RECIPE_PROJECT
+
+
+def recipe_iteration(project):
+    """Recipe iteration shares this service when the workspace has its project."""
+    workspace = ProjectDescriptor.load(project).workspace
+    if (workspace / RECIPE_PROJECT / "recipes/iteration.toml").exists():
+        return RecipeIteration(workspace)
+    return None
 
 
 def application(project, tailscale_url=None):
     arena = Research(project)
+    recipes = recipe_iteration(project)
 
     @asynccontextmanager
     async def lifespan(app):
         controller = Controller(arena)
+        if recipes is not None:
+            await asyncio.to_thread(recipes.recover)
         stopped = asyncio.Event()
 
         async def loop():
@@ -46,6 +60,15 @@ def application(project, tailscale_url=None):
                             arena.control(
                                 s["id"], "pause", reason="执行循环异常，已自动暂停"
                             )
+                if recipes is not None:
+                    try:
+                        await asyncio.to_thread(recipes.tick)
+                    except Exception:
+                        traceback.print_exc()
+                        try:
+                            await asyncio.to_thread(recipes.control, "pause")
+                        except Exception:
+                            traceback.print_exc()
                 await asyncio.sleep(0.25)
 
         worker = asyncio.create_task(loop())
@@ -55,6 +78,8 @@ def application(project, tailscale_url=None):
             stopped.set()
             await worker
             await asyncio.to_thread(controller.close)
+            if recipes is not None:
+                await asyncio.to_thread(recipes.close)
 
     # 本地控制台不缓存页面与静态资源：改了前端刷新就能看到，不会被浏览器的
     # 启发式缓存挡住（StaticFiles 默认不发 Cache-Control）。
@@ -139,10 +164,55 @@ def application(project, tailscale_url=None):
         except (ValueError, KeyError, TypeError) as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
 
+    async def recipe_state(request):
+        if recipes is None:
+            return JSONResponse({"enabled": False})
+        return JSONResponse(
+            {"enabled": True} | await asyncio.to_thread(recipes.snapshot)
+        )
+
+    async def recipe_trial(request):
+        try:
+            return JSONResponse(
+                await asyncio.to_thread(
+                    recipes.trial_detail, request.query_params.get("id", "")
+                )
+            )
+        except (AttributeError, ValueError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    async def recipe_mutate(request):
+        origin = request.headers.get("origin")
+        if origin and origin != str(request.base_url).rstrip("/"):
+            return JSONResponse(
+                {"error": "local same-origin request required"}, status_code=403
+            )
+        if recipes is None:
+            return JSONResponse({"error": "训练方案迭代未启用"}, status_code=400)
+        try:
+            value = await request.json()
+            if request.url.path == "/api/recipes/experiments":
+                await asyncio.to_thread(recipes.create, value.get("limit"))
+                result = await asyncio.to_thread(recipes.control, "resume")
+            else:
+                result = await asyncio.to_thread(
+                    recipes.control,
+                    value["action"],
+                    value.get("line"),
+                    value.get("count", 0),
+                )
+            return JSONResponse(result)
+        except (ValueError, KeyError, TypeError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
     app = Starlette(
         lifespan=lifespan,
         routes=[
             Route("/", home),
+            Route("/api/recipes/state", recipe_state),
+            Route("/api/recipes/trial", recipe_trial),
+            Route("/api/recipes/experiments", recipe_mutate, methods=["POST"]),
+            Route("/api/recipes/control", recipe_mutate, methods=["POST"]),
             Route("/api/health", health),
             Route("/api/state", state),
             Route("/api/activity", activity),
