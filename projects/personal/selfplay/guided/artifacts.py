@@ -26,6 +26,15 @@ BRANCHES = (
     "heuristic-adaptive--01",
     "heuristic-unrestricted--01",
 )
+# Runtime parts that never affect how a frozen rule candidate plays: the platform
+# client, project MCP and service interfaces, plus per-machine native builds whose
+# C source is itself compared. Runtimes equal outside these may share one bundle.
+NON_GAMEPLAY_PREFIXES = (
+    "mahjong_ai/platform/",
+    "mahjong_ai/project_mcp/",
+    "mahjong_ai/interfaces/",
+)
+NATIVE_SUFFIXES = (".so", ".pyd", ".dll", ".dylib")
 _BOUND_RUNTIME: Path | None = None
 _BOUND_RUNTIME_HASH: str | None = None
 
@@ -96,6 +105,16 @@ def _inventory(root):
     return result
 
 
+def gameplay_inventory(inventory):
+    """The part of a runtime inventory that can change how candidates play."""
+    return {
+        key: value
+        for key, value in inventory.items()
+        if not key.startswith(NON_GAMEPLAY_PREFIXES)
+        and not key.endswith(NATIVE_SUFFIXES)
+    }
+
+
 def _atomic_json(path, value):
     fd, name = tempfile.mkstemp(prefix="." + path.name, dir=path.parent)
     try:
@@ -162,31 +181,38 @@ def export_bundle(project_root, output_root) -> Path:
             raise ValueError("runtime name refers to different source contents")
         runtime_paths[runtime_name] = (runtime, runtime_hash)
         package_relative = f"candidates/{cid}"
-        runtime_relative = f"runtimes/{runtime_name}"
         entries.append(
             dict(
                 id=cid,
                 branch=ranking["branch"],
                 path=package_relative,
-                runtime=runtime_relative,
+                original_runtime=runtime_name,
+                original_runtime_hash=runtime_hash,
                 source_identity=identity,
                 package_hash=original.package_hash,
-                runtime_hash=runtime_hash,
             )
         )
         sources[package_relative] = package
         source_files[package_relative] = _inventory(package)
-    if len(runtime_paths) != 1:
+    # Candidates carried into a newer research experiment keep their older runtime.
+    # They share one bundle runtime only when the runtimes play identically.
+    gameplay = {
+        name: gameplay_inventory(_inventory(path))
+        for name, (path, _) in runtime_paths.items()
+    }
+    if len({_digest(value) for value in gameplay.values()}) != 1:
         raise ValueError(
-            "mixed frozen runtimes cannot be enabled; current teacher remains unchanged"
+            "mixed frozen runtimes differ in gameplay files; current teacher remains unchanged"
         )
-    for name, (path, _) in runtime_paths.items():
-        sources[f"runtimes/{name}"] = path
-        source_files[f"runtimes/{name}"] = _inventory(path)
-    runtime_relative = entries[0]["runtime"]
-    if not (
-        runtime_paths[next(iter(runtime_paths))][0] / "mahjong_ai/__init__.py"
-    ).is_file():
+    current = Path(state.get("runtime_path") or "").name
+    chosen = current if current in runtime_paths else entries[0]["original_runtime"]
+    chosen_path, chosen_hash = runtime_paths[chosen]
+    runtime_relative = f"runtimes/{chosen}"
+    for entry in entries:
+        entry.update(runtime=runtime_relative, runtime_hash=chosen_hash)
+    sources[runtime_relative] = chosen_path
+    source_files[runtime_relative] = _inventory(chosen_path)
+    if not (chosen_path / "mahjong_ai/__init__.py").is_file():
         raise ValueError("frozen runtime does not contain mahjong_ai")
 
     output = Path(output_root)
@@ -210,6 +236,7 @@ def export_bundle(project_root, output_root) -> Path:
             teacher=entries[0]["id"],
             entries=entries,
             runtime=runtime_relative,
+            gameplay_hash=_digest(gameplay[chosen]),
             source_cycle=cycle["id"],
             source_experiment=cycle["experiment"],
             files=_inventory(staging),

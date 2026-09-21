@@ -1,0 +1,32 @@
+# 训练方案迭代的固定条件，见 docs/adr/0012-recipe-iteration-for-rl-training.md。
+# 新实验创建时整体冻结进实验状态；改这里只影响之后创建的实验。
+
+baseline = "recipes/baseline/recipe"  # 首次尝试的工作区从这里复制
+
+[agent]
+model = "deepseek"  # 研究模型档案，取自自动研究的 MODELS
+seconds = 300  # 每次尝试 Agent 的思考时限；冒烟检查的实际耗时另计
+continuations = 2  # 回复结束但未提交时，同一会话最多续写的次数
+smoke_limit = 3  # 每次尝试最多计入时限补偿的冒烟检查次数
+
+[trial]
+budget_seconds = 900  # recipe.train 的固定训练时限
+smoke_seconds = 60
+evaluation_games = 1024  # 挑战者和现役各打的场数，配对差 95% 区间下界 > 0 才晋级
+brawl_appearances = 1024  # 五方大乱斗里每方的出场数
+limit = 24  # 每条方案线的尝试次数上限，可在网页追加
+retries = 2  # 基础设施失败（SSH、远端进程丢失）的重试次数，用完暂停实验
+
+[[lines]]
+id = "large"
+name = "4090 大模型"
+host = "4090"
+start_checkpoint = ".local/guided-main/20260921-162302/reference.pt"  # 远端仓库根下的相对路径
+execution = { workers = 20, tables = 64, inference_batch_limit = 128 }
+
+[[lines]]
+id = "small"
+name = "4070 小模型"
+host = "4070"
+start_checkpoint = ".local/guided-main/20260921-162302/reference.pt"
+execution = { workers = 22, tables = 16, inference_batch_limit = 64 }

@@ -7,14 +7,23 @@ import time
 from .environment import worker
 
 
-def collect(actor, critic, cfg, bundle, panel, command, history=None):
+def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None):
+    """Play games in CPU workers; the parent runs every network.
+
+    Optional training-recipe hooks apply only to the learning seat during
+    collection: hooks["sample"](logits, mask) -> (actions, behaviour logprobs)
+    replaces multinomial sampling, and hooks["values"](rows) -> values replaces
+    the built-in privileged Critic. Evaluation never uses hooks.
+    """
     import torch
     from .learning import make_batch
     from .inference import evaluate_requests
 
     history = history or {}
+    hooks = hooks or {}
     actor.eval()
-    critic.eval()
+    if critic is not None:
+        critic.eval()
     ctx = mp.get_context("spawn")
     pairs = [ctx.Pipe() for _ in range(cfg["workers"])]
     procs = []
@@ -86,18 +95,28 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None):
                         batch["planes"], batch["scalars"], batch["events"]
                     ).float()
                     logp = logits.masked_fill(~batch["mask"], -1e9).log_softmax(-1)
+                    learning = (
+                        slot == "model:current"
+                        and command["kind"] != "evaluate"
+                        and not cfg["bc_only"]
+                    )
+                    selected = None
                     if command["kind"] == "evaluate":
                         actions = logp.argmax(-1)
                     elif cfg["bc_only"] and slot == "model:current":
                         actions = batch["teacher"]
+                    elif learning and "sample" in hooks:
+                        actions, selected = hooks["sample"](logits, batch["mask"])
                     else:
                         actions = torch.multinomial(logp.exp(), 1).squeeze(1)
                     values = torch.zeros(len(group), device=device)
-                    if (
-                        slot == "model:current"
-                        and command["kind"] != "evaluate"
-                        and not cfg["bc_only"]
-                    ):
+                    if learning and "values" in hooks:
+                        values = torch.as_tensor(
+                            hooks["values"]([item[2]["row"] for item in group]),
+                            dtype=torch.float32,
+                            device=device,
+                        ).reshape(-1)
+                    elif learning:
                         values = critic(
                             batch["planes"],
                             batch["scalars"],
@@ -105,7 +124,8 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None):
                             batch["oracle_planes"],
                             batch["oracle_scalars"],
                         )
-                    selected = logp.gather(1, actions[:, None]).squeeze(1)
+                    if selected is None:
+                        selected = logp.gather(1, actions[:, None]).squeeze(1)
                     output = (
                         torch.stack((actions.float(), selected, values), -1)
                         .cpu()

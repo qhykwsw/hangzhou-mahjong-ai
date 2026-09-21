@@ -129,11 +129,33 @@ def test_mixed_runtime_refused_without_replacing_current(research):
     original = Path(candidate["spec"]["runtime_path"])
     other = original.with_name("another-sdk")
     shutil.copytree(original, other)
+    (other / "mahjong_ai/rules.py").write_text("CHANGED = True\n")
     candidate["spec"]["runtime_path"] = str(other)
     save()
     with pytest.raises(ValueError, match="mixed frozen runtimes"):
         artifacts.export_bundle(root, output)
     assert (output / "current.json").read_bytes() == before
+
+
+def test_runtimes_differing_only_outside_gameplay_share_the_current_runtime(research):
+    root, output, state, save, _ = research
+    candidate = state["candidates"]["candidate-1"]
+    original = Path(candidate["spec"]["runtime_path"])
+    newer = original.with_name("newer-sdk")
+    shutil.copytree(original, newer)
+    (newer / "mahjong_ai/platform").mkdir()
+    (newer / "mahjong_ai/platform/online.py").write_text("CLIENT = 2\n")
+    (newer / "mahjong_ai/_fast.cpython-312-darwin.so").write_bytes(b"local build")
+    candidate["spec"]["runtime_path"] = str(newer)
+    state["runtime_path"] = str(newer)
+    save()
+    result = artifacts.read_bundle(artifacts.export_bundle(root, output))
+    assert Path(result["runtime"]).name == "newer-sdk"
+    assert {e["original_runtime"] for e in result["entries"]} == {
+        "frozen-sdk",
+        "newer-sdk",
+    }
+    assert {e["runtime"] for e in result["entries"]} == {result["runtime"]}
 
 
 def test_copy_failure_does_not_publish_or_leave_partial_bundle(research, monkeypatch):

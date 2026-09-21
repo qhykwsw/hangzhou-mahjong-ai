@@ -1,4 +1,4 @@
-"""Eight or ten frozen policies in balanced four-player tables."""
+"""Five, eight, ten or eleven frozen policies in balanced four-player tables."""
 
 import argparse
 from collections import Counter
@@ -15,27 +15,37 @@ from .statistics import interval, seed_for
 
 def schedule(entrants, blocks, seed):
     count = len(entrants)
-    if count not in (8, 10) or len(set(entrants)) != count or blocks < 2:
+    if count not in (5, 8, 10, 11) or len(set(entrants)) != count or blocks < 2:
         raise ValueError(
-            "eight or ten distinct entrants and at least two blocks required"
+            "five, eight, ten or eleven distinct entrants and at least two blocks required"
         )
     # Each partition has one table containing the first entrant and its complement.
     # Cycling over all 35 partitions covers every four-policy lineup equally (+/-1).
     partitions = [(entrants[0], *others) for others in combinations(entrants[1:], 3)]
-    if count == 10:
-        remaining = set(combinations(range(10), 4))
+    if count == 5:
+        # All five four-player lineups per block; each entrant sits at four tables.
+        patterns = [list(combinations(range(5), 4))]
+    if count in (10, 11):
+        remaining = set(combinations(range(count), 4))
         patterns, short = [], []
         while remaining:
             first = min(remaining)
             orbit = sorted(
-                {tuple(sorted((i + shift) % 10 for i in first)) for shift in range(10)}
+                {
+                    tuple(sorted((i + shift) % count for i in first))
+                    for shift in range(count)
+                }
             )
             remaining.difference_update(orbit)
-            (patterns if len(orbit) == 10 else short).append(orbit)
-        # Twenty size-10 orbits plus two size-5 orbits. Combine the latter:
-        # every block now has ten tables and every entrant appears four times.
-        assert len(patterns) == 20 and [len(o) for o in short] == [5, 5]
-        patterns.append(short[0] + short[1])
+            (patterns if len(orbit) == count else short).append(orbit)
+        if count == 10:
+            # Twenty size-10 orbits plus two size-5 orbits. Combine the latter:
+            # every block now has ten tables and every entrant appears four times.
+            assert len(patterns) == 20 and [len(o) for o in short] == [5, 5]
+            patterns.append(short[0] + short[1])
+        else:
+            # 11 is prime: thirty full orbits of eleven tables, four appearances each.
+            assert len(patterns) == 30 and not short
     rng = random.Random(seed_for(seed, "brawl-lineups"))
     jobs = []
     for block in range(blocks):
@@ -71,7 +81,9 @@ def validate_records(records, jobs, entrants):
     for row in records:
         if len(row["scores"]) != 4 or sum(row["scores"]) != 0:
             raise ValueError("invalid zero-sum settlement")
-    games_per_block, per_seat = (8, 1) if len(entrants) == 8 else (40, 4)
+    games_per_block, per_seat = {5: (20, 4), 8: (8, 1), 10: (40, 4), 11: (44, 4)}[
+        len(entrants)
+    ]
     for block in sorted({r["group"] for r in records}):
         rows = [r for r in records if r["group"] == block]
         counts = Counter((e, seat) for r in rows for seat, e in enumerate(r["seats"]))
@@ -141,7 +153,7 @@ def render(plan, summary, stage, completed_blocks):
         "",
         f"状态：{stage}；已完成 {completed_blocks}/{plan['blocks']} 个完整配对组。",
         "",
-        f"每组 {'8' if count == 8 else '40'} 场，阵容与四座轮换均衡，共享牌墙。每支目标出场 {plan.get('appearances_per_entrant', 4096)} 次，每场 16 局。",
+        f"每组 {8 if count == 8 else 4 * count} 场，阵容与四座轮换均衡，共享牌墙。每支目标出场 {plan.get('appearances_per_entrant', 4096)} 次，每场 16 局。",
         "",
         "| 策略 | 出场数 | 场均桌面分 | 95% 区间 |",
         "|---|---:|---:|---|",

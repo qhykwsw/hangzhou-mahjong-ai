@@ -4,12 +4,25 @@ Importing this module must not load the game SDK: each spawned worker first
 binds the immutable rules runtime supplied with its teachers.
 """
 
+import importlib
 import random
 import time
 import traceback
 
 from . import bootstrap  # noqa: F401
 from .statistics import seed_for, advantages
+
+
+def hook(spec, default):
+    """Resolve an optional "module:function" training-recipe hook.
+
+    Resolved lazily inside workers, after the teacher runtime is bound, so a
+    recipe module may import the engine at module level.
+    """
+    if not spec:
+        return default
+    module, _, name = spec.partition(":")
+    return getattr(importlib.import_module(module), name)
 
 
 class Game:
@@ -109,7 +122,11 @@ class Game:
                     if self.teacher:
                         self.teacher.finish_round(result, self.focal)
                     if self.train:
-                        advantages(self.rows, self.cfg["gae_lambda"])
+                        finish = hook(self.cfg.get("finish_game"), None)
+                        if finish is None:
+                            advantages(self.rows, self.cfg["gae_lambda"])
+                        else:
+                            finish(self.rows, self.cfg)
                     return None
                 self._next_hand()
                 continue
@@ -129,6 +146,7 @@ class Game:
                 continue
             row = encode(obs, self.cfg["lookahead"])
             row.update(
+                hand=self.hand_no,
                 action=0,
                 logprob=0.0,
                 value=0.0,
@@ -139,7 +157,7 @@ class Game:
                 ret=0.0,
             )
             if self.train and seat == self.focal:
-                row.update(oracle(state, seat))
+                row.update(hook(self.cfg.get("critic_features"), oracle)(state, seat))
                 if self.teacher:
                     action = self.teacher.act(obs)
                     if action not in legal:

@@ -1,0 +1,19 @@
+{
+  "samples": 8192,
+  "tables": 4,
+  "worker_fraction": 0.8,
+  "minibatch": 128,
+  "effective_minibatch": 512,
+  "epochs": 2,
+  "learning_rate": 1e-05,
+  "critic_learning_rate": 0.0003,
+  "clip": 0.1,
+  "target_kl": 0.01,
+  "entropy": 0.001,
+  "gae_lambda": 0.95,
+  "lambda_max": 1.0,
+  "replay_capacity": 100000,
+  "history_probability": 0.0,
+  "critic_features": "recipe.features:critic_features",
+  "finish_game": "recipe.returns:finish_game"
+}
