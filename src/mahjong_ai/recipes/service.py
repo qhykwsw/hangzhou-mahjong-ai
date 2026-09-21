@@ -83,6 +83,24 @@ def agent_deadline(root):
     return task["deadline"] + max(0.0, extra)
 
 
+def memory_summary(status):
+    """Peak usage against the harness caps, in GB, for the Agent and the page."""
+    gb = 2**30
+    limits = status.get("limits") or {}
+    values = {
+        "reason": status.get("reason"),
+        "gpu_peak_gb": status.get("gpu_peak_reserved_bytes"),
+        "gpu_limit_gb": limits.get("gpu_limit_bytes"),
+        "ram_peak_gb": status.get("ram_peak_bytes"),
+        "ram_limit_gb": limits.get("ram_limit_bytes"),
+    }
+    return {
+        k: round(v / gb, 2) if isinstance(v, (int, float)) and k != "reason" else v
+        for k, v in values.items()
+        if v is not None
+    }
+
+
 def compact_metrics(row):
     return {
         k: round(v, 5) if isinstance(v, float) else v
@@ -479,11 +497,16 @@ class RecipeIteration:
             "updates": len(metrics),
             "last": compact_metrics(metrics[-1] if metrics else None),
             "error": (status.get("error") or "")[-3000:] or None,
+            **memory_summary(status),
         }
         if out["ok"]:
             trial.update(actor=out["actor"], status="evaluating")
         else:
-            reason = "训练超时" if status.get("state") == "timeout" else "训练报错"
+            reason = {
+                "timeout": "训练超时",
+                "gpu_memory": "显存超过上限",
+                "ram_limit": "内存超过上限",
+            }.get(status.get("reason") or status.get("state"), "训练报错")
             self.complete_trial(s, db, trial, "crashed", reason)
 
     def accept_evaluate(self, s, db, j, result):
@@ -582,6 +605,7 @@ class RecipeIteration:
         trial = s["trials"].get(j.get("trial"))
         if j["kind"] == "train":
             task.update(
+                limits=line.get("limits") or {},
                 recipe=trial["submitted"],
                 start_actor=p["lines"][line["id"]]["start_actor"],
                 budget_seconds=cfg["budget_seconds"],
@@ -618,6 +642,7 @@ class RecipeIteration:
             "source_id": p["source_id"],
             "bundle": p["bundle"],
             "execution": line["execution"],
+            "limits": line.get("limits") or {},
             "recipe": trial["workspace"],
             "start_actor": p["lines"][line["id"]]["start_actor"],
             "budget_seconds": s["config"]["trial"]["budget_seconds"],
@@ -927,7 +952,10 @@ class RecipeIteration:
             "direction": plan.get("direction"),
             "summary": trial.get("summary"),
             "difference": evaluation.get("difference"),
-            "training": {k: training.get(k) for k in ("state", "seconds", "updates")},
+            "training": {
+                k: training.get(k)
+                for k in ("state", "seconds", "updates", "gpu_peak_gb", "gpu_limit_gb")
+            },
             "incumbent_version": trial.get("incumbent_version"),
             "error": trial.get("error"),
             "created_at": trial.get("created_at"),

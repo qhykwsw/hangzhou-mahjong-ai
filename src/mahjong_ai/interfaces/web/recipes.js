@@ -130,8 +130,9 @@ function recipeTrialRow(t, lines) {
       ? "—"
       : "进行中";
   const outcome = t.status === "completed" ? t.outcome_label : { designing: "设计中", submitted: "已提交", training: "训练中", evaluating: "评估中" }[t.status] || t.status;
+  const memory = t.training?.gpu_peak_gb != null ? ` · 显存峰值 ${t.training.gpu_peak_gb}/${t.training.gpu_limit_gb} GB` : "";
   const training = t.training?.state
-    ? `${t.training.updates ?? 0} 次更新 · ${t.training.seconds ? clock(t.training.seconds) : "—"}${t.training.state !== "complete" ? " · " + t.training.state : ""}`
+    ? `${t.training.updates ?? 0} 轮 · ${t.training.seconds ? clock(t.training.seconds) : "—"}${t.training.state !== "complete" ? " · " + t.training.state : ""}${memory}`
     : "—";
   return `<tr data-trial="${esc(t.id)}" class="recipe-row ${esc(t.outcome || "")}"><td>${esc(lines[t.line] || t.line)}</td><td class="number">#${t.number}</td><td>${esc(outcome)}</td><td class="recipe-direction" title="${esc(t.direction || t.summary || "")}">${esc(t.direction || t.error || "—")}</td><td class="number">${esc(difference)}</td><td>${esc(training)}</td><td>${t.finished_at ? new Date(t.finished_at * 1000).toLocaleString() : "—"}</td></tr>`;
 }
@@ -240,7 +241,7 @@ $("recipeTrials").onclick = async (event) => {
       ? `<p>挑战者 ${signed(ev.challenger.mean)}，现役 ${signed(ev.incumbent.mean)}，配对差 ${signed(ev.difference.mean)} [${signed(ev.difference.lower)}, ${signed(ev.difference.upper)}]（${ev.games} 场 × 2，${ev.promoted ? "晋级" : "未晋级"}）</p>`
       : "";
     // 方案可以用 ctx.log 记任意诊断：常用列在前，其余按字母序补在后面。
-    const preferred = ["iteration", "samples", "games", "sgd_steps", "optimized_samples", "stop_kl", "approx_kl", "clipfrac", "policy_loss", "value_loss", "entropy", "teacher_loss", "collect_seconds", "left"];
+    const preferred = ["iteration", "samples", "games", "sgd_steps", "optimized_samples", "critic_steps", "kl_max", "stop_kl", "actor_lr", "approx_kl", "clipfrac", "policy_loss", "value_loss", "entropy", "teacher_loss", "collect_seconds", "left"];
     const present = new Set((t.metrics || []).flatMap((m) => Object.keys(m)));
     const columns = [
       ...preferred.filter((c) => present.has(c)),

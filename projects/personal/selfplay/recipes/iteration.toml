@@ -23,6 +23,9 @@ name = "4090 大模型"
 host = "4090"
 start_checkpoint = ".local/guided-main/20260921-162302/reference.pt"  # 远端仓库根下的相对路径
 execution = { workers = 20, tables = 64, inference_batch_limit = 128 }
+# 训练进程的硬上限：显存按分配器比例封顶（超了是 CUDA OOM，不会溢出到共享内存），
+# 进程组常驻内存超过 WSL 总内存的比例就整组结束。超限记为训练失败。
+limits = { gpu_memory_fraction = 0.9, ram_fraction = 0.75 }
 
 [[lines]]
 id = "small"
@@ -30,3 +33,4 @@ name = "4070 小模型"
 host = "4070"
 start_checkpoint = ".local/guided-main/20260921-162302/reference.pt"
 execution = { workers = 22, tables = 16, inference_batch_limit = 64 }
+limits = { gpu_memory_fraction = 0.75, ram_fraction = 0.75 }  # 4070 同时承担桌面显示，留出余量

@@ -6,7 +6,7 @@ rule opponents and teacher, the time budget, the evaluation and the brawl. A
 recipe is a package named ``recipe`` whose ``train(ctx)`` returns the trained
 Actor (or its state dict) before ``ctx.deadline``; see recipes/API.md.
 
-    python -m guided.trial train|smoke|evaluate|brawl --root <dir>
+    python -m guided.trial train|smoke|evaluate|brawl|curve --root <dir>
 
 Each command reads ``<root>/plan.json`` and writes ``<root>/status.json`` plus
 its outputs; nothing here decides promotion beyond the fixed interval rule.
@@ -17,6 +17,7 @@ import hashlib
 import importlib
 import json
 import os
+import signal
 from pathlib import Path
 import sys
 import threading
@@ -27,6 +28,49 @@ from . import bootstrap
 from .run import atomic_json
 
 GRACE_SECONDS = {"train": 120, "smoke": 60}
+DEFAULT_LIMITS = {"gpu_memory_fraction": 0.85, "ram_fraction": 0.75}
+
+
+def _meminfo_total():
+    for line in Path("/proc/meminfo").read_text().splitlines():
+        if line.startswith("MemTotal:"):
+            return int(line.split()[1]) * 1024
+    raise RuntimeError("MemTotal missing from /proc/meminfo")
+
+
+def _group_rss(pgid):
+    """Resident memory of every process in the training process group."""
+    page = os.sysconf("SC_PAGE_SIZE")
+    total = 0
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        try:
+            if os.getpgid(int(entry)) != pgid:
+                continue
+            with open(f"/proc/{entry}/statm") as stream:
+                total += int(stream.read().split()[1]) * page
+        except (OSError, ValueError, IndexError):
+            continue
+    return total
+
+
+def memory_limits(plan):
+    """Hard caps the recipe cannot lift: the GPU allocator fraction and group RSS.
+
+    Exceeding the GPU cap raises CUDA out-of-memory inside the process instead of
+    spilling into shared memory; exceeding the RAM cap kills the process group.
+    Either way the trial fails cleanly and the host keeps running.
+    """
+    import torch
+
+    limits = DEFAULT_LIMITS | (plan.get("limits") or {})
+    total = torch.cuda.get_device_properties(0).total_memory
+    torch.cuda.set_per_process_memory_fraction(limits["gpu_memory_fraction"], 0)
+    return {
+        "gpu_limit_bytes": int(total * limits["gpu_memory_fraction"]),
+        "ram_limit_bytes": int(_meminfo_total() * limits["ram_fraction"]),
+    }
 
 
 def _sha256(path):
@@ -65,7 +109,7 @@ def export_actor(weights, config, output, source=None):
 class Context:
     """What a recipe may use. Everything else in the harness is off limits."""
 
-    def __init__(self, plan, root, deadline, smoke):
+    def __init__(self, plan, root, deadline, smoke, limits):
         import torch
         from .artifacts import read_bundle
         from .deployment import load_actor
@@ -80,12 +124,20 @@ class Context:
         self.rules = [entry["id"] for entry in bundle["entries"]]
         self.actor, meta = load_actor(plan["start_actor"], "cuda")
         self.actor_config = meta["config"]
-        self.resources = evaluation_resources() | {
-            "cpu_count": os.cpu_count(),
-            "gpu_total_bytes": torch.cuda.get_device_properties(0).total_memory,
-        }
+        self.resources = (
+            evaluation_resources()
+            | {
+                "cpu_count": os.cpu_count(),
+                "gpu_total_bytes": torch.cuda.get_device_properties(0).total_memory,
+            }
+            | limits
+        )
         self.line = plan["line"]
         self._metrics = open(root / "metrics.jsonl", "a")
+        # Optional timed snapshots (plan["snapshot_seconds"]) for training-time studies.
+        self._started = time.time()
+        self._nodes = sorted(int(x) for x in plan.get("snapshot_seconds") or [])
+        self._snapshots = []
 
     def time_left(self):
         return self.deadline - time.time()
@@ -115,6 +167,8 @@ class Context:
         extra = {k: v for k, v in cfg.items() if k not in known}
         run_cfg = configuration(**known) | extra
         run_cfg |= {
+            # More worker processes than cores only adds memory and contention.
+            "workers": max(1, min(int(run_cfg["workers"]), os.cpu_count())),
             "rounds": 16,
             "lookahead": self.actor_config["lookahead"],
             "samples": int(samples),
@@ -149,9 +203,19 @@ class Context:
         """Checkpoint the current Actor; used if training overruns the deadline."""
         import torch
 
+        state = {k: v.detach().cpu() for k, v in actor.state_dict().items()}
         tmp = self.root / "actor-checkpoint.tmp"
-        torch.save({k: v.detach().cpu() for k, v in actor.state_dict().items()}, tmp)
+        torch.save(state, tmp)
         os.replace(tmp, self.root / "actor-checkpoint.pt")
+        elapsed = time.time() - self._started
+        while self._nodes and elapsed >= self._nodes[0]:
+            node = self._nodes.pop(0)
+            path = self.root / "snapshots" / f"{node:05d}"
+            export_actor(state, self.actor_config, path)
+            self._snapshots.append(
+                {"node": node, "elapsed": round(elapsed, 1), "path": str(path)}
+            )
+            atomic_json(self.root / "snapshots.json", self._snapshots)
 
 
 def train(root, smoke=False):
@@ -171,13 +235,37 @@ def train(root, smoke=False):
     }
     atomic_json(root / "status.json", status)
 
+    limits = memory_limits(plan)
+    status["limits"] = limits
+    pgid = os.getpgid(0)
+    peak = {"ram": 0}
+
     def watchdog():
-        while time.time() < deadline + GRACE_SECONDS["smoke" if smoke else "train"]:
+        grace = GRACE_SECONDS["smoke" if smoke else "train"]
+        while time.time() < deadline + grace:
+            rss = _group_rss(pgid)
+            peak["ram"] = max(peak["ram"], rss)
+            if rss > limits["ram_limit_bytes"]:
+                atomic_json(
+                    root / "status.json",
+                    status
+                    | {
+                        "state": "failed",
+                        "reason": "ram_limit",
+                        "error": f"训练进程组内存 {rss / 2**30:.1f} GB 超过上限 "
+                        f"{limits['ram_limit_bytes'] / 2**30:.1f} GB，已强制结束",
+                        "ram_peak_bytes": peak["ram"],
+                        "finished": time.time(),
+                    },
+                )
+                os.killpg(pgid, signal.SIGKILL)
             time.sleep(1)
         atomic_json(
-            root / "status.json", status | {"state": "timeout", "time": time.time()}
+            root / "status.json",
+            status
+            | {"state": "timeout", "time": time.time(), "ram_peak_bytes": peak["ram"]},
         )
-        os._exit(3)
+        os.killpg(pgid, signal.SIGKILL)
 
     threading.Thread(target=watchdog, daemon=True).start()
     try:
@@ -188,7 +276,7 @@ def train(root, smoke=False):
             raise ValueError("a recipe is a package directory named 'recipe'")
         sys.path.insert(0, str(package.parent))
         recipe = importlib.import_module("recipe")
-        ctx = Context(plan, root, deadline, smoke)
+        ctx = Context(plan, root, deadline, smoke, limits)
         result = recipe.train(ctx)
         if result is None:
             checkpoint = root / "actor-checkpoint.pt"
@@ -206,13 +294,23 @@ def train(root, smoke=False):
             overrun_seconds=max(0.0, time.time() - deadline),
             weights_sha256=meta["weights_sha256"],
         )
-    except BaseException:
+    except BaseException as exc:
         status.update(
-            state="failed", error=traceback.format_exc()[-6000:], finished=time.time()
+            state="failed",
+            reason="gpu_memory"
+            if isinstance(exc, torch.cuda.OutOfMemoryError)
+            else "recipe_error",
+            error=traceback.format_exc()[-6000:],
+            finished=time.time(),
+        )
+        raise
+    finally:
+        status.update(
+            gpu_peak_allocated_bytes=torch.cuda.max_memory_allocated(),
+            gpu_peak_reserved_bytes=torch.cuda.max_memory_reserved(),
+            ram_peak_bytes=max(peak["ram"], _group_rss(pgid)),
         )
         atomic_json(root / "status.json", status)
-        raise
-    atomic_json(root / "status.json", status)
 
 
 def _models(entries):
@@ -308,6 +406,85 @@ def evaluate(root):
         raise
 
 
+def curve(root):
+    """Several Actors and one reference on the same walls, seats and opponents.
+
+    Every target's paired difference to the reference uses the reference's own
+    games, so a training-time curve costs one extra target per snapshot.
+    """
+    import numpy as np
+    from .artifacts import read_bundle
+    from .collection import collect
+    from .evaluation import schedule, summarize
+    from .networks import Critic
+    from .statistics import interval
+
+    plan = json.loads((root / "plan.json").read_text())
+    if bootstrap.verify_source() != plan["source_id"]:
+        raise ValueError("unexpected frozen harness source")
+    atomic_json(root / "status.json", {"state": "running", "started": time.time()})
+    try:
+        bundle = read_bundle(plan["bundle"])
+        entries = {"model:reference": plan["reference"]} | {
+            f"model:{name}": path for name, path in plan["targets"].items()
+        }
+        models = _models(entries)
+        targets = list(models)
+        games = int(plan["games"])
+        jobs = schedule(
+            [e["id"] for e in bundle["entries"]],
+            targets,
+            games,
+            plan["seed"],
+            plan["namespace"],
+        )
+        _, records, stats = collect(
+            models["model:reference"],
+            Critic().to("cuda").eval(),
+            _execution(plan),
+            bundle["manifest_path"],
+            bundle["manifest_path"],
+            {
+                "kind": "evaluate",
+                "iteration": 0,
+                "jobs": jobs,
+                "deadline": time.time() + 6 * 3600,
+                "labels": False,
+            },
+            models,
+        )
+        summary = summarize(records, targets, games)
+        reference = np.asarray(summary["model:reference"]["group_scores"])
+        result = {
+            "games": games,
+            "seconds": stats["seconds"],
+            "targets": {
+                name.removeprefix("model:"): {
+                    k: summary[name][k] for k in ("mean", "lower", "upper")
+                }
+                | {"group_scores": summary[name]["group_scores"]}
+                for name in targets
+            },
+            "differences": {
+                name.removeprefix("model:"): interval(
+                    np.asarray(summary[name]["group_scores"]) - reference
+                )
+                for name in targets
+                if name != "model:reference"
+            },
+        }
+        atomic_json(root / "result.json", result)
+        atomic_json(
+            root / "status.json", {"state": "complete", "finished": time.time()}
+        )
+    except BaseException:
+        atomic_json(
+            root / "status.json",
+            {"state": "failed", "error": traceback.format_exc()[-6000:]},
+        )
+        raise
+
+
 def brawl(root):
     """The incumbent and the four frozen rules in a balanced five-way brawl."""
     from .artifacts import read_bundle
@@ -361,7 +538,9 @@ def brawl(root):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("train", "smoke", "evaluate", "brawl"))
+    parser.add_argument(
+        "command", choices=("train", "smoke", "evaluate", "brawl", "curve")
+    )
     parser.add_argument("--root", required=True)
     args = parser.parse_args()
     root = Path(args.root).resolve()
@@ -369,6 +548,8 @@ def main():
         train(root, smoke=args.command == "smoke")
     elif args.command == "evaluate":
         evaluate(root)
+    elif args.command == "curve":
+        curve(root)
     else:
         brawl(root)
 

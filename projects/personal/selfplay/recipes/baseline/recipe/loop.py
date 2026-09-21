@@ -40,6 +40,10 @@ def train(ctx):
                 .numpy()
             )
 
+    # The Actor step size adapts to the measured policy change: each rollout
+    # should move the policy by about target_kl, whatever the model size.
+    actor_lr = cfg["learning_rate"]
+    actor_step = 0
     iteration = 0
     while ctx.time_left() > 0:
         iteration += 1
@@ -59,17 +63,28 @@ def train(ctx):
             actor_opt,
             critic_opt,
             rows,
-            cfg | {"deadline": ctx.deadline},
+            cfg
+            | {
+                "deadline": ctx.deadline,
+                "actor_lr": actor_lr,
+                "actor_step": actor_step,
+            },
             1.0,
             list(replay),
             rng,
         )
+        actor_step += stats["sgd_steps"]
+        if stats["kl_max"] > 2 * cfg["target_kl"]:
+            actor_lr = max(cfg["learning_rate_min"], actor_lr / cfg["kl_adapt_factor"])
+        elif stats["kl_max"] < cfg["target_kl"] / 2 and not stats["budget_exhausted"]:
+            actor_lr = min(cfg["learning_rate_max"], actor_lr * cfg["kl_adapt_factor"])
         replay.extend({k: r[k] for k in REPLAY_KEYS} for r in rows if r["teacher"] >= 0)
         ctx.log(
             **stats,
             iteration=iteration,
             games=len(records),
             collect_seconds=resources["seconds"],
+            next_actor_lr=actor_lr,
         )
         ctx.save_actor(actor)
     return actor

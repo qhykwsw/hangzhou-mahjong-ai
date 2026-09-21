@@ -17,6 +17,7 @@ from mahjong_ai.recipes.service import (
     RecipeIteration,
     compact_metrics,
     copy_recipe,
+    memory_summary,
     recipe_files,
     smoke_extension,
     tree_hash,
@@ -484,6 +485,7 @@ def server(workspace, experiment, trial_id, job_root):
             "metrics": [compact_metrics(r) for r in (output.get("metrics") or [])[-3:]],
             "training_seconds": status.get("training_seconds"),
             "overrun_seconds": status.get("overrun_seconds"),
+            **memory_summary(status),
         }
         infrastructure = result.get("status") == "failed"
         with store.edit(experiment) as (s, db):

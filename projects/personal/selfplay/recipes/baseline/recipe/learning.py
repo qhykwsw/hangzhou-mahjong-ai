@@ -118,226 +118,209 @@ def _finite(value, name):
 
 
 def update(actor, critic, actor_opt, critic_opt, rows, cfg, w, replay, rng):
-    """Run up to cfg['epochs'] PPO passes, accumulating microbatch gradients.
+    """One rollout: PPO for the Actor under a KL budget, full epochs for the Critic.
 
-    Config keys: clip=.1, epochs=2, minibatch=128, effective_minibatch=512,
-    target_kl=.01, entropy=.001, lambda_max=1, bc_only=False. Learning rates
-    belong to the supplied optimizers (the runner may schedule them).
-    For bc_only, teacher CE alone is optimized and Critic/statistics are untouched.
-    For critic_only, the Actor is frozen and only the value loss is optimized.
-    In joint mode w=0 avoids all label/replay access; teacher=-1 is then valid.
-    KL is measured before stepping over a complete effective minibatch. Exceeding
-    target_kl discards its gradients and stops both updates for this rollout.
+    Config keys: clip, epochs, minibatch (microbatch), effective_minibatch,
+    target_kl, kl_stop_factor, entropy, lambda_max, actor_lr, warmup_steps,
+    actor_step (Actor steps already taken in this run), critic_only, deadline.
+
+    KL to the behaviour policy is measured on each effective minibatch before
+    its step. Above kl_stop_factor * target_kl the Actor stops for the rest of
+    this rollout and that minibatch's Actor gradients are discarded; the Critic
+    keeps fitting every minibatch of every epoch, since its target does not
+    depend on how far the Actor moved. Fresh Adam moments make the first steps
+    sign-like at full size, so the Actor learning rate warms up linearly over
+    warmup_steps. The caller adapts actor_lr from the returned kl_max.
     """
     if not rows:
         raise ValueError("cannot update from empty rows")
     if not math.isfinite(w) or not 0 <= w <= 1:
         raise ValueError("teacher guidance w must be finite and in [0, 1]")
-    bc_only = bool(cfg.get("bc_only", False))
     micro = int(cfg.get("minibatch", 128))
     effective = int(cfg.get("effective_minibatch", 512))
     epochs = int(cfg.get("epochs", 2))
     clip = float(cfg.get("clip", 0.1))
     target_kl = float(cfg.get("target_kl", 0.01))
+    stop_threshold = target_kl * float(cfg.get("kl_stop_factor", 2.0))
     entropy_coef = float(cfg.get("entropy", 0.001))
     lambda_max = float(cfg.get("lambda_max", 1.0))
+    actor_lr = float(cfg["actor_lr"])
+    warmup = int(cfg.get("warmup_steps", 0))
+    actor_step = int(cfg.get("actor_step", 0))
+    deadline = cfg.get("deadline", float("inf"))
     if min(micro, effective, epochs) < 1 or not 0 < clip < 1:
         raise ValueError("invalid PPO batch size, epochs or clip")
     if not all(
-        math.isfinite(x) and x >= 0 for x in (target_kl, entropy_coef, lambda_max)
+        math.isfinite(x) and x >= 0
+        for x in (target_kl, stop_threshold, entropy_coef, lambda_max, actor_lr)
     ):
         raise ValueError("invalid PPO coefficients")
     critic_only = bool(cfg.get("critic_only", False))
-    if critic_only and bc_only:
-        raise ValueError("critic_only and bc_only are exclusive")
-    coefficient = 1.0 if bc_only else 0.0 if critic_only else lambda_max * w
+    coefficient = 0.0 if critic_only else lambda_max * w
     # A history buffer is only dereferenced when its loss is actually enabled.
     use_replay = coefficient > 0 and bool(replay)
     device = next(actor.parameters()).device
     count = len(rows)
-    required = {"planes", "scalars", "events", "mask"}
-    if not bc_only:
-        required |= {
-            "action",
-            "logprob",
-            "value",
-            "reward",
-            "adv",
-            "ret",
-            "oracle_planes",
-            "oracle_scalars",
-        }
+    required = {"planes", "scalars", "events", "mask", "action", "logprob"}
+    required |= {"value", "reward", "adv", "ret", "oracle_planes", "oracle_scalars"}
     if coefficient:
         required |= {"teacher", "label_version"}
     for row in rows:
         if missing := required - row.keys():
             raise ValueError(f"missing training fields: {sorted(missing)}")
-    if bc_only:
-        normalized_adv = np.zeros(count, dtype=np.float32)
-    else:
-        adv = np.asarray([row["adv"] for row in rows], dtype=np.float64)
-        returns = torch.as_tensor(
-            [row["ret"] for row in rows],
-            dtype=torch.float32,
-            device=device,
-        )
-        if not np.isfinite(adv).all():
-            raise FloatingPointError("nonfinite rollout advantages")
-        _finite(returns, "rollout returns")
-        normalized_adv = ((adv - adv.mean()) / max(adv.std(), 1e-8)).astype(np.float32)
-        critic.head.update_stats(returns, critic_opt)
+    adv = np.asarray([row["adv"] for row in rows], dtype=np.float64)
+    returns = torch.as_tensor(
+        [row["ret"] for row in rows], dtype=torch.float32, device=device
+    )
+    if not np.isfinite(adv).all():
+        raise FloatingPointError("nonfinite rollout advantages")
+    _finite(returns, "rollout returns")
+    normalized_adv = ((adv - adv.mean()) / max(adv.std(), 1e-8)).astype(np.float32)
+    critic.head.update_stats(returns, critic_opt)
     actor.train()
-    if not bc_only:
-        critic.train()
-    metrics = {
-        key: 0.0
-        for key in (
-            "loss",
-            "policy_loss",
-            "teacher_loss",
-            "value_loss",
-            "entropy",
-            "approx_kl",
-            "clipfrac",
-        )
-    }
-    accepted_samples = 0
-    steps = 0
-    early_stop = False
+    critic.train()
+    actor_keys = ("policy_loss", "teacher_loss", "entropy", "approx_kl", "clipfrac")
+    actor_sums = dict.fromkeys(actor_keys, 0.0)
+    value_sum = 0.0
+    actor_active = not critic_only
+    actor_steps = critic_steps = actor_samples = critic_samples = 0
+    kl_max = 0.0
+    stopped_kl = None
     budget_exhausted = False
-    stop_kl = 0.0
     try:
         for _ in range(epochs):
             order = _permutation(rng, count)
             for start in range(0, count, effective):
-                if time.time() >= cfg.get("deadline", float("inf")):
+                if time.time() >= deadline:
                     budget_exhausted = True
                     break
                 group = order[start : start + effective]
                 actor_opt.zero_grad(set_to_none=True)
-                if not bc_only:
-                    critic_opt.zero_grad(set_to_none=True)
-                group_metrics = dict.fromkeys(metrics, 0.0)
+                critic_opt.zero_grad(set_to_none=True)
+                group_actor = dict.fromkeys(actor_keys, 0.0)
+                group_value = 0.0
                 for offset in range(0, len(group), micro):
-                    if time.time() >= cfg.get("deadline", float("inf")):
+                    if time.time() >= deadline:
                         budget_exhausted = True
                         break
                     indices = group[offset : offset + micro]
                     mb = make_batch([rows[int(i)] for i in indices], device)
-                    logits = actor(*_actor_args(mb))
-                    logp = masked_log_probs(logits, mb["mask"])
-                    entropy = (
-                        -(logp.exp() * logp.masked_fill(~mb["mask"], 0)).sum(-1).mean()
-                    )
-                    zero = logits.new_zeros(())
-                    policy_loss = approx_kl = clipfrac = value_loss = zero
-                    if not bc_only:
+                    weight = len(indices) / len(group)
+                    if actor_active:
+                        logits = actor(*_actor_args(mb))
+                        logp = masked_log_probs(logits, mb["mask"])
+                        entropy = (
+                            -(logp.exp() * logp.masked_fill(~mb["mask"], 0))
+                            .sum(-1)
+                            .mean()
+                        )
                         _check_actions(mb["action"], mb["mask"], "sampled")
                         log_ratio = (
                             logp.gather(1, mb["action"][:, None]).squeeze(1)
                             - mb["logprob"]
                         )
                         ratio = log_ratio.exp()
+                        _finite(ratio, "PPO ratio")
                         advantages = torch.as_tensor(
                             normalized_adv[indices], device=device
                         )
-                        _finite(ratio, "PPO ratio")
                         policy_loss = -torch.minimum(
                             ratio * advantages,
                             ratio.clamp(1 - clip, 1 + clip) * advantages,
                         ).mean()
-                        approx_kl = ((ratio - 1) - log_ratio).mean().detach()
-                        clipfrac = ((ratio - 1).abs() > clip).float().mean().detach()
-                        predictions = critic.normalized_value(*_critic_args(mb))
-                        value_loss = F.mse_loss(
-                            predictions, critic.head.normalize(mb["ret"])
+                        teacher_loss = logits.new_zeros(())
+                        if coefficient > 0:
+                            _check_actions(mb["teacher"], mb["mask"], "teacher")
+                            teacher_loss = -logp.gather(
+                                1, mb["teacher"][:, None]
+                            ).mean()
+                            if use_replay:
+                                # Weight is exactly 90/10, regardless of integer rounding.
+                                old = make_batch(
+                                    _sample_replay(
+                                        rng, replay, max(1, math.ceil(len(indices) / 9))
+                                    ),
+                                    device,
+                                )
+                                old_loss = teacher_cross_entropy(
+                                    actor(*_actor_args(old)),
+                                    old["mask"],
+                                    old["teacher"],
+                                )
+                                teacher_loss = 0.9 * teacher_loss + 0.1 * old_loss
+                        actor_loss = (
+                            coefficient * teacher_loss
+                            + policy_loss
+                            - entropy_coef * entropy
                         )
-                    teacher_loss = zero
-                    if coefficient > 0:
-                        _check_actions(mb["teacher"], mb["mask"], "teacher")
-                        teacher_loss = -logp.gather(1, mb["teacher"][:, None]).mean()
-                        if use_replay:
-                            # Weight is exactly 90/10, regardless of integer sample rounding.
-                            old = make_batch(
-                                _sample_replay(
-                                    rng, replay, max(1, math.ceil(len(indices) / 9))
-                                ),
-                                device,
-                            )
-                            old_loss = teacher_cross_entropy(
-                                actor(*_actor_args(old)), old["mask"], old["teacher"]
-                            )
-                            teacher_loss = 0.9 * teacher_loss + 0.1 * old_loss
-                    actor_loss = coefficient * teacher_loss
-                    if not bc_only:
-                        actor_loss = actor_loss + policy_loss - entropy_coef * entropy
-                    _finite(actor_loss, "actor loss")
-                    _finite(value_loss, "value loss")
-                    weight = len(indices) / len(group)
-                    if not critic_only:
+                        _finite(actor_loss, "actor loss")
                         (actor_loss * weight).backward()
-                    if not bc_only:
-                        (value_loss * weight).backward()
-                    values = dict(
-                        loss=actor_loss.detach() + value_loss.detach(),
-                        policy_loss=policy_loss.detach(),
-                        teacher_loss=teacher_loss.detach(),
-                        value_loss=value_loss.detach(),
-                        entropy=entropy.detach(),
-                        approx_kl=approx_kl.detach(),
-                        clipfrac=clipfrac.detach(),
+                        values = dict(
+                            policy_loss=policy_loss,
+                            teacher_loss=teacher_loss,
+                            entropy=entropy,
+                            approx_kl=((ratio - 1) - log_ratio).mean(),
+                            clipfrac=((ratio - 1).abs() > clip).float().mean(),
+                        )
+                        for key, value in values.items():
+                            group_actor[key] += float(value.detach()) * weight
+                    predictions = critic.normalized_value(*_critic_args(mb))
+                    value_loss = F.mse_loss(
+                        predictions, critic.head.normalize(mb["ret"])
                     )
-                    for key, value in values.items():
-                        group_metrics[key] += float(value) * weight
-                if time.time() >= cfg.get("deadline", float("inf")):
+                    _finite(value_loss, "value loss")
+                    (value_loss * weight).backward()
+                    group_value += float(value_loss.detach()) * weight
+                if budget_exhausted or time.time() >= deadline:
                     budget_exhausted = True
-                if budget_exhausted:
                     actor_opt.zero_grad(set_to_none=True)
                     critic_opt.zero_grad(set_to_none=True)
                     break
-                if (
-                    not bc_only
-                    and not critic_only
-                    and group_metrics["approx_kl"] > target_kl
-                ):
-                    early_stop, stop_kl = True, group_metrics["approx_kl"]
-                    actor_opt.zero_grad(set_to_none=True)
-                    critic_opt.zero_grad(set_to_none=True)
-                    break
-                if not critic_only:
-                    torch.nn.utils.clip_grad_norm_(
-                        actor.parameters(), 1.0, error_if_nonfinite=True
-                    )
-                if not bc_only:
-                    torch.nn.utils.clip_grad_norm_(
-                        critic.parameters(), 1.0, error_if_nonfinite=True
-                    )
-                if not critic_only:
-                    actor_opt.step()
-                if not bc_only:
-                    critic_opt.step()
-                accepted_samples += len(group)
-                steps += 1
-                for key, value in group_metrics.items():
-                    metrics[key] += value * len(group)
-            if early_stop or budget_exhausted:
+                if actor_active:
+                    kl_max = max(kl_max, group_actor["approx_kl"])
+                    if group_actor["approx_kl"] > stop_threshold:
+                        actor_active = False
+                        stopped_kl = group_actor["approx_kl"]
+                        actor_opt.zero_grad(set_to_none=True)
+                    else:
+                        taken = actor_step + actor_steps + 1
+                        scale = min(1.0, taken / warmup) if warmup > 0 else 1.0
+                        for param_group in actor_opt.param_groups:
+                            param_group["lr"] = actor_lr * scale
+                        torch.nn.utils.clip_grad_norm_(
+                            actor.parameters(), 1.0, error_if_nonfinite=True
+                        )
+                        actor_opt.step()
+                        actor_steps += 1
+                        actor_samples += len(group)
+                        for key, value in group_actor.items():
+                            actor_sums[key] += value * len(group)
+                torch.nn.utils.clip_grad_norm_(
+                    critic.parameters(), 1.0, error_if_nonfinite=True
+                )
+                critic_opt.step()
+                critic_steps += 1
+                critic_samples += len(group)
+                value_sum += group_value * len(group)
+            if budget_exhausted:
                 break
         for name, model in (("actor", actor), ("critic", critic)):
-            if name == "critic" and bc_only:
-                continue
             for parameter in model.parameters():
                 _finite(parameter, f"{name} parameter")
     finally:
         actor.eval()
-        if not bc_only:
-            critic.eval()
-    stats = {key: value / max(1, accepted_samples) for key, value in metrics.items()}
+        critic.eval()
+    stats = {key: value / max(1, actor_samples) for key, value in actor_sums.items()}
     stats.update(
+        value_loss=value_sum / max(1, critic_samples),
         samples=count,
-        optimized_samples=accepted_samples,
-        sgd_steps=steps,
-        early_stop=early_stop,
-        stop_kl=stop_kl,
+        optimized_samples=actor_samples,
+        sgd_steps=actor_steps,
+        critic_steps=critic_steps,
+        kl_max=kl_max,
+        early_stop=stopped_kl is not None,
+        stop_kl=stopped_kl or 0.0,
+        actor_lr=actor_lr,
         critic_only=critic_only,
         teacher_coefficient=coefficient,
         budget_exhausted=budget_exhausted,

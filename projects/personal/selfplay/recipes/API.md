@@ -8,6 +8,7 @@
 - 游戏环境、规则和奖励：每局结束时，学习座位得到该局桌面分（除以底分）。
 - 对手和教师：冻结的四个规则代表，教师是其中的规则冠军。
 - 时间预算：从 `train` 被调用开始计时，到 `ctx.deadline` 截止；超过宽限期，进程被强制结束。
+- 资源上限：显存按方案线配置的比例封顶，超出时在进程内抛出 CUDA out of memory，不会溢出到共享内存；训练进程组（含对局进程）的常驻内存超过上限时整组被强制结束。两种情况都记为训练失败并消耗额度，上限见 `ctx.resources`，训练回执里有实际峰值。
 - 评估和晋级：训练后的 Actor 和现役 Actor 在同样的牌墙、座位和对手上各打同样场数（默认 4096 场，实验创建时冻结），配对差的 95% 区间下界大于 0 才晋级。
 
 ## `train(ctx)`
@@ -21,7 +22,7 @@
 | `actor` | 已加载起点权重、在 GPU 上的 Actor |
 | `device`、`seed`、`deadline`、`time_left()` | 设备、随机种子、截止时刻、剩余秒数 |
 | `smoke` | 自检运行时为真，此时时限只有约 90 秒 |
-| `resources` | `cpu_capacity`、`cpu_count`、`gpu_total_bytes`、建议的 `workers` 与 `tables` |
+| `resources` | `cpu_capacity`、`cpu_count`、`gpu_total_bytes`、`gpu_limit_bytes`、`ram_limit_bytes`、建议的 `workers` 与 `tables` |
 | `teacher`、`rules`、`bundle` | 教师 ID、四个规则对手 ID、冻结包路径 |
 | `new_actor()` | 同结构的新 Actor，例如用作自身历史快照对手 |
 | `collect(actor, cfg, samples=, iteration=, labels=False, history=None, hooks=None)` | 采集训练对局，见下文 |
@@ -40,7 +41,7 @@
 
 | 键 | 作用 |
 | --- | --- |
-| `workers`、`tables` | 对局进程数和每个进程同时打的桌数 |
+| `workers`、`tables` | 对局进程数（不超过 CPU 核数）和每个进程同时打的桌数。达到 `samples` 后不再开新局，但在途的整场要打完，实际样本约多出 `workers × tables` 场 |
 | `history_probability` | 对手座位从 `history`（`{"model:名字": Actor}`）抽取的概率，其余抽规则代表 |
 | `critic_features` | `"模块:函数"`，在对局进程里对每个学习决策调用 `f(state, seat)`，返回的数组并入该行；`state` 是完整的 HandState，可读对手手牌和按摸牌顺序排列的牌墙 |
 | `finish_game` | `"模块:函数"`，每整场结束时在对局进程里调用 `f(rows, cfg)`，必须给每行写入 `adv` 和 `ret` |

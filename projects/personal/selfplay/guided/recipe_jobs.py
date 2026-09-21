@@ -258,11 +258,14 @@ def trial_train(task, progress, smoke=False):
         "smoke_seconds": task.get("smoke_seconds", 90),
         "seed": task["seed"],
         "line": task["line"],
+        "limits": task.get("limits") or {},
+        "snapshot_seconds": task.get("snapshot_seconds") or [],
     }
     budget = plan["smoke_seconds"] if smoke else plan["budget_seconds"]
     status = _run_remote(
         task, progress, "smoke" if smoke else "train", plan, budget + 900
     )
+    snapshots = _fetch(task, "snapshots.json") if task.get("snapshot_seconds") else None
     metrics = _fetch(task, "metrics.jsonl")
     rows = []
     if metrics:
@@ -278,6 +281,7 @@ def trial_train(task, progress, smoke=False):
         if status.get("state") == "complete"
         else None,
         "metrics": rows[-400:],
+        "snapshots": json.loads(snapshots.read_text()) if snapshots else [],
     }
 
 
@@ -319,12 +323,27 @@ def trial_brawl(task, progress):
     }
 
 
+def trial_curve(task, progress):
+    plan = {
+        k: task[k]
+        for k in ("source_id", "bundle", "reference", "targets", "games", "seed")
+    } | {"namespace": task["namespace"], "execution": task["execution"]}
+    status = _run_remote(task, progress, "curve", plan, 6 * 3600)
+    path = _fetch(task, "result.json") if status.get("state") == "complete" else None
+    return {
+        "status": status,
+        "ok": path is not None,
+        "result": json.loads(path.read_text()) if path else None,
+    }
+
+
 KINDS = {
     "prepare": prepare,
     "smoke": lambda task, progress: trial_train(task, progress, smoke=True),
     "train": trial_train,
     "evaluate": trial_evaluate,
     "brawl": trial_brawl,
+    "curve": trial_curve,
 }
 
 

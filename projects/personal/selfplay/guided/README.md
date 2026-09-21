@@ -42,7 +42,7 @@
 | `deployment` | Actor 导出、基准测试与独立 HTTP 推理服务 |
 | `resources` / `tune_evaluation` | 按 CPU 亲和性、cgroup 配额与可用显存给出初始并发，再在固定赛程上实测校准 |
 | `brawl` / `brawl_pipeline` | 5、8、10 或 11 个冻结策略的均衡大乱斗；流水线按校准、混合对局冒烟、计分比赛顺序执行，遇错停止 |
-| `trial` / `recipe_jobs` | 训练方案迭代：远端框架在固定时限内调用 `recipe.train(ctx)`、做配对评估与五方大乱斗；Mac 侧任务负责部署、上传方案、脱离运行与轮询 |
+| `trial` / `recipe_jobs` | 训练方案迭代：远端框架在固定时限和显存、内存上限内调用 `recipe.train(ctx)`，做配对评估与五方大乱斗；`snapshot_seconds` 与 `curve` 用于训练时长曲线。Mac 侧任务负责部署、上传方案、脱离运行与轮询 |
 | `overnight` | 同机启动方式对照（A 直接联合训练，B 先纯模仿再联合训练） |
 | `bc_curve` | 纯模仿时长曲线：定时快照逐个与规则冠军配对评估 |
 | `scale_probe` / `scale_batch` / `scale_study` / `scale_monitor` | 模型规模的资源探针、微批次测量、较长的监督学习对照与只读监控 |

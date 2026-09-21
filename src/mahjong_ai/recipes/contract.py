@@ -37,7 +37,19 @@ def trial_brief(trial):
         "challenger": evaluation.get("challenger"),
         "incumbent": evaluation.get("incumbent"),
         "training": {
-            k: training.get(k) for k in ("state", "seconds", "updates", "last")
+            k: training.get(k)
+            for k in (
+                "state",
+                "reason",
+                "seconds",
+                "updates",
+                "last",
+                "gpu_peak_gb",
+                "gpu_limit_gb",
+                "ram_peak_gb",
+                "ram_limit_gb",
+            )
+            if training.get(k) is not None
         }
         if training
         else None,

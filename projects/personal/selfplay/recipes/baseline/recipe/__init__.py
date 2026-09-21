@@ -1,4 +1,4 @@
-"""Baseline training recipe: joint PPO with a fixed teacher cross-entropy term."""
+"""Baseline recipe: teacher-assisted PPO whose Actor step size tracks a per-rollout KL target."""
 
 from .loop import train
 
