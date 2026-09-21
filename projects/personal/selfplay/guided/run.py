@@ -54,6 +54,7 @@ def train(
     eval_enabled=True,
     max_updates=None,
     snapshot_seconds=None,
+    reference=None,
 ):
     import numpy as np
     import torch
@@ -62,6 +63,7 @@ def train(
     from .evaluation import evaluate
     from .learning import update
     from .networks import Actor, Critic
+    from .statistics import interval
 
     code_id = bootstrap.verify_source()
     if snapshot_seconds is not None and (snapshot_seconds <= 0 or resume or carry):
@@ -96,10 +98,16 @@ def train(
     active = Path(read_bundle(bundle_path)["manifest_path"])
     panel_path = Path(read_bundle(panel_path)["manifest_path"])
     source = existing if resume else initial
+    reference = str(Path(reference).resolve()) if reference else None
     if source:
         state = torch.load(source, map_location=device, weights_only=False)
         actor.load_state_dict(state["actor"])
         critic.load_state_dict(state["critic"])
+        if resume:
+            recorded = state.get("reference")
+            if reference is not None and reference != recorded:
+                raise ValueError("resume must keep the recorded evaluation reference")
+            reference = recorded
         if resume or carry:
             if state["config"] != cfg:
                 raise ValueError("resume must use the recorded configuration")
@@ -134,6 +142,15 @@ def train(
                         "carried run has a best score but no best checkpoint"
                     )
                 shutil.copy2(inherited_best, run_dir / "best.pt")
+    # A fixed Actor (e.g. the imitation starting point) evaluated on the same walls
+    # as every generation, so improvement over it is measured as a paired difference.
+    references = {}
+    if reference:
+        ref = Actor(cfg["dim"], cfg["layers"], cfg["heads"]).to(device)
+        ref.load_state_dict(
+            torch.load(reference, map_location=device, weights_only=False)["actor"]
+        )
+        references["model:reference"] = ref.eval()
     atomic_json(run_dir / "config.json", cfg)
     read_bundle(active)
     read_bundle(panel_path)
@@ -166,6 +183,7 @@ def train(
             "history": history_paths,
             "replay": list(replay),
             "best_history": best_history,
+            "reference": reference,
             "numpy_rng": rng.bit_generator.state,
             "torch_rng": torch.get_rng_state(),
             "cuda_rng": torch.cuda.get_rng_state_all() if device.type == "cuda" else [],
@@ -299,10 +317,23 @@ def train(
                 except (ValueError, OSError, KeyError) as exc:
                     log("teacher_rejected", reason=str(exc))
                 generation += 1
-                try:
-                    result = evaluate(
-                        actor, critic, cfg, candidate, panel_path, generation, deadline
+
+                def assess(bundle):
+                    targets = ["model:current", read_bundle(bundle)["teacher"]]
+                    return evaluate(
+                        actor,
+                        critic,
+                        cfg,
+                        bundle,
+                        panel_path,
+                        generation,
+                        deadline,
+                        targets=targets + list(references),
+                        history=references,
                     )
+
+                try:
+                    result = assess(candidate)
                 except (ValueError, TimeoutError, RuntimeError) as exc:
                     if candidate != active and time.time() < deadline:
                         log(
@@ -310,15 +341,18 @@ def train(
                             reason=str(exc),
                             candidate=str(candidate),
                         )
-                        result = evaluate(
-                            actor, critic, cfg, active, panel_path, generation, deadline
-                        )
+                        result = assess(active)
                         candidate = active
                     elif time.time() < deadline:
                         raise
                     else:
                         log("evaluation_incomplete_at_deadline")
                         break
+                if references:
+                    result["reference_minus_student"] = interval(
+                        np.asarray(result["results"]["model:reference"]["group_scores"])
+                        - np.asarray(result["results"]["model:current"]["group_scores"])
+                    )
                 atomic_json(run_dir / "evaluation" / f"{generation:04d}.json", result)
                 active, w = candidate, result["w"]
                 score = result["results"]["model:current"]["mean"]
@@ -326,16 +360,16 @@ def train(
                 next_eval = time.time() + max(
                     cfg["evaluation_seconds"], 9 * result["resources"]["seconds"]
                 )
-                snapshot = run_dir / "history" / f"{generation:04d}.pt"
-                snapshot.parent.mkdir(parents=True, exist_ok=True)
+                frozen = run_dir / "history" / f"{generation:04d}.pt"
+                frozen.parent.mkdir(parents=True, exist_ok=True)
                 torch.save(
                     {"format": "guided-v1", "actor": actor.state_dict(), "config": cfg},
-                    snapshot,
+                    frozen,
                 )
-                history_paths.append(str(snapshot.resolve()))
+                history_paths.append(str(frozen.resolve()))
                 if best is None or score > best:
                     best = score
-                    best_history = str(snapshot.resolve())
+                    best_history = str(frozen.resolve())
                     save(run_dir / "best.pt")
                 history_paths = history_paths[-(cfg["history_capacity"] - 1) :]
                 if best_history and best_history not in history_paths:
@@ -346,6 +380,7 @@ def train(
                     w=w,
                     teacher=result["teacher"],
                     difference=result["teacher_minus_student"],
+                    reference=result.get("reference_minus_student"),
                 )
             if time.time() - last_save >= cfg["checkpoint_seconds"]:
                 save(existing)
@@ -394,6 +429,9 @@ def main():
     p.add_argument("--no-eval", action="store_true")
     p.add_argument("--max-updates", type=int)
     p.add_argument("--snapshot-seconds", type=int)
+    p.add_argument(
+        "--reference", help="fixed Actor checkpoint added to every evaluation"
+    )
     args = p.parse_args()
     cfg = configuration(
         **(json.loads(Path(args.config).read_text()) if args.config else {})
@@ -412,6 +450,7 @@ def main():
         eval_enabled=not args.no_eval,
         max_updates=args.max_updates,
         snapshot_seconds=args.snapshot_seconds,
+        reference=args.reference,
     )
 
 

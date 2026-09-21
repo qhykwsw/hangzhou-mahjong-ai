@@ -261,3 +261,70 @@ def test_carry_preserves_inherited_best_even_when_latest_is_different(
     latest = torch.load(target / "latest.pt", weights_only=False)
     assert torch.equal(best["actor"][key], state["actor"][key])
     assert not torch.equal(best["actor"][key], latest["actor"][key])
+
+
+def test_evaluation_with_reference_keeps_snapshots_working(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from guided import evaluation
+    from guided import run as runner
+    from guided.networks import Actor
+
+    now = [0.0]
+    monkeypatch.setattr(runner, "time", SimpleNamespace(time=lambda: now[0]))
+    manifest = tmp_path / "teacher.json"
+    monkeypatch.setattr(
+        artifacts,
+        "read_bundle",
+        lambda *a, **kw: {
+            "manifest_path": str(manifest),
+            "id": "fixed",
+            "teacher": "teacher",
+        },
+    )
+    monkeypatch.setattr(
+        collection, "collect", lambda *a, **kw: ([{"teacher": -1}], [], {})
+    )
+
+    def update(*args):
+        now[0] += 6
+        return {}
+
+    monkeypatch.setattr(learning, "update", update)
+    calls = []
+
+    def evaluate(*args, targets, history):
+        calls.append((targets, history))
+        scores = {"model:current": [1.0, 2.0], "teacher": [2.0, 2.0]}
+        scores["model:reference"] = [0.0, 1.5]
+        return {
+            "w": 0.5,
+            "teacher": "teacher",
+            "teacher_minus_student": {},
+            "resources": {"seconds": 0},
+            "results": {
+                k: {"mean": sum(v) / 2, "group_scores": v} for k, v in scores.items()
+            },
+        }
+
+    monkeypatch.setattr(evaluation, "evaluate", evaluate)
+    cfg = configuration(dim=16, layers=1, heads=2, device="cpu", evaluation_seconds=0)
+    reference = tmp_path / "reference.pt"
+    torch.save({"actor": Actor(16, 1, 2).state_dict()}, reference)
+    root = tmp_path / "run"
+    train(
+        root,
+        cfg,
+        manifest,
+        manifest,
+        deadline=12,
+        snapshot_seconds=5,
+        reference=reference,
+    )
+    targets, history = calls[0]
+    assert targets == ["model:current", "teacher", "model:reference"]
+    assert list(history) == ["model:reference"]
+    assert (root / "snapshots/final.pt").exists()
+    result = json.loads((root / "evaluation/0001.json").read_text())
+    assert result["reference_minus_student"]["mean"] == pytest.approx(-0.75)
+    state = torch.load(root / "latest.pt", weights_only=False)
+    assert state["reference"] == str(reference.resolve())

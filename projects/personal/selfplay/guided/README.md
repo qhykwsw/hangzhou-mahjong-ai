@@ -60,6 +60,11 @@ export PYTHONPATH="$HOME/code/leihuo_majiang/.local/guided-deps/numpy-2.1.2:src:
   --config <config.json> --deadline <unix-epoch-seconds> \
   --initial <initial.pt> --bc-seconds 2400 --snapshot-seconds 600
 
+# 从已有的纯模仿快照直接联合训练，并把起点作为每代评估的固定参照
+"$TRAIN_PY" -m guided.run --run <run-dir> --bundle ... --panel ... --config <config.json> \
+  --deadline <unix-epoch-seconds> --initial <actor+critic.pt> --reference <start-actor.pt> \
+  --updates <teachers/current.json>
+
 # 实验目录驱动的对照与比赛
 "$TRAIN_PY" -m guided.overnight preflight|suite|evaluate --root <dir> [--route A|B]
 "$TRAIN_PY" -m guided.bc_curve suite|evaluate --root <dir>
@@ -80,7 +85,7 @@ export PYTHONPATH="$HOME/code/leihuo_majiang/.local/guided-deps/numpy-2.1.2:src:
 
 - 教师只在学生实际访问的合法观察上标注动作，标签只进入监督交叉熵；PPO 比率只用学生自己的行为与概率，教师代打的样本不冒充 on-policy 数据。历史示范缓存只参与监督项。
 - 纯模仿阶段只更新 Actor，Critic 与其优化器不动；进入联合训练前保存 `bc-final.pt`。定时快照在跨过时间节点后的完整更新边界保存，记录实际时间、更新次数与样本量，不覆盖中途版本。
-- 联合训练中的指导强度 `w = clip((d + u) / D, 0, 1)`，`d` 为教师减学生的配对场均桌面分差，`u` 为 95% 区间半宽；首次评估前 `w = 1`。
+- 联合训练中的指导强度 `w = clip((d + u) / D, 0, 1)`，`d` 为教师减学生的配对场均桌面分差，`u` 为 95% 区间半宽；首次评估前 `w = 1`。`--reference` 给定的固定 Actor 与学生、教师在同一批牌墙上评估，结果里的 `reference_minus_student` 衡量相对起点的进步；续跑沿用记录的参照。
 - 奖励是每局本人收支除以底分，整场之和等于桌面分，不做塑形和裁剪。Critic 读取三家手牌与牌墙构成，只在训练进程内使用，不随 Actor 发布。
 - 评估面板在一个实验内固定：同组牌墙四座轮换，按完整四座组计算配对均值差与区间。区间跨零只表示没分出高下，不等于持平或已到学习上限；多组比较未做多重校正。
 - 大乱斗每组内各策略的出场与座位次数一致：8 方循环覆盖全部 70 种四人阵容，10 方覆盖全部 210 种。跨项目比赛的赛程、身份、回执和报告放仓库根 `.local/competition/runs/`，与规则自迭代的研究榜单分开。
