@@ -3,6 +3,7 @@
 人工维护的策略项目，有两条互不共享检查点的训练路线，都用 PyTorch 训练：
 
 - **规则教师指导**（[`guided/`](guided/)，新实验使用）：以规则研究的冻结冠军为教师，先纯模仿，再用真实桌面分做 PPO 并保留按师生差距调整的教师辅助损失；Actor 由独立 GPU 服务推理，正式内网比赛部署在 4070。用法见[训练手册](guided/README.md)，决定见 [ADR-0011](../../../docs/adr/0011-rule-guided-policy-learning.md)。
+- **训练方案迭代**（`recipes/` + `guided/trial.py`）：研究模型反复修改模仿之后的强化学习训练方案，每次从固定起点限时训练、与现役模型配对评估，在工作台的「训练方案迭代」页查看。决定见 [ADR-0012](../../../docs/adr/0012-recipe-iteration-for-rl-training.md)，接口见 [recipes/API.md](recipes/API.md)。
 - **自我对弈 PPO**（`train/`，下文）：联赛池自我对弈，ONNX Runtime 发布到平台。设计见 [ADR-0009](../../../docs/adr/0009-independent-selfplay-trainer-for-personal-project.md)。
 
 术语（联赛池、桌面分、阶段总分、教师策略）见 [CONTEXT.md](../../../CONTEXT.md)。
@@ -16,6 +17,7 @@ selfplay/
 │   ├── strategy.py     # build(model_dir) 入口
 │   └── selfplay_core/  # actions（231 动作编号）、encoding（观察编码）、policy（ONNX 推理）
 ├── guided/             # 规则教师指导路线，依赖 torch，不进发布包；见 guided/README.md
+├── recipes/            # 训练方案迭代：iteration.toml 固定条件、baseline/ 初始方案、API.md 接口
 ├── train/              # 自我对弈训练器，依赖 torch，不进发布包
 │   ├── run.py          # 入口：fork 环境进程 → GPU 批量推理 + PPO + 联赛池
 │   ├── env.py          # 直接驱动 HandState 的对局；critic 隐藏状态；hold-back 轨迹装配

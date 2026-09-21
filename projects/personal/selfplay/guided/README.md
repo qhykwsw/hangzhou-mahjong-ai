@@ -4,6 +4,8 @@
 
 本路线不读取、不迁移 `train/` 的检查点，也不产出平台 ONNX 发布包；旧路线见[项目 README](../README.md)。
 
+模仿之后的强化学习目前通过训练方案迭代改进：研究模型修改训练方案（`../recipes/`），本目录的 `trial.py` 按固定时限训练、配对评估并跑大乱斗，由工作台服务里的编排器调度。决定见 [ADR-0012](../../../../docs/adr/0012-recipe-iteration-for-rl-training.md)，方案接口见 [recipes/API.md](../recipes/API.md)。
+
 ## 机器分工
 
 | 角色 | 主机 | 用途 |
@@ -39,7 +41,8 @@
 | `artifacts` / `sync` | 教师包的导出、校验与跨机发布 |
 | `deployment` | Actor 导出、基准测试与独立 HTTP 推理服务 |
 | `resources` / `tune_evaluation` | 按 CPU 亲和性、cgroup 配额与可用显存给出初始并发，再在固定赛程上实测校准 |
-| `brawl` / `brawl_pipeline` | 8 或 10 个冻结策略的均衡大乱斗；流水线按校准、混合对局冒烟、计分比赛顺序执行，遇错停止 |
+| `brawl` / `brawl_pipeline` | 5、8、10 或 11 个冻结策略的均衡大乱斗；流水线按校准、混合对局冒烟、计分比赛顺序执行，遇错停止 |
+| `trial` / `recipe_jobs` | 训练方案迭代：远端框架在固定时限内调用 `recipe.train(ctx)`、做配对评估与五方大乱斗；Mac 侧任务负责部署、上传方案、脱离运行与轮询 |
 | `overnight` | 同机启动方式对照（A 直接联合训练，B 先纯模仿再联合训练） |
 | `bc_curve` | 纯模仿时长曲线：定时快照逐个与规则冠军配对评估 |
 | `scale_probe` / `scale_batch` / `scale_study` / `scale_monitor` | 模型规模的资源探针、微批次测量、较长的监督学习对照与只读监控 |
@@ -88,7 +91,7 @@ export PYTHONPATH="$HOME/code/leihuo_majiang/.local/guided-deps/numpy-2.1.2:src:
 - 联合训练中的指导强度 `w = clip((d + u) / D, 0, 1)`，`d` 为教师减学生的配对场均桌面分差，`u` 为 95% 区间半宽；首次评估前 `w = 1`。`--reference` 给定的固定 Actor 与学生、教师在同一批牌墙上评估，结果里的 `reference_minus_student` 衡量相对起点的进步；续跑沿用记录的参照。
 - 奖励是每局本人收支除以底分，整场之和等于桌面分，不做塑形和裁剪。Critic 读取三家手牌与牌墙构成，只在训练进程内使用，不随 Actor 发布。
 - 评估面板在一个实验内固定：同组牌墙四座轮换，按完整四座组计算配对均值差与区间。区间跨零只表示没分出高下，不等于持平或已到学习上限；多组比较未做多重校正。
-- 大乱斗每组内各策略的出场与座位次数一致：8 方循环覆盖全部 70 种四人阵容，10 方覆盖全部 210 种。跨项目比赛的赛程、身份、回执和报告放仓库根 `.local/competition/runs/`，与规则自迭代的研究榜单分开。
+- 大乱斗每组内各策略的出场与座位次数一致：5 方覆盖全部 5 种四人阵容，8 方覆盖全部 70 种，10 方覆盖全部 210 种，11 方按循环移位的 30 个轨道排程。跨项目比赛的赛程、身份、回执和报告放仓库根 `.local/competition/runs/`，与规则自迭代的研究榜单分开。
 - `guided.deployment` 是独立 GPU 服务：`POST /act` 接收 `{"observation_payload": ...}` 完整公开观察并返回合法动作，`GET /health` 报告状态。它不是 ONNX 发布包，不改变平台 CPU/ONNX 发布契约，导出与测速也不会自动报名比赛。部署验收以 4070 实机的 10 桌并发为准，计时覆盖 HTTP、排队、编码、推理和回传。
 
 运行状态、完整配置和回执放本项目 `.local/`；各次实验的结论与待办汇总在本机 `.local/reports/guided-status.md`，具体成绩不写入本手册。
