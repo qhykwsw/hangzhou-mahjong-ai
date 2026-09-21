@@ -185,6 +185,36 @@ def test_joint_update_with_w_zero_ignores_labels_and_replay_but_updates_both_net
     assert all(np.isfinite(value) for value in stats.values())
 
 
+def test_critic_only_freezes_actor_and_ignores_labels():
+    actor, critic = _models()
+    rows = _rows(actor)
+    for row in rows:
+        row["teacher"] = -1
+        del row["label_version"]
+    before_actor = [p.detach().clone() for p in actor.parameters()]
+    before_critic = [p.detach().clone() for p in critic.parameters()]
+    stats = update(
+        actor,
+        critic,
+        torch.optim.Adam(actor.parameters(), lr=1e-3),
+        torch.optim.Adam(critic.parameters(), lr=1e-3),
+        rows,
+        dict(epochs=2, minibatch=2, effective_minibatch=2, critic_only=True),
+        1.0,
+        [{"malformed": "must never be inspected"}],
+        np.random.default_rng(3),
+    )
+    assert stats["critic_only"] and not stats["early_stop"]
+    assert stats["sgd_steps"] == 4 and stats["teacher_coefficient"] == 0
+    assert all(
+        torch.equal(old, new) for old, new in zip(before_actor, actor.parameters())
+    )
+    assert any(
+        not torch.equal(old, new)
+        for old, new in zip(before_critic, critic.parameters())
+    )
+
+
 def test_bc_only_leaves_critic_and_statistics_untouched_and_improves_teacher_loss():
     actor, critic = _models()
     rows = _rows(actor)

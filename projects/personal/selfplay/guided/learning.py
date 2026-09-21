@@ -124,6 +124,7 @@ def update(actor, critic, actor_opt, critic_opt, rows, cfg, w, replay, rng):
     target_kl=.01, entropy=.001, lambda_max=1, bc_only=False. Learning rates
     belong to the supplied optimizers (the runner may schedule them).
     For bc_only, teacher CE alone is optimized and Critic/statistics are untouched.
+    For critic_only, the Actor is frozen and only the value loss is optimized.
     In joint mode w=0 avoids all label/replay access; teacher=-1 is then valid.
     KL is measured before stepping over a complete effective minibatch. Exceeding
     target_kl discards its gradients and stops both updates for this rollout.
@@ -146,7 +147,10 @@ def update(actor, critic, actor_opt, critic_opt, rows, cfg, w, replay, rng):
         math.isfinite(x) and x >= 0 for x in (target_kl, entropy_coef, lambda_max)
     ):
         raise ValueError("invalid PPO coefficients")
-    coefficient = 1.0 if bc_only else lambda_max * w
+    critic_only = bool(cfg.get("critic_only", False))
+    if critic_only and bc_only:
+        raise ValueError("critic_only and bc_only are exclusive")
+    coefficient = 1.0 if bc_only else 0.0 if critic_only else lambda_max * w
     # A history buffer is only dereferenced when its loss is actually enabled.
     use_replay = coefficient > 0 and bool(replay)
     device = next(actor.parameters()).device
@@ -270,7 +274,8 @@ def update(actor, critic, actor_opt, critic_opt, rows, cfg, w, replay, rng):
                     _finite(actor_loss, "actor loss")
                     _finite(value_loss, "value loss")
                     weight = len(indices) / len(group)
-                    (actor_loss * weight).backward()
+                    if not critic_only:
+                        (actor_loss * weight).backward()
                     if not bc_only:
                         (value_loss * weight).backward()
                     values = dict(
@@ -290,19 +295,25 @@ def update(actor, critic, actor_opt, critic_opt, rows, cfg, w, replay, rng):
                     actor_opt.zero_grad(set_to_none=True)
                     critic_opt.zero_grad(set_to_none=True)
                     break
-                if not bc_only and group_metrics["approx_kl"] > target_kl:
+                if (
+                    not bc_only
+                    and not critic_only
+                    and group_metrics["approx_kl"] > target_kl
+                ):
                     early_stop, stop_kl = True, group_metrics["approx_kl"]
                     actor_opt.zero_grad(set_to_none=True)
                     critic_opt.zero_grad(set_to_none=True)
                     break
-                torch.nn.utils.clip_grad_norm_(
-                    actor.parameters(), 1.0, error_if_nonfinite=True
-                )
+                if not critic_only:
+                    torch.nn.utils.clip_grad_norm_(
+                        actor.parameters(), 1.0, error_if_nonfinite=True
+                    )
                 if not bc_only:
                     torch.nn.utils.clip_grad_norm_(
                         critic.parameters(), 1.0, error_if_nonfinite=True
                     )
-                actor_opt.step()
+                if not critic_only:
+                    actor_opt.step()
                 if not bc_only:
                     critic_opt.step()
                 accepted_samples += len(group)
@@ -327,6 +338,7 @@ def update(actor, critic, actor_opt, critic_opt, rows, cfg, w, replay, rng):
         sgd_steps=steps,
         early_stop=early_stop,
         stop_kl=stop_kl,
+        critic_only=critic_only,
         teacher_coefficient=coefficient,
         budget_exhausted=budget_exhausted,
         replay_fraction=0.1 if use_replay else 0.0,

@@ -31,6 +31,7 @@ DEFAULTS = {
     "threads": 2,
     "checkpoint_seconds": 600,
     "bc_only": False,
+    "critic_warmup_seconds": 0,
 }
 
 SCALES = {"small": (128, 4, 4), "medium": (256, 6, 8), "large": (384, 8, 8)}

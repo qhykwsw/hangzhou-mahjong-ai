@@ -231,11 +231,17 @@ def train(
         while time.time() < deadline:
             iteration += 1
             bc = time.time() < bc_until
+            # Frozen-Actor value warm-up before the first joint update of a new run.
+            warm = not bc and time.time() < started + cfg["critic_warmup_seconds"]
             if not bc and bc_until > started and not (run_dir / "bc-final.pt").exists():
                 save(run_dir / "bc-final.pt")
                 log("bc_checkpoint_saved", checkpoint=str(run_dir / "bc-final.pt"))
             phase_deadline = min(deadline, bc_until) if bc else deadline
-            iteration_cfg = cfg | {"bc_only": bc, "deadline": phase_deadline}
+            iteration_cfg = cfg | {
+                "bc_only": bc,
+                "critic_only": warm,
+                "deadline": phase_deadline,
+            }
             slots = list(
                 rng.choice(history_paths, min(3, len(history_paths)), replace=False)
             )
@@ -250,7 +256,7 @@ def train(
                 "kind": "collect",
                 "iteration": iteration,
                 "deadline": phase_deadline,
-                "labels": bc or w > 0,
+                "labels": bc or (w > 0 and not warm),
                 "history": list(opponents),
             }
             rows, records, resources = collect(
@@ -292,7 +298,7 @@ def train(
                     )
             log(
                 "update",
-                phase="bc" if bc else "joint",
+                phase="bc" if bc else "critic" if warm else "joint",
                 w=w,
                 teacher=read_bundle(active, verify=False)["teacher"],
                 resources=resources,
