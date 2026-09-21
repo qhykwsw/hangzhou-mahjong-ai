@@ -8,6 +8,25 @@ import numpy as np
 
 from selfplay_core.encoding import EVENT_KINDS, encode as base_encode
 
+# The engine silently falls back to pure Python without the native extension,
+# which makes shape features about an order of magnitude slower. Fail instead.
+try:
+    from mahjong_ai import _fast  # noqa: F401
+except ImportError as error:
+    import sysconfig
+    from pathlib import Path
+
+    import mahjong_ai
+
+    target = Path(mahjong_ai.__file__).parent / (
+        "_fast" + sysconfig.get_config_var("EXT_SUFFIX")
+    )
+    raise ImportError(
+        f"guided encoding requires the compiled extension {target}; build "
+        "_fast.c there for this interpreter (setuptools build_ext) or copy a "
+        "matching build before training, evaluation or serving"
+    ) from error
+
 ENCODING = "guided-current-hand-v1"
 
 

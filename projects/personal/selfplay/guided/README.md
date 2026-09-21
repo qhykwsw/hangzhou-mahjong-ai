@@ -9,8 +9,8 @@
 | 角色 | 主机 | 用途 |
 | --- | --- | --- |
 | Mac | 本机 | 控制面：冻结源码与教师、写运行计划、启动远端任务、汇总报告；不跑 GPU 任务 |
-| 4090 | `gpu-4090-wsl` | 主要训练、规模试验、离线评估与大乱斗 |
-| 4070 | `gpu-4070-wsl` | 正式内网比赛推理的唯一目标；可跑小模型训练与评估，不跑大模型规模训练和显存压力探针 |
+| 4090 | `gpu-4090-wsl` | 训练大模型（384/8/8），并承担规模试验、离线评估与大乱斗 |
+| 4070 | `gpu-4070-wsl` | 训练小模型（256/6/8）；正式内网比赛只在这里推理，部署两个模型中同条件表现最好的那个。不训练大模型，不跑显存压力探针 |
 
 - 连接由 [`remote.py`](remote.py) 的 `HOSTS`、`ROOT`、`PYTHON` 定义：经 Windows 宿主 SSH，再以 `wsl.exe -d Ubuntu-20.04 -u user` 进入 WSL；命令按 argv 传递，不拼接 shell。长任务用 `remote.command(..., background_log=...)` 启动，进程脱离 wsl.exe 会话。
 - 两机项目路径都是 `~/code/leihuo_majiang`，解释器 `~/softwares/miniconda3/envs/py311_cu130/bin/python` 自带 CUDA torch，不要重装 CUDA 环境。统一版本的 numpy 放在 `.local/guided-deps/numpy-2.1.2`，`remote.command` 会自动加进 `PYTHONPATH`，不改共享 Conda 环境。
@@ -21,7 +21,7 @@
 每个实验是 Mac 上的一个目录 `projects/personal/selfplay/.local/<种类>/<时间戳>/`，同类实验的现役入口是该种类下的 `current.json`：
 
 - `source/source-manifest.json`：冻结源码的文件清单与 SHA-256，清单摘要即 `source_id`。源码上传到远端 `.local/guided-code/<source_id>/`，入口用 `bootstrap.verify_source()` 核对，与 `plan.json` 不符即拒绝运行。
-- 冻结快照必须带目标机编译的 `src/mahjong_ai/_fast*.so`。引擎在缺少它时静默退回纯 Python，结果不变，但向听计算和观察编码会慢一个数量级，训练、评估吞吐和推理时延都会被拖慢。上传后先编译或从主检出拷入，并确认 `mahjong_ai.sdk.shape._fast` 已加载。
+- 引擎缺少编译的 `_fast` 扩展时会静默退回纯 Python，向听计算和观察编码慢一个数量级。训练与评估的 worker 绑定教师包运行时，其 `_fast` 由 `guided.sync` 在目标机编译；推理服务、测试和其他不绑定教师包的进程用快照自己的 `src/mahjong_ai/`，上传后要在目标机用快照里的 `_fast.c` 编译（setuptools `build_ext`）。`guided.encoding` 导入时检查扩展，缺失即报错。
 - `plan.json`：该实验的主机、模型规模、教师包、初始权重、时长、评估场数和牌墙种子。`overnight`、`brawl`、`brawl_pipeline`、`bc_curve`、`tune_evaluation` 都以 `--root <实验目录>` 读取它。
 - 准备、部署、启动与监控用的操作脚本（`prepare.py`、`deploy.py`、`start.py`、`monitor.py` 等）随实验目录冻结，报告写在同目录 `REPORT.md`。新实验复制上一份脚本后修改，不回写旧实验。
 - 教师包由 Mac 从已完成的共同评测回执导出到 `.local/teachers/<id>/`，远端位于 `.local/guided-teachers/<id>/`。接收、运行校验与启用分开记录；未完整收到或不能运行的包不替换现役教师。
