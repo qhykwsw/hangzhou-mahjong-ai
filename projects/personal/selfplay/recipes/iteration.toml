@@ -12,7 +12,7 @@ smoke_limit = 3  # 每次尝试最多计入时限补偿的冒烟检查次数
 [trial]
 budget_seconds = 900  # recipe.train 的固定训练时限
 smoke_seconds = 60
-evaluation_games = 1024  # 挑战者和现役各打的场数，配对差 95% 区间下界 > 0 才晋级
+evaluation_games = 4096  # 挑战者和现役各打的场数，配对差 95% 区间下界 > 0 才晋级；新旧模型几乎每场都走岔，配对降噪有限，1024 场只能分辨约 2.6 分
 brawl_appearances = 1024  # 五方大乱斗里每方的出场数
 limit = 24  # 每条方案线的尝试次数上限，可在网页追加
 retries = 2  # 基础设施失败（SSH、远端进程丢失）的重试次数，用完暂停实验

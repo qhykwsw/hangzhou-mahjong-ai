@@ -29,6 +29,7 @@ const recipeEvents = {
   stop_now: "立即结束当前尝试",
   extend: "追加尝试次数",
   close: "结束实验",
+  configuration: "评估条件调整",
 };
 const signed = (x, digits = 2) =>
   x == null ? "—" : `${x >= 0 ? "+" : ""}${Number(x).toFixed(digits)}`;
