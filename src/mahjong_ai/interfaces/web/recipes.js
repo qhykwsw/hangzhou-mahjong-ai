@@ -3,6 +3,7 @@
 let recipeState = null;
 const recipeStages = {
   prepare: "部署框架与冻结对手",
+  baseline: "训练第 0 版（基线方案）",
   agent: "Agent 设计方案",
   train: "限时训练",
   evaluate: "配对评估",
@@ -14,6 +15,7 @@ const recipeStatus = { running: "运行中", pausing: "正在暂停", paused: "�
 const recipePhase = { active: "", finished: "已完成", closed: "已结束" };
 const recipeEvents = {
   prepared: "框架与冻结对手已就绪",
+  baseline_trained: "第 0 版训练完成",
   trial_started: "开始方案尝试",
   submitted: "方案已提交",
   trial_completed: "方案尝试完成",
@@ -94,10 +96,13 @@ function recipeLineCard(line) {
   const model = line.model ? `${line.model.dim} 维 · ${line.model.layers} 层 · ${line.model.heads} 头` : "";
   const incumbent = line.incumbent.version
     ? `第 ${line.incumbent.version} 版（尝试 #${Number(line.incumbent.trial.split("-").at(-1))}，晋级时配对差 ${signed(line.incumbent.difference?.mean)}）`
-    : "第 0 版（固定起点）";
+    : recipeState.experiment?.incumbent === "baseline"
+      ? "第 0 版（基线方案训练产物）"
+      : "第 0 版（固定起点）";
   const meta = [
     ["现役", incumbent],
     ["尝试", `${line.used} / ${line.limit}`],
+    ["训练时限", `${line.budget_seconds / 60} 分钟`],
     ["晋级", `${line.promotions} 次`],
   ]
     .map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`)
@@ -160,7 +165,7 @@ function renderRecipes() {
     ? `${recipeStatus[e.status] || e.status}${recipePhase[e.phase] ? " · " + recipePhase[e.phase] : ""}${e.stop_after_trial ? " · 当前尝试后停" : ""}`
     : "尚未开始";
   $("recipeSummary").textContent = e
-    ? `实验 ${e.id} · 每次训练 ${e.budget_seconds / 60} 分钟、Agent 思考 ${e.agent_seconds / 60} 分钟（${e.model}）· 配对评估各 ${e.evaluation_games} 场 · 大乱斗每方 ${e.brawl_appearances} 场 · 教师 ${shortRule(e.teacher || "—")} · 对手 ${(e.rules || []).map(shortRule).join("、") || "部署后确定"}` +
+    ? `实验 ${e.id} · 第 0 版${e.incumbent === "baseline" ? "为基线方案训练产物" : "为固定起点"} · Agent 思考 ${e.agent_seconds / 60} 分钟（${e.model}）· 配对评估各 ${e.evaluation_games} 场 · 大乱斗每方 ${e.brawl_appearances} 场 · 教师 ${shortRule(e.teacher || "—")} · 对手 ${(e.rules || []).map(shortRule).join("、") || "部署后确定"}` +
       (e.pause_reason && e.status !== "running" ? ` · ${e.pause_reason}` : "")
     : "开始后两条方案线各自串行迭代：Agent 改训练方案 → 限时训练 → 配对评估 → 晋级后大乱斗。";
   const lines = Object.fromEntries((data.lines || []).map((l) => [l.id, l.name]));

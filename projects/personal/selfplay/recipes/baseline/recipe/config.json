@@ -17,6 +17,7 @@
   "entropy": 0.001,
   "gae_lambda": 0.95,
   "lambda_max": 1.0,
+  "ppo_coefficient": 1.0,
   "replay_capacity": 100000,
   "history_probability": 0.0,
   "critic_features": "recipe.features:critic_features",

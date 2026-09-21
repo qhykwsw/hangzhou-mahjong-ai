@@ -66,6 +66,11 @@ def copy_recipe(source, target):
     )
 
 
+def budget(s, line):
+    """Training seconds of one line; lines may override the experiment default."""
+    return line.get("budget_seconds") or s["config"]["trial"]["budget_seconds"]
+
+
 def smoke_extension(trial, limit):
     """Smoke checks run on the remote host; their time does not count as thinking."""
     return sum(x.get("seconds", 0.0) for x in trial.get("smokes", [])[:limit])
@@ -378,7 +383,10 @@ class RecipeIteration:
                 idle = False
                 continue
             trial = s["trials"].get(line["trial"])
-            if line["pending_brawl"] is not None:
+            if line["versions"][0]["actor"] is None:
+                idle = False
+                self.ensure(s, db, "baseline", line["id"])
+            elif line["pending_brawl"] is not None:
                 idle = False
                 self.ensure(s, db, "brawl", line["id"], version=line["pending_brawl"])
             elif trial:
@@ -432,9 +440,12 @@ class RecipeIteration:
             return self.failed(j, result)
         j["status"] = "completed"
         s["prepared"] = result["output"]
+        baseline = s["config"]["trial"].get("incumbent", "start") == "baseline"
         for key, line in s["lines"].items():
             prepared = result["output"]["lines"][key]
-            line["versions"][0]["actor"] = prepared["start_actor"]
+            # Version 0 is either the fixed start itself or what the baseline
+            # recipe trains from it in one budget; trials always start from it.
+            line["versions"][0]["actor"] = None if baseline else prepared["start_actor"]
             line["model"] = prepared["start_meta"]["config"]
         self.store.event(db, s, "prepared", {"bundle": result["output"]["bundle_id"]})
 
@@ -481,15 +492,11 @@ class RecipeIteration:
             s, db, trial, "unsubmitted", error or "Agent 时限内没有提交训练方案"
         )
 
-    def accept_train(self, s, db, j, result):
-        if result["status"] != "completed":
-            return self.failed(j, result)
-        j["status"] = "completed"
-        trial = s["trials"][j["trial"]]
-        out = result["output"]
+    @staticmethod
+    def training_summary(j, out):
         status = out["status"]
         metrics = out.get("metrics") or []
-        trial["training"] = {
+        return {
             "job": j["id"],
             "state": status.get("state"),
             "seconds": status.get("training_seconds"),
@@ -499,6 +506,32 @@ class RecipeIteration:
             "error": (status.get("error") or "")[-3000:] or None,
             **memory_summary(status),
         }
+
+    def accept_baseline(self, s, db, j, result):
+        if result["status"] != "completed":
+            return self.failed(j, result)
+        j["status"] = "completed"
+        line = s["lines"][j["line"]]
+        out = result["output"]
+        line["versions"][0]["training"] = self.training_summary(j, out)
+        if out["ok"]:
+            line["versions"][0]["actor"] = out["actor"]
+            self.store.event(db, s, "baseline_trained", {"line": line["id"]})
+        else:
+            s.update(
+                status="pausing",
+                pause_reason=f"{line['name']} 基线方案训练失败："
+                + str(out["status"].get("error") or out["status"].get("state"))[-300:],
+            )
+
+    def accept_train(self, s, db, j, result):
+        if result["status"] != "completed":
+            return self.failed(j, result)
+        j["status"] = "completed"
+        trial = s["trials"][j["trial"]]
+        out = result["output"]
+        status = out["status"]
+        trial["training"] = self.training_summary(j, out)
         if out["ok"]:
             trial.update(actor=out["actor"], status="evaluating")
         else:
@@ -603,12 +636,22 @@ class RecipeIteration:
             "execution": line["execution"],
         }
         trial = s["trials"].get(j.get("trial"))
-        if j["kind"] == "train":
+        if j["kind"] == "baseline":
+            task.update(
+                kind="train",
+                limits=line.get("limits") or {},
+                recipe=line["versions"][0]["recipe"],
+                start_actor=p["lines"][line["id"]]["start_actor"],
+                budget_seconds=budget(s, line),
+                smoke_seconds=cfg["smoke_seconds"],
+                seed=seed_for(s["id"], line["id"], "baseline"),
+            )
+        elif j["kind"] == "train":
             task.update(
                 limits=line.get("limits") or {},
                 recipe=trial["submitted"],
                 start_actor=p["lines"][line["id"]]["start_actor"],
-                budget_seconds=cfg["budget_seconds"],
+                budget_seconds=budget(s, line),
                 smoke_seconds=cfg["smoke_seconds"],
                 seed=seed_for(s["id"], line["id"], trial["number"], "train"),
             )
@@ -645,7 +688,7 @@ class RecipeIteration:
             "limits": line.get("limits") or {},
             "recipe": trial["workspace"],
             "start_actor": p["lines"][line["id"]]["start_actor"],
-            "budget_seconds": s["config"]["trial"]["budget_seconds"],
+            "budget_seconds": budget(s, line),
             "smoke_seconds": s["config"]["trial"]["smoke_seconds"],
             "seed": seed_for(s["id"], line["id"], trial["number"], "smoke", index),
         }
@@ -917,6 +960,7 @@ class RecipeIteration:
             "kind": j["kind"],
             "label": {
                 "agent": "Agent 设计方案",
+                "baseline": "训练第 0 版（基线方案）",
                 "train": "限时训练",
                 "evaluate": "配对评估",
                 "brawl": f"大乱斗（第 {j.get('version')} 版）",
@@ -931,8 +975,8 @@ class RecipeIteration:
             and (root / "task.json").exists()
         ):
             stage["deadline"] = agent_deadline(root)
-        if j["kind"] == "train" and j.get("started_at"):
-            stage["deadline"] = j["started_at"] + s["config"]["trial"]["budget_seconds"]
+        if j["kind"] in ("train", "baseline") and j.get("started_at"):
+            stage["deadline"] = j["started_at"] + budget(s, line)
         progress = root / "progress.json"
         if progress.exists():
             stage["progress"] = read_json(progress).get("message")
@@ -976,6 +1020,7 @@ class RecipeIteration:
                     "name": line["name"],
                     "host": line["host"],
                     "model": line["model"],
+                    "budget_seconds": budget(s, line),
                     "limit": line["limit"],
                     "used": line["used"],
                     "version": line["version"],
@@ -1011,7 +1056,7 @@ class RecipeIteration:
                 "pause_reason": s["pause_reason"],
                 "stop_after_trial": s["stop_after_trial"],
                 "created_at": s["created_at"],
-                "budget_seconds": s["config"]["trial"]["budget_seconds"],
+                "incumbent": s["config"]["trial"].get("incumbent", "start"),
                 "agent_seconds": s["config"]["agent"]["seconds"],
                 "evaluation_games": s["config"]["trial"]["evaluation_games"],
                 "brawl_appearances": s["config"]["trial"]["brawl_appearances"],

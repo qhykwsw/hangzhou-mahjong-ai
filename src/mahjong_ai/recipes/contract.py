@@ -78,7 +78,8 @@ def handoff(s, line_id):
             "trials_limit": line["limit"],
         },
         "fixed": {
-            "budget_seconds": s["config"]["trial"]["budget_seconds"],
+            "budget_seconds": line.get("budget_seconds")
+            or s["config"]["trial"]["budget_seconds"],
             "smoke_seconds": s["config"]["trial"]["smoke_seconds"],
             "evaluation_games": s["config"]["trial"]["evaluation_games"],
             "teacher": prepared.get("teacher"),
@@ -88,9 +89,14 @@ def handoff(s, line_id):
             "version": incumbent["version"],
             "trial": incumbent["trial"],
             "difference_when_promoted": incumbent.get("difference"),
-            "note": "第 0 版的模型就是固定起点本身，方案是未经验证的基线方案"
+            "note": (
+                "第 0 版的模型是基线方案从固定起点训练一个时限的产物"
+                if incumbent.get("training")
+                else "第 0 版的模型就是固定起点本身，方案是未经验证的基线方案"
+            )
             if incumbent["version"] == 0
             else None,
+            "training": incumbent.get("training"),
         },
         "curve": [
             {

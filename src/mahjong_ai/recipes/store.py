@@ -29,6 +29,12 @@ def configuration(project):
             raise ValueError(f"trial.{key} must be a positive integer")
     if trial["evaluation_games"] % 4 or trial["brawl_appearances"] % 16:
         raise ValueError("evaluation needs whole seat rotations and brawl whole blocks")
+    if trial.get("incumbent", "start") not in ("start", "baseline"):
+        raise ValueError("trial.incumbent must be start or baseline")
+    for line in config["lines"]:
+        value = line.get("budget_seconds", trial["budget_seconds"])
+        if type(value) is not int or value < 1:
+            raise ValueError("line budget_seconds must be a positive integer")
     ids = [line["id"] for line in config["lines"]]
     if not ids or len(set(ids)) != len(ids):
         raise ValueError("recipe lines need distinct ids")

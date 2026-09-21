@@ -13,9 +13,15 @@ SELFPLAY = "projects/personal/selfplay"
 
 @pytest.fixture
 def service(tmp_path):
+    return make_service(tmp_path, "start")
+
+
+def make_service(tmp_path, incumbent):
     project = tmp_path / SELFPLAY
     (project / "recipes").mkdir(parents=True)
-    shutil.copy(REPO / SELFPLAY / "recipes/iteration.toml", project / "recipes")
+    config = (REPO / SELFPLAY / "recipes/iteration.toml").read_text()
+    config = config.replace('incumbent = "baseline"', f'incumbent = "{incumbent}"')
+    (project / "recipes/iteration.toml").write_text(config)
     shutil.copytree(
         REPO / SELFPLAY / "recipes/baseline", project / "recipes/baseline"
     )
@@ -89,8 +95,11 @@ def start(service):
     with service.store.edit() as (s, db):
         service.advance(s, db)
         lines = list(s["lines"])
+        baseline = s["config"]["trial"]["incumbent"] == "baseline"
     step(service, "prepare", None, prepared(lines))
     for line in lines:
+        if baseline:
+            step(service, "baseline", line, trained())
         step(service, "brawl", line, brawl_result())
     return lines
 
@@ -201,3 +210,25 @@ def test_unsubmitted_session_continues_while_time_remains(service):
     s = service.store.read()
     assert s["trials"][f"{line}-001"]["outcome"] == "unsubmitted"
     assert s["lines"][line]["used"] == 1
+
+
+def test_baseline_incumbent_is_trained_before_the_start_brawl(tmp_path):
+    service = make_service(tmp_path, "baseline")
+    service.create(limit=3)
+    service.control("resume")
+    with service.store.edit() as (s, db):
+        service.advance(s, db)
+        lines = list(s["lines"])
+    step(service, "prepare", None, prepared(lines))
+    s = service.store.read()
+    line = lines[0]
+    job = live(s, "baseline", line)
+    task = (service.job_root(s, job["id"]) / "task.json").read_text()
+    assert '"kind": "train"' in task
+    assert s["lines"][line]["versions"][0]["actor"] is None
+    budgets = {v["id"]: v["budget_seconds"] for v in s["lines"].values()}
+    assert f'"budget_seconds": {budgets[line]}' in task
+    step(service, "baseline", line, trained())
+    s = service.store.read()
+    assert s["lines"][line]["versions"][0]["actor"] == "/remote/trained"
+    assert live(s, "brawl", line)["version"] == 0

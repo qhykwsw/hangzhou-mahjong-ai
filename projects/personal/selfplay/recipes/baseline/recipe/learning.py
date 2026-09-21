@@ -121,7 +121,8 @@ def update(actor, critic, actor_opt, critic_opt, rows, cfg, w, replay, rng):
     """One rollout: PPO for the Actor under a KL budget, full epochs for the Critic.
 
     Config keys: clip, epochs, minibatch (microbatch), effective_minibatch,
-    target_kl, kl_stop_factor, entropy, lambda_max, actor_lr, warmup_steps,
+    target_kl, kl_stop_factor, entropy, lambda_max (teacher cross entropy),
+    ppo_coefficient (clipped surrogate), actor_lr, warmup_steps,
     actor_step (Actor steps already taken in this run), critic_only, deadline.
 
     KL to the behaviour policy is measured on each effective minibatch before
@@ -144,6 +145,7 @@ def update(actor, critic, actor_opt, critic_opt, rows, cfg, w, replay, rng):
     stop_threshold = target_kl * float(cfg.get("kl_stop_factor", 2.0))
     entropy_coef = float(cfg.get("entropy", 0.001))
     lambda_max = float(cfg.get("lambda_max", 1.0))
+    ppo_coef = float(cfg.get("ppo_coefficient", 1.0))
     actor_lr = float(cfg["actor_lr"])
     warmup = int(cfg.get("warmup_steps", 0))
     actor_step = int(cfg.get("actor_step", 0))
@@ -152,7 +154,14 @@ def update(actor, critic, actor_opt, critic_opt, rows, cfg, w, replay, rng):
         raise ValueError("invalid PPO batch size, epochs or clip")
     if not all(
         math.isfinite(x) and x >= 0
-        for x in (target_kl, stop_threshold, entropy_coef, lambda_max, actor_lr)
+        for x in (
+            target_kl,
+            stop_threshold,
+            entropy_coef,
+            lambda_max,
+            ppo_coef,
+            actor_lr,
+        )
     ):
         raise ValueError("invalid PPO coefficients")
     critic_only = bool(cfg.get("critic_only", False))
@@ -250,7 +259,7 @@ def update(actor, critic, actor_opt, critic_opt, rows, cfg, w, replay, rng):
                                 teacher_loss = 0.9 * teacher_loss + 0.1 * old_loss
                         actor_loss = (
                             coefficient * teacher_loss
-                            + policy_loss
+                            + ppo_coef * policy_loss
                             - entropy_coef * entropy
                         )
                         _finite(actor_loss, "actor loss")
