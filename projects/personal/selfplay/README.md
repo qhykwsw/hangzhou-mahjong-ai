@@ -1,6 +1,11 @@
 # 自我对弈策略项目（selfplay）
 
-人工维护的策略项目：PyTorch 自我对弈 PPO 训练，ONNX Runtime 发布。设计决定见 [ADR-0009](../../../docs/adr/0009-independent-selfplay-trainer-for-personal-project.md)，术语（联赛池、桌面分、阶段总分）见 [CONTEXT.md](../../../CONTEXT.md)。
+人工维护的策略项目，有两条互不共享检查点的训练路线，都用 PyTorch 训练：
+
+- **规则教师指导**（[`guided/`](guided/)，新实验使用）：以规则研究的冻结冠军为教师，先纯模仿，再用真实桌面分做 PPO 并保留按师生差距调整的教师辅助损失；Actor 由独立 GPU 服务推理，正式内网比赛部署在 4070。用法见[训练手册](guided/README.md)，决定见 [ADR-0011](../../../docs/adr/0011-rule-guided-policy-learning.md)。
+- **自我对弈 PPO**（`train/`，下文）：联赛池自我对弈，ONNX Runtime 发布到平台。设计见 [ADR-0009](../../../docs/adr/0009-independent-selfplay-trainer-for-personal-project.md)。
+
+术语（联赛池、桌面分、阶段总分、教师策略）见 [CONTEXT.md](../../../CONTEXT.md)。
 
 ## 目录
 
@@ -10,7 +15,8 @@ selfplay/
 ├── src/                # 原样进入发布包，只依赖 numpy + onnxruntime + mahjong_ai 运行时
 │   ├── strategy.py     # build(model_dir) 入口
 │   └── selfplay_core/  # actions（231 动作编号）、encoding（观察编码）、policy（ONNX 推理）
-├── train/              # 训练器，依赖 torch，不进发布包
+├── guided/             # 规则教师指导路线，依赖 torch，不进发布包；见 guided/README.md
+├── train/              # 自我对弈训练器，依赖 torch，不进发布包
 │   ├── run.py          # 入口：fork 环境进程 → GPU 批量推理 + PPO + 联赛池
 │   ├── env.py          # 直接驱动 HandState 的对局；critic 隐藏状态；hold-back 轨迹装配
 │   ├── actors.py       # 环境 worker 进程；rollout.py 共享内存样本存储与 GAE

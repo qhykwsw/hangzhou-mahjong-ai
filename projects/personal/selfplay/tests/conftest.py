@@ -2,6 +2,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 for sub in ("src", "train"):
     path = str(ROOT / sub)
     if path not in sys.path:
