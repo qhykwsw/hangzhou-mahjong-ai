@@ -1,6 +1,6 @@
 # 训练方案接口
 
-训练方案迭代（见 [ADR-0012](../../../../docs/adr/0012-recipe-iteration-for-rl-training.md)）改进的对象是一个名为 `recipe` 的 Python 包。框架 `guided/trial.py` 在远端导入它，调用 `recipe.train(ctx)`，在时限内拿回训练后的 Actor，再做配对评估。[`baseline/recipe`](baseline/recipe) 是初始方案。
+训练方案迭代（见 [ADR-0012](../../../../docs/adr/0012-recipe-iteration-for-rl-training.md)）改进的对象是一个名为 `recipe` 的 Python 包。框架 `guided/trial.py` 在远端导入它，调用 `recipe.train(ctx)`，在时限内拿回训练后的 Actor，再做配对评估。[`baseline/recipe`](baseline/recipe) 是初始方案：多步小步策略梯度，每步用约 60 万个同策略决策算一次全量梯度，按 KL 0.03 定步长。设计理由写在 `loop.py` 和 `targets.py` 的文档字符串里，测量依据见 ADR-0012 的“基线方案与训练时长”。
 
 ## 固定不变
 
