@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import time
 import traceback
@@ -29,6 +30,8 @@ HOST_FILES = (
 )
 EXTRA_FILES = ("pyproject.toml",)
 POLL_SECONDS = 15
+# Consecutive failed status probes tolerated before a running job is given up.
+PROBE_RETRIES = 8
 
 
 def absolute(path):
@@ -216,10 +219,20 @@ except OSError:
 print(json.dumps({{'status':status,'alive':alive}}))
 """
     started = time.time()
+    failures = 0
     while True:
-        reply = json.loads(
-            remote.execute(host, probe, timeout=90).strip().splitlines()[-1]
-        )
+        try:
+            reply = json.loads(
+                remote.execute(host, probe, timeout=90).strip().splitlines()[-1]
+            )
+            failures = 0
+        except (RuntimeError, subprocess.TimeoutExpired):
+            # The detached job keeps running; a relayed SSH hop may drop briefly.
+            failures += 1
+            if failures > PROBE_RETRIES:
+                raise
+            time.sleep(POLL_SECONDS)
+            continue
         state = reply["status"].get("state")
         if state in ("complete", "failed", "timeout"):
             return reply["status"]

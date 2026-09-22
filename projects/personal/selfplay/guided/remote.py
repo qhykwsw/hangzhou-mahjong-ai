@@ -56,6 +56,9 @@ def command(
         script += """path=pathlib.Path(task['log']);path.parent.mkdir(parents=True,exist_ok=True)
 with path.open('ab') as stream:
  p=subprocess.Popen(task['argv'],cwd=task['cwd'],env=env,stdin=subprocess.DEVNULL,stdout=stream,stderr=stream,start_new_session=True)
+# wsl.exe tears down the session when this script exits; give the detached
+# child time to leave it, or it can be killed before writing a single line.
+import time;time.sleep(5)
 print(json.dumps({'pid':p.pid,'log':str(path)}))
 """
     else:
