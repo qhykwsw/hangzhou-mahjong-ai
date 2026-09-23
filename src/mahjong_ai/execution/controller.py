@@ -8,6 +8,7 @@ import sys
 import time
 from mahjong_ai.persistence.artifacts import atomic_json, read_json, digest
 from mahjong_ai.domain.engine import derive_seed
+from mahjong_ai.execution.model_service import ModelService, SERVER_ENV
 import json
 
 # 逐个放出 Agent，避免同一秒把整个并发上限压给模型网关触发限流。
@@ -20,6 +21,7 @@ class Controller:
         self.processes = {}
         self.agent_launch_interval = AGENT_LAUNCH_INTERVAL
         self.agent_launch_at = 0.0
+        self.models = ModelService(research)
         self.recover()
 
     def recover(self):
@@ -215,9 +217,9 @@ class Controller:
                     ),
                 )
             pool = (
-                s["cycles"][it["cycle"] - 1]["reference"]
+                it.get("opponents", s["cycles"][it["cycle"] - 1]["reference"])
                 if it
-                else s["experiments"][-1]["initial_opponents"]
+                else s["experiments"][-1]["initial_opponents"] or s["bootstrap"]
             )
             opponents = [policy_spec(cid, cfg) for cid in pool]
             task.update(
@@ -296,6 +298,10 @@ class Controller:
             PYTHONPATH=j["runtime_path"],
             MAHJONG_MEMORY_MB=str(task["resources"]["memory_mb"]),
         )
+        if j["kind"] == "match" and any(
+            p.get("family") == "model" for p in task.get("policies", {}).values()
+        ):
+            env[SERVER_ENV] = self.models.url()
         for key in (
             "OMP_NUM_THREADS",
             "OPENBLAS_NUM_THREADS",
@@ -419,12 +425,7 @@ class Controller:
                         for j in s["jobs"].values()
                     )
                     ready = sorted(
-                        (
-                            b
-                            for b in s["branches"].values()
-                            if b["status"] == "ready"
-                            and b["id"] in s["cycles"][-1]["targets"]
-                        ),
+                        self.research.startable(s),
                         key=lambda b: (b["last_run"], b["id"]),
                     )
                     for b in ready[: max(0, limits["agent"] - active)]:
@@ -487,3 +488,4 @@ class Controller:
             for j in s["jobs"].values():
                 if j["status"] == "running":
                     self.stop(s, j, force=True)
+        self.models.close()

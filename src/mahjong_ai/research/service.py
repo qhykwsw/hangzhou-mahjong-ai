@@ -1,4 +1,10 @@
-"""Persistent strategy registry and sequential, two-phase experiments."""
+"""Persistent strategy registry and continuous experiments.
+
+Branches iterate independently; every iteration is evaluated against the
+evaluation opponents frozen when it starts (the top of the latest common
+brawl). A common brawl starts after enough promotions and does not wait for
+branches; its ranking only affects iterations that start afterwards.
+"""
 
 from copy import deepcopy
 from pathlib import Path
@@ -81,7 +87,7 @@ def _primary_mean(row):
     return row["mean_score"] if row.get("mean_score") is not None else row.get("mean_utility")
 
 
-def paired_readout(reference, candidate, metric="score"):
+def paired_readout(reference, candidate, metric="score", confidence=0.95):
     """同一副牌、同一对手下的配对数：逐块差值的均值与聚类标准误。
 
     主口径是场桌面分（平台按场结算并按总分排序）；名次与逐局读数只作辅助。
@@ -109,7 +115,7 @@ def paired_readout(reference, candidate, metric="score"):
         blocks=count,
         delta=delta,
         standard_error=standard_error,
-        **paired_interval(delta, standard_error, count),
+        **paired_interval(delta, standard_error, count, confidence),
     )
 
 
@@ -304,6 +310,50 @@ class Research:
             active.append(cid)
         return active
 
+    def register_model(self, cid, source, *, branch=None, combination="model", note=""):
+        """Register an exported Actor as a playable version keyed by its weights.
+
+        The artifact is copied under research/models/<weights SHA-256>, the
+        name every host's inference service uses to find it.
+        """
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", cid):
+            raise ValueError("模型版本 ID 不合法")
+        source = Path(source)
+        meta = json.loads((source / "meta.json").read_text())
+        import hashlib
+
+        weights = hashlib.sha256((source / "actor.pt").read_bytes()).hexdigest()
+        if weights != meta.get("weights_sha256"):
+            raise ValueError("模型权重与 meta.json 校验不一致")
+        target = self.layout.research / "models" / weights
+        if not target.exists():
+            temporary = target.with_name(weights + "." + secrets.token_hex(4))
+            temporary.mkdir(parents=True)
+            for name in ("actor.pt", "meta.json"):
+                shutil.copy2(source / name, temporary / name)
+            temporary.rename(target)
+        spec = dict(family="model", version=cid, parameters={"weights": weights})
+        with self.edit() as (s, db):
+            existing = s["candidates"].get(cid)
+            if existing and existing.get("spec") != spec:
+                raise ValueError("同名版本已存在且内容不同")
+            s["candidates"][cid] = dict(
+                id=cid,
+                branch=branch,
+                combination=combination,
+                status="resident" if branch is None else "ready",
+                workspace=str(target),
+                spec=spec,
+                parent=None,
+                hypothesis=note or "exported Actor",
+                requirements=[],
+                runtime_path=s["runtime_path"],
+                model=dict(config=meta.get("config"), weights=weights,
+                           source=str(source)),
+            )
+            self.event(db, s, "model_registered", {"candidate": cid, "weights": weights})
+        return cid
+
     def add_combination(self, s, combination, models):
         key = combination["id"]
         old = s["definitions"].get(key)
@@ -390,28 +440,16 @@ class Research:
                 )
             ):
                 raise ValueError("请选择互不重复、已注册且未归档的迭代分支")
-            if set(config["branch_iterations"]) - set(selected):
-                raise ValueError("单支迭代额度只能指向本次选中的迭代对象")
             self.ensure_bootstrap(s, runtime)
-            pool = (
-                self.default_opponents(s, config["opponent_limit"])
-                if opponents is None
-                else list(opponents)
-            )
-            if not pool or len(pool) != len(set(pool)):
-                raise ValueError("至少选择一个互不重复的对手版本")
+            # Without explicit opponents the experiment opens with a common
+            # brawl; its ranking supplies the first evaluation opponents.
+            pool = list(opponents or [])
+            if len(pool) != len(set(pool)):
+                raise ValueError("对手版本不能重复")
             for cid in pool:
                 c = s["candidates"].get(cid)
-                if (
-                    not c
-                    or not c.get("spec")
-                    or (
-                        c.get("branch") and not s["branches"][c["branch"]]["successful"]
-                    )
-                ):
-                    raise ValueError("对手必须是已完成有效评估分支的准备就绪版本")
-                if self.eligible(s) and cid in s["bootstrap"]:
-                    raise ValueError("启动策略只在还没有实际策略时用作对手")
+                if not c or not c.get("spec"):
+                    raise ValueError("对手必须是准备就绪的已注册版本")
             identity = secrets.token_hex(8)
             experiment = dict(
                 id=identity,
@@ -419,8 +457,7 @@ class Research:
                 status="paused",
                 targets=selected,
                 initial_opponents=pool,
-                total_rounds=config["total_rounds"],
-                completed_rounds=0,
+                completed_brawls=0,
                 selection_rule=SELECTION_RULE,
                 config=deepcopy(config),
                 runtime=fingerprint,
@@ -434,6 +471,8 @@ class Research:
                 phase="initializing",
                 pause_reason="ready",
                 config=config,
+                promotions_pending=0,
+                promotions_since=None,
                 runtime=fingerprint,
                 runtime_path=runtime,
                 candidate_runtime_path=candidate_runtime_path,
@@ -499,21 +538,14 @@ class Research:
         ]
 
     def default_opponents(self, s, limit):
-        residents = self.sync_resident_releases(s)
-        eligible = {b["id"]: b for b in self.eligible(s)}
-        if not eligible:
-            return residents + list(s["bootstrap"])
+        """The top of the latest common brawl; anchors only measure drift."""
+        anchors = set(s["config"].get("anchors", []))
         ranked = [
-            r["candidate_id"] for r in s["last_ranking"] if r["branch"] in eligible
+            r["candidate_id"]
+            for r in s["last_ranking"]
+            if r["candidate_id"] not in anchors
         ]
-        ranked += [
-            b["representative"]
-            for bid, b in sorted(eligible.items())
-            if bid not in {r["branch"] for r in s["last_ranking"]}
-        ]
-        # Residents are permanent comparison objects and do not get displaced
-        # by the automatic top-K pool.
-        return ranked[:limit] + [cid for cid in residents if cid not in ranked[:limit]]
+        return ranked[:limit]
 
     @staticmethod
     def queue(s, kind, **fields):
@@ -553,36 +585,20 @@ class Research:
                     raise ValueError("已关闭的实验不能结束当前迭代")
                 if s["status"] != "running":
                     raise ValueError("只有运行中的实验可以直接结束当前迭代")
-                competition = bool((options or {}).get("competition", True))
-                if s["phase"] == "researching":
-                    discarded = self.discard_iterations(s, db)
-                    self.arrange_stop(s, {"scope": "now", "competition": competition})
-                else:
-                    # 大乱斗已经在跑，直接结束只表示停在轮末。
-                    discarded = []
-                    self.arrange_stop(s, {"scope": "round", "competition": True})
-                self.event(
-                    db,
-                    s,
-                    "stop_now",
-                    {"discarded": discarded, "competition": competition},
-                )
+                discarded = self.discard_iterations(s, db)
+                self.arrange_stop(s, {"scope": "now"})
+                self.event(db, s, "stop_now", {"discarded": discarded})
             elif action == "clear_stop":
-                self.restore_targets(s)
                 s["stop_plan"] = None
             elif action == "resume":
                 if s["status"] == "pausing":
                     raise ValueError("请等待暂停完成")
                 if s["phase"] == "closed":
                     raise ValueError("已关闭的实验不能继续")
-                if current["completed_rounds"] >= s["config"]["total_rounds"]:
-                    raise ValueError("继续之前先追加研究轮数")
                 s.update(status="running", pause_reason="")
                 for j in s["jobs"].values():
                     if j["experiment"] == s["id"] and j["status"] == "paused":
                         j["status"] = "queued"
-                if s["phase"] == "finished":
-                    s["phase"] = "boundary"
                 selected_combinations = {
                     s["branches"][bid]["combination"] for bid in current["targets"]
                 }
@@ -604,11 +620,6 @@ class Research:
                                 "training_games", s["config"]["training_games"]
                             ),
                         )
-            elif action == "extend":
-                if type(rounds) is not int or rounds < 1:
-                    raise ValueError("追加的研究轮数必须为正数")
-                s["config"]["total_rounds"] += rounds
-                current["total_rounds"] = s["config"]["total_rounds"]
             elif action == "close":
                 if s["status"] in ("running", "pausing"):
                     raise ValueError("结束本次实验前先暂停并等待完成")
@@ -638,24 +649,15 @@ class Research:
         return self.snapshot(experiment)
 
     def arrange_stop(self, s, options):
-        """记录停止安排；默认先跑完大乱斗，除非显式不要。"""
-        scope = options.get("scope", "round")
-        if scope not in ("round", "iteration", "now"):
-            raise ValueError("停止范围必须是本轮、本次迭代或立即结束")
-        competition = bool(options.get("competition", True))
-        self.restore_targets(s)
-        cycle = self.current_cycle(s)
-        plan = {"scope": scope, "competition": competition}
-        if scope == "iteration" and s["phase"] == "researching" and cycle:
-            # 本轮迭代只收当前这一拍：在跑的收尾，没在跑的立即收工。
-            plan["targets"] = deepcopy(cycle["targets"])
-            for bid in list(cycle["targets"]):
-                branch = s["branches"][bid]
-                iteration = s["iterations"].get(branch.get("iteration"))
-                inflight = bool(iteration) and iteration["status"] != "completed"
-                cycle["targets"][bid] = branch["completed"] + (1 if inflight else 0)
-        s["stop_plan"] = plan
-        s.pop("pause_after_round", None)
+        """Stop after the running iterations finish, or now (discarding them).
+
+        No new iteration starts once a stop is arranged; a running common
+        brawl still completes so its ranking is not lost.
+        """
+        scope = options.get("scope", "iteration")
+        if scope not in ("iteration", "now"):
+            raise ValueError("停止范围必须是本次迭代后或立即结束")
+        s["stop_plan"] = {"scope": scope}
 
     @staticmethod
     def current_cycle(s):
@@ -664,29 +666,16 @@ class Research:
             return cycles[-1]
         return None
 
-    def restore_targets(self, s):
-        """撤销「本次迭代后停」留下的目标收缩，安排可以随时改主意。"""
-        plan = s.get("stop_plan") or {}
-        saved = plan.get("targets")
-        cycle = self.current_cycle(s)
-        if saved and cycle is not None:
-            cycle["targets"] = deepcopy(saved)
-
     def discard_iterations(self, s, db):
         """结束当前迭代并删除未完成的迭代记录，让分支回到就绪状态。"""
-        cycle = (
-            s["cycles"][-1]
-            if s["cycles"] and s["cycles"][-1]["experiment"] == s["id"]
-            else None
-        )
-        if cycle is None:
-            return []
         discarded = []
-        for bid in list(cycle["targets"]):
-            branch = s["branches"][bid]
-            cycle["targets"][bid] = branch["completed"]
+        for branch in s["branches"].values():
             iteration = s["iterations"].get(branch.get("iteration"))
-            if iteration is None or iteration["status"] == "completed":
+            if (
+                iteration is None
+                or iteration["experiment"] != s["id"]
+                or iteration["status"] == "completed"
+            ):
                 continue
             for job in s["jobs"].values():
                 if job.get("iteration") == iteration["id"] and job["status"] != (
@@ -710,10 +699,7 @@ class Research:
             if set(patch) - IMMEDIATE:
                 raise ValueError("已冻结的实验设置需要新建实验才能修改")
             config = validate(merge(s["config"], patch))
-            if config["total_rounds"] < s["config"]["total_rounds"]:
-                raise ValueError("总轮数只能追加")
             s["config"] = config
-            s["experiments"][-1]["total_rounds"] = config["total_rounds"]
             s["revisions"].append(dict(experiment=s["id"], at=time.time(), patch=patch))
             self.event(db, s, "configuration", {"keys": list(patch)})
         return self.snapshot(experiment)
@@ -1300,61 +1286,126 @@ class Research:
             }
             b.update(status="ready", representative=cid)
 
-    def begin_cycle(self, s, db):
+    def open_epoch(self, s, db, reference):
+        """Start the stretch between two common brawls.
+
+        Iterations started in it are evaluated against ``reference``; a
+        stretch without reference only waits for its opening brawl.
+        """
         experiment = s["experiments"][-1]
-        if experiment["completed_rounds"] >= s["config"]["total_rounds"]:
-            s.update(
-                status="paused",
-                phase="finished",
-                pause_reason="research round target reached",
-            )
-            experiment.update(status="finished", completed_at=time.time())
-            return
-        selected = [s["branches"][bid] for bid in experiment["targets"]]
-        if any(not b["representative"] for b in selected):
-            s["phase"] = "initializing"
-            return
-        self.sync_resident_releases(s)
-        number = len(s["cycles"]) + 1
-        pool = (
-            experiment["initial_opponents"]
-            if not experiment["completed_rounds"]
-            else self.default_opponents(s, s["config"]["opponent_limit"])
-        )
         cycle = dict(
-            id=number,
+            id=len(s["cycles"]) + 1,
             experiment=s["id"],
-            number=experiment["completed_rounds"] + 1,
+            number=experiment["completed_brawls"] + 1,
             status="researching",
             config=deepcopy(s["config"]),
-            targets={
-                b["id"]: b["completed"]
-                + s["config"]["branch_iterations"].get(
-                    b["id"], s["config"]["iterations_per_round"]
-                )
-                for b in selected
-            },
-            starts={b["id"]: b["completed"] for b in selected},
-            reference=list(pool),
+            reference=list(reference),
             ranking=[],
             roster={},
+            started_at=time.time(),
         )
-        for b in selected:
-            b["status"] = "ready"
         s["cycles"].append(cycle)
         s["phase"] = "researching"
         self.event(
-            db, s, "round_started", {"round": cycle["number"], "opponents": list(pool)}
+            db, s, "epoch_started", {"epoch": cycle["number"], "opponents": reference}
         )
+        return cycle
+
+    def brawl_due(self, s, cycle, now=None):
+        if cycle["status"] != "researching" or not cycle["reference"]:
+            return None
+        pending = s.get("promotions_pending", 0)
+        if pending >= s["config"]["brawl_promotions"]:
+            return "promotions"
+        waited = (now or time.time()) - cycle["started_at"]
+        if pending and waited >= s["config"]["brawl_fallback_seconds"]:
+            return "fallback"
+        return None
+
+    def start_brawl(self, s, db, cycle, reason):
+        """Freeze every active branch's representative plus anchors and play."""
+        cycle["status"] = "competing"
+        cycle["brawl_reason"] = reason
+        cycle["brawl_started_at"] = time.time()
+        cycle["roster"] = {
+            b["id"]: dict(
+                candidate_id=b["representative"],
+                combination=b["combination"],
+                model=b["model"],
+                effort=b["model_config"]["effort"],
+            )
+            for b in s["branches"].values()
+            if not b["archived"] and b["representative"]
+        }
+        for role in ("anchors", "guests"):
+            for cid in s["config"].get(role, []):
+                if cid not in s["candidates"]:
+                    raise ValueError("大乱斗参赛版本尚未注册：" + cid)
+                cycle["roster"][cid] = dict(
+                    candidate_id=cid, combination=role[:-1], model=role[:-1],
+                    effort=role[:-1], anchor=role == "anchors", iterable=False,
+                )
+        for cid in self.sync_resident_releases(s):
+            c = s["candidates"][cid]
+            cycle["roster"][cid] = dict(
+                candidate_id=cid,
+                entrant_id=c.get("entrant_id"),
+                combination=c.get("combination", "external"),
+                model="external",
+                effort="external",
+                external=True,
+                iterable=False,
+            )
+        roster = [row["candidate_id"] for row in cycle["roster"].values()]
+        for cid in s["bootstrap"]:
+            if len(roster) >= 4:
+                break
+            roster.append(cid)
+        if len(roster) < 4:
+            raise ValueError("共同大乱斗至少需要四个参赛版本")
+        cycle["entrants"] = roster
+        s["promotions_pending"] = 0
+        matches = len(roster) * cycle["config"]["brawl_appearances"] // 4
+        matches = (matches + 3) // 4 * 4
+        key = read_json(Path(s["root"]) / "private/random.json")["key"]
+        assignments = schedule(roster, matches, digest([key, "competition", cycle["id"]]))
+        chunk = 4 * COMPETITION_BLOCKS_PER_JOB
+        for block in range(0, len(assignments), chunk):
+            self.queue(
+                s,
+                "match",
+                scope="competition",
+                cycle=cycle["id"],
+                host=cycle["config"].get("brawl_host"),
+                assignments=assignments[block : block + chunk],
+            )
+        self.event(
+            db, s, "competition_started",
+            {"cycle": cycle["id"], "matches": matches, "reason": reason},
+        )
+
+    def startable(self, s):
+        """Branches that may begin their next iteration now."""
+        cycle = self.current_cycle(s)
+        if (
+            s["status"] != "running"
+            or s["phase"] != "researching"
+            or s.get("stop_plan")
+            or cycle is None
+            or not cycle["reference"]
+        ):
+            return []
+        targets = set(s["experiments"][-1]["targets"])
+        return [
+            b
+            for b in s["branches"].values()
+            if b["id"] in targets and not b["archived"] and b["status"] == "ready"
+        ]
 
     def start_iteration(self, s, branch):
         b = s["branches"][branch]
-        cycle = s["cycles"][-1]
-        if (
-            branch not in cycle["targets"]
-            or b["completed"] >= cycle["targets"][branch]
-            or b["status"] != "ready"
-        ):
+        cycle = self.current_cycle(s)
+        if b not in self.startable(s):
             raise ValueError("分支尚未就绪，无法开始本次迭代")
         cfg = deepcopy(s["config"])
         combination = s["definitions"][b["combination"]]
@@ -1365,11 +1416,12 @@ class Research:
             id=iid,
             branch=branch,
             number=number,
-            cycle=s["cycles"][-1]["id"],
+            cycle=cycle["id"],
             experiment=s["id"],
             status="researching",
             config=deepcopy(cfg),
             incumbent=b["representative"],
+            opponents=list(cycle["reference"]),
             candidates=[],
             spent=0.0,
             results={},
@@ -1392,158 +1444,163 @@ class Research:
         if s["status"] != "running":
             return
         self.initialize_ready(s)
-        if s["phase"] in ("initializing", "boundary"):
+        experiment = s["experiments"][-1]
+        if s["phase"] == "initializing":
             if any(
                 not s["branches"][bid]["representative"]
-                for bid in s["experiments"][-1]["targets"]
+                for bid in experiment["targets"]
             ):
                 return
-            self.begin_cycle(s, db)
-        if s["phase"] == "researching":
-            cycle = s["cycles"][-1]
-            for b in s["branches"].values():
-                if b["id"] not in cycle["targets"]:
-                    continue
-                it = s["iterations"].get(b.get("iteration"))
-                if (
-                    it
-                    and it["status"] == "submitted"
-                    and not any(
-                        j["kind"] == "agent"
-                        and j.get("iteration") == it["id"]
-                        and j["status"] in ("running", "queued", "admitted")
-                        for j in s["jobs"].values()
-                    )
-                ):
-                    it["status"] = "preparing"
-                    b["status"] = "preparing"
-                    self.queue(
-                        s,
-                        "prepare",
-                        branch=b["id"],
-                        iteration=it["id"],
-                        candidates=it["candidates"],
-                        combination=b["combination"],
-                        training_games=it["training_games"],
-                    )
-                if (
-                    b["status"] == "ready"
-                    and b["completed"] >= cycle["targets"][b["id"]]
-                ):
-                    b["status"] = "waiting"
-            if all(
-                s["branches"][bid]["status"] == "waiting" for bid in cycle["targets"]
+            cycle = self.open_epoch(s, db, experiment["initial_opponents"])
+            if not cycle["reference"]:
+                self.start_brawl(s, db, cycle, "opening")
+        cycle = self.current_cycle(s)
+        for b in s["branches"].values():
+            it = s["iterations"].get(b.get("iteration"))
+            if (
+                it
+                and it["status"] == "submitted"
+                and not any(
+                    j["kind"] == "agent"
+                    and j.get("iteration") == it["id"]
+                    and j["status"] in ("running", "queued", "admitted")
+                    for j in s["jobs"].values()
+                )
             ):
-                plan = s.get("stop_plan") or {}
-                if plan and not plan.get("competition", True):
-                    s.update(
-                        status="paused",
-                        pause_reason="迭代阶段结束，按安排暂停（未跑大乱斗）",
-                        stop_plan=None,
-                    )
-                    s["experiments"][-1]["status"] = "paused"
-                    return
-                cycle["status"] = "competing"
-                s["phase"] = "competing"
-                cycle["roster"] = {
-                    b["id"]: dict(
-                        candidate_id=b["representative"],
-                        combination=b["combination"],
-                        model=b["model"],
-                        effort=b["model_config"]["effort"],
-                    )
-                    for b in self.eligible(s)
-                }
-                for cid in self.sync_resident_releases(s):
-                    c = s["candidates"][cid]
-                    cycle["roster"][cid] = dict(
-                        candidate_id=cid,
-                        entrant_id=c.get("entrant_id"),
-                        combination=c.get("combination", "external"),
-                        model="external",
-                        effort="external",
-                        external=True,
-                        iterable=False,
-                    )
-                roster = [b["candidate_id"] for b in cycle["roster"].values()]
-                for cid in s["bootstrap"]:
-                    if len(roster) >= 4:
-                        break
-                    roster.append(cid)
-                # An entirely unsuccessful first round still uses the three seed styles.
-                if len(roster) < 4:
-                    alias = "bootstrap--balanced--extra"
-                    base = s["candidates"][s["bootstrap"][1]]
-                    s["candidates"][alias] = {
-                        **base,
-                        "id": alias,
-                        "spec": {**base["spec"], "version": alias},
-                    }
-                    roster.append(alias)
-                matches = (
-                    len(roster) * cycle["config"]["competition_games_per_branch"] // 4
-                )
-                matches = (matches + 3) // 4 * 4
-                key = read_json(Path(s["root"]) / "private/random.json")["key"]
-                assignments = schedule(
-                    roster, matches, digest([key, "competition", cycle["id"]])
-                )
-                chunk = 4 * COMPETITION_BLOCKS_PER_JOB
-                for block in range(0, len(assignments), chunk):
-                    self.queue(
-                        s,
-                        "match",
-                        scope="competition",
-                        cycle=cycle["id"],
-                        assignments=assignments[block : block + chunk],
-                    )
-                self.event(
-                    db,
+                it["status"] = "preparing"
+                b["status"] = "preparing"
+                self.queue(
                     s,
-                    "competition_started",
-                    {"cycle": cycle["id"], "matches": matches},
+                    "prepare",
+                    branch=b["id"],
+                    iteration=it["id"],
+                    candidates=it["candidates"],
+                    combination=b["combination"],
+                    training_games=it["training_games"],
                 )
-        if s["phase"] == "competing":
-            cycle = s["cycles"][-1]
+        if cycle["status"] == "competing":
             jobs = [
                 j
                 for j in s["jobs"].values()
                 if j.get("scope") == "competition" and j["cycle"] == cycle["id"]
             ]
-            if not jobs or any(j["status"] != "completed" for j in jobs):
-                return
-            table = self.competition_table(s, cycle)
-            previous = {r["branch"]: i + 1 for i, r in enumerate(s["last_ranking"])}
-            for rank, row in enumerate(table, 1):
-                row.update(
-                    rank=rank, rank_change=previous.get(row["branch"], rank) - rank
+            if jobs and all(j["status"] == "completed" for j in jobs):
+                self.finish_brawl(s, db, cycle)
+                cycle = self.open_epoch(
+                    s, db, self.default_opponents(s, s["config"]["opponent_limit"])
                 )
-            cycle.update(status="completed", ranking=table, completed_at=time.time())
-            self.compact_jobs(s)
-            s["last_ranking"] = table
-            s["experiments"][-1]["completed_rounds"] += 1
-            s["phase"] = "boundary"
-            atomic_json(
-                Path(s["root"])
-                / "experiments"
-                / s["id"]
-                / f"round-{cycle['number']:04d}.json",
-                cycle,
+        elif not s.get("stop_plan"):
+            reason = self.brawl_due(s, cycle)
+            if reason:
+                self.start_brawl(s, db, cycle, reason)
+        plan = s.get("stop_plan")
+        if plan and cycle["status"] != "competing" and not any(
+            it["experiment"] == s["id"] and it["status"] != "completed"
+            for it in s["iterations"].values()
+        ):
+            reason = "已结束当前迭代并暂停" if plan["scope"] == "now" else "本次迭代结束后暂停"
+            s.update(status="paused", pause_reason=reason, stop_plan=None)
+            experiment["status"] = "paused"
+
+    def finish_brawl(self, s, db, cycle):
+        table = self.competition_table(s, cycle)
+        previous = {r["branch"]: i + 1 for i, r in enumerate(s["last_ranking"])}
+        for rank, row in enumerate(table, 1):
+            row.update(rank=rank, rank_change=previous.get(row["branch"], rank) - rank)
+        cycle.update(status="completed", ranking=table, completed_at=time.time())
+        self.compact_jobs(s)
+        s["last_ranking"] = table
+        s["experiments"][-1]["completed_brawls"] += 1
+        atomic_json(
+            Path(s["root"]) / "experiments" / s["id"] / f"brawl-{cycle['number']:04d}.json",
+            cycle,
+        )
+        self.event(db, s, "round_completed", {"round": cycle["number"], "ranking": table})
+
+    def queue_stage(self, s, it, stage):
+        """Queue one stage of the paired evaluation; stages add new blocks only.
+
+        Stage k brings the games per side to evaluation_games * 2**k. All
+        blocks are drawn up front from the iteration's frozen opponents, so a
+        block keeps its opponents, wall and seats whichever stage plays it.
+        """
+        cfg = it["config"]
+        key = read_json(Path(s["root"]) / "private/random.json")["key"]
+        final_blocks = cfg["evaluation_games"] * 2 ** (cfg["evaluation_stages"] - 1) // 4
+        groups = reference_groups(
+            it["opponents"], digest([key, "opponents", it["id"]]), final_blocks
+        )
+        first = 0 if stage == 0 else cfg["evaluation_games"] * 2 ** (stage - 1) // 4
+        last = cfg["evaluation_games"] * 2**stage // 4
+        it.update(stage=stage, stage_games=last * 4)
+        candidates = it["evaluated"]
+        # 分片只改任务边界，不改 block 与种子，所以用实时的 match_workers。
+        shards = evaluation_shard_count(
+            dict(cfg, match_workers=s["config"]["match_workers"]),
+            last - first,
+            len(candidates),
+        )
+        for cid in candidates:
+            blocks = []
+            for block in range(first, last):
+                seats = []
+                for seat in range(4):
+                    players = list(groups[block])
+                    players.insert(seat, cid)
+                    seats.append(dict(block=block, players=players, focal=seat))
+                blocks.append(seats)
+            per = -(-len(blocks) // shards)
+            for shard, start in enumerate(range(0, len(blocks), per)):
+                part = []
+                for seats in blocks[start : start + per]:
+                    for seat in seats:
+                        part.append(dict(index=len(part), **seat))
+                self.queue(
+                    s,
+                    "match",
+                    scope="paired",
+                    branch=it["branch"],
+                    iteration=it["id"],
+                    cycle=it["cycle"],
+                    candidate=cid,
+                    stage=stage,
+                    shard=shard,
+                    shards=shards,
+                    host=cfg.get("evaluation_host"),
+                    assignments=part,
+                )
+
+    def stage_decisions(self, it, cfg=None):
+        """Per-candidate decision at the current stage's confidence level."""
+        cfg = cfg or it.get("config") or {}
+        stages = cfg.get("evaluation_stages", 1)
+        last = it.get("stage", 0) + 1 >= stages
+        confidence = cfg.get(
+            "final_confidence" if last else "early_confidence", 0.95
+        )
+        reference = it["results"].get(it["incumbent"])
+        decisions = {}
+        for cid in it["candidates"]:
+            result = it["results"].get(cid)
+            if result is None:
+                continue
+            for metric, field in (
+                ("score", "paired"),
+                ("field", "utility_paired"),
+                ("hand", "hand_paired"),
+            ):
+                paired = paired_readout(reference, result, metric, confidence)
+                if paired:
+                    result[field] = paired
+            games = it.get("stage_games") or cfg["evaluation_games"]
+            result["promotion"] = dict(
+                promotion_decision(reference, result, games, last),
+                stage=it.get("stage", 0),
+                games=games,
+                confidence=confidence,
             )
-            self.event(
-                db, s, "round_completed", {"round": cycle["number"], "ranking": table}
-            )
-            # 停止安排：本轮结果落盘后再停，不在下一轮调度任何任务。
-            plan = s.get("stop_plan") or {}
-            if plan:
-                reason = {
-                    "iteration": "本次迭代结束后暂停",
-                    "now": "已结束当前迭代并暂停",
-                }.get(plan.get("scope"), "本轮结束后暂停")
-                s.update(status="paused", pause_reason=reason, stop_plan=None)
-                s["experiments"][-1]["status"] = "paused"
-                return
-            self.begin_cycle(s, db)
+            decisions[cid] = result["promotion"]["reason"]
+        return decisions
 
     def complete_iteration(self, s, db, it, error=None, cancelled=False):
         b = s["branches"][it["branch"]]
@@ -1553,28 +1610,11 @@ class Research:
         improved = False
         if success:
             choices = [it["incumbent"], *sorted(it["candidates"])]
-            qualified = []
-            expected_games = (
-                it.get("config") or s["cycles"][it["cycle"] - 1]["config"]
-            )["evaluation_games"]
             # 晋级只使用完整四座轮换组的场口径配对区间；逐局读数不参与。
-            for cid in it["candidates"]:
-                reference = it["results"].get(it["incumbent"])
-                result = it["results"].get(cid)
-                for metric, field in (
-                    ("score", "paired"),
-                    ("field", "utility_paired"),
-                    ("hand", "hand_paired"),
-                ):
-                    paired = paired_readout(reference, result, metric)
-                    if paired and result is not None:
-                        result[field] = paired
-                if result is not None:
-                    result["promotion"] = promotion_decision(
-                        reference, result, expected_games
-                    )
-                    if result["promotion"]["eligible"]:
-                        qualified.append(cid)
+            decisions = self.stage_decisions(
+                it, it.get("config") or s["cycles"][it["cycle"] - 1]["config"]
+            )
+            qualified = [cid for cid, d in decisions.items() if d == "eligible"]
             winner = it["incumbent"]
             if qualified:
                 winner = max(
@@ -1599,6 +1639,8 @@ class Research:
         b["completed"] += 1
         b["successful"] += int(success)
         b["improved"] += int(improved)
+        if improved:
+            s["promotions_pending"] = s.get("promotions_pending", 0) + 1
         b["failed"] += int(not success)
         b["status"] = "ready"
         it.pop("config", None)
@@ -1707,54 +1749,8 @@ class Research:
             else:
                 it["status"] = "evaluating"
                 s["branches"][it["branch"]]["status"] = "evaluating"
-                cycle = s["cycles"][it["cycle"] - 1]
-                key = read_json(Path(s["root"]) / "private/random.json")["key"]
-                groups = reference_groups(
-                    cycle["reference"],
-                    digest([key, "opponents", it["id"]]),
-                    cycle["config"]["evaluation_games"] // 4,
-                )
-                # 一次评估按四座轮换组切成若干分片任务并行跑；对手、种子与
-                # 计分口径都由 block 决定，分片不改变任何一局。
-                candidates = [it["incumbent"], *ready]
-                # Do not leave match workers idle when a small candidate batch
-                # would otherwise create fewer tasks than the configured pool.
-                # Blocks and seeds remain unchanged, so this only changes task
-                # boundaries and is still reproducible.
-                # 分片只改任务边界，不改 block 与种子，所以用实时的 match_workers：
-                # 轮次冻结的那份配置会让热改后的并发度白白空着。
-                shards = evaluation_shard_count(
-                    dict(cycle["config"], match_workers=s["config"]["match_workers"]),
-                    len(groups),
-                    len(candidates),
-                )
-                for cid in candidates:
-                    blocks = []
-                    for block, opponents in enumerate(groups):
-                        seats = []
-                        for seat in range(4):
-                            players = list(opponents)
-                            players.insert(seat, cid)
-                            seats.append(dict(block=block, players=players, focal=seat))
-                        blocks.append(seats)
-                    per = -(-len(blocks) // shards)
-                    for shard, start in enumerate(range(0, len(blocks), per)):
-                        part = []
-                        for seats in blocks[start : start + per]:
-                            for seat in seats:
-                                part.append(dict(index=len(part), **seat))
-                        self.queue(
-                            s,
-                            "match",
-                            scope="paired",
-                            branch=it["branch"],
-                            iteration=it["id"],
-                            cycle=cycle["id"],
-                            candidate=cid,
-                            shard=shard,
-                            shards=shards,
-                            assignments=part,
-                        )
+                it["evaluated"] = [it["incumbent"], *ready]
+                self.queue_stage(s, it, 0)
         elif job["kind"] == "match":
             if result["status"] != "completed":
                 job["status"] = "paused"
@@ -1773,17 +1769,24 @@ class Research:
                     for j in s["jobs"].values()
                     if j.get("iteration") == it["id"] and j["kind"] == "match"
                 ]
+                if any(j["status"] != "completed" for j in jobs):
+                    return
+                # A stage is complete for every evaluated version: results are
+                # cumulative over all stages so far, since blocks never repeat.
                 for cid in sorted({j["candidate"] for j in jobs}):
-                    shards = [j for j in jobs if j["candidate"] == cid]
-                    # 分支未到齐前不发布读数：半程均值既不是选优口径，也会让
-                    # 卡片把进行中的评估显示成完成。
-                    if any(j["status"] != "completed" for j in shards):
-                        continue
-                    merged = self.merge_focal([j["focal"] for j in shards])
+                    merged = self.merge_focal(
+                        [j["focal"] for j in jobs if j["candidate"] == cid]
+                    )
                     it["results"][cid] = merged
                     s["candidates"][cid]["last_result"] = merged
-                if all(j["status"] == "completed" for j in jobs):
-                    self.complete_iteration(s, db, it)
+                decisions = self.stage_decisions(it)
+                last = it["stage"] + 1 >= it["config"]["evaluation_stages"]
+                if not last and "continue" in decisions.values() and not any(
+                    d == "eligible" for d in decisions.values()
+                ):
+                    self.queue_stage(s, it, it["stage"] + 1)
+                    return
+                self.complete_iteration(s, db, it)
 
     @staticmethod
     def compact_jobs(s):
@@ -2129,7 +2132,7 @@ class Research:
         )
         if cycle:
             cycle.pop("config")
-            if s["phase"] == "competing":
+            if cycle["status"] == "competing":
                 cycle["ranking"] = self.competition_table(s, s["cycles"][-1])
         latest_plans = {}
         for it in s["iterations"].values():
@@ -2191,7 +2194,7 @@ class Research:
         ]
         ranking = (
             cycle["ranking"]
-            if cycle and s["phase"] == "competing"
+            if cycle and cycle["status"] == "competing"
             else s["last_ranking"]
         )
         jobs = []
@@ -2224,6 +2227,8 @@ class Research:
                     "phase": s["phase"],
                     "pause_reason": s["pause_reason"],
                     "stop_plan": s.get("stop_plan"),
+                    "promotions_pending": s.get("promotions_pending", 0),
+                    "brawl_promotions": s["config"]["brawl_promotions"],
                 }
             )
             if current

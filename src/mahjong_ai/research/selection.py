@@ -1,21 +1,26 @@
-"""Promotion from complete paired evidence, conditional on the frozen opponent pool."""
+"""Promotion from complete paired evidence against frozen evaluation opponents.
+
+Evaluation runs in stages with doubling games per side. Each look at the data
+is a chance of a false promotion, so earlier stages decide only at a stricter
+confidence level; the last stage decides at the ordinary one.
+"""
 
 from functools import lru_cache
 from math import isfinite
 
 
-SELECTION_RULE = "paired_ci95_lower_gt_zero"
+SELECTION_RULE = "staged_paired_ci"
 
 
-@lru_cache(maxsize=128)
-def critical_value(groups):
+@lru_cache(maxsize=256)
+def critical_value(groups, confidence=0.95):
     from scipy.stats import t
 
-    return float(t.ppf(0.975, groups - 1))
+    return float(t.ppf(1 - (1 - confidence) / 2, groups - 1))
 
 
-def paired_interval(delta, standard_error, groups):
-    """Two-sided 95% Student-t interval, with one observation per rotation group."""
+def paired_interval(delta, standard_error, groups, confidence=0.95):
+    """Two-sided Student-t interval, with one observation per rotation group."""
     lower = upper = None
     if (
         groups >= 2
@@ -24,13 +29,19 @@ def paired_interval(delta, standard_error, groups):
         and isfinite(standard_error)
         and isfinite(delta)
     ):
-        margin = critical_value(groups) * standard_error
+        margin = critical_value(groups, confidence) * standard_error
         lower, upper = delta - margin, delta + margin
-    return dict(confidence_level=0.95, confidence_lower=lower, confidence_upper=upper)
+    return dict(
+        confidence_level=confidence, confidence_lower=lower, confidence_upper=upper
+    )
 
 
-def promotion_decision(reference, candidate, expected_games):
-    """Keep the incumbent unless the full clean comparison has a positive lower bound."""
+def promotion_decision(reference, candidate, expected_games, final=True):
+    """Promote on a positive lower bound; stop early on a negative upper bound.
+
+    The candidate's ``paired`` interval must already use this stage's
+    confidence level. ``continue`` asks for the next stage.
+    """
     rows = (reference, candidate)
     reason = "eligible"
     paired = (candidate or {}).get("paired") or {}
@@ -54,7 +65,15 @@ def promotion_decision(reference, candidate, expected_games):
     ):
         reason = "incomplete_pairing"
     else:
-        lower = paired.get("confidence_lower")
-        if lower is None or not isfinite(lower) or lower <= 0:
+        lower, upper = paired.get("confidence_lower"), paired.get("confidence_upper")
+        if lower is None or not isfinite(lower):
             reason = "insufficient_evidence"
+        elif lower > 0:
+            reason = "eligible"
+        elif final:
+            reason = "insufficient_evidence"
+        elif upper is not None and isfinite(upper) and upper < 0:
+            reason = "rejected_early"
+        else:
+            reason = "continue"
     return dict(eligible=reason == "eligible", reason=reason)

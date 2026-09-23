@@ -122,8 +122,12 @@ def train(run_dir, cfg, schedule, bundle_path, *, deadline, resume=False):
              decay_end=None, next_snapshot=0.0, collected=0, optimized=0, phase_began=None)
     if resume:
         state = torch.load(latest, map_location=device, weights_only=False)
-        if state["config"] != cfg or state["schedule"] != schedule or state["bundle"] != bundle["id"]:
+        # Worker and table counts only change collection speed, not what is learned.
+        learning = lambda c: {k: v for k, v in c.items() if k not in ("workers", "tables")}  # noqa: E731
+        if learning(state["config"]) != learning(cfg) or state["schedule"] != schedule or state["bundle"] != bundle["id"]:
             raise ValueError("resume must keep the recorded configuration, schedule and teacher")
+        if (state["config"]["workers"], state["config"]["tables"]) != (cfg["workers"], cfg["tables"]):
+            atomic_json(run_dir / f"execution-{int(time.time())}.json", {"from": state["config"], "to": cfg})
         actor.load_state_dict(state["actor"])
         opt.load_state_dict(state["optimizer"])
         replay.extend(state["replay"])

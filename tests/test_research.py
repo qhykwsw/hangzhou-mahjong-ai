@@ -17,10 +17,9 @@ from mahjong_ai.persistence.store import Store
 
 def small_config():
     return dict(
-        total_rounds=1,
-        iterations_per_round=1,
         evaluation_games=4,
-        competition_games_per_branch=4,
+        evaluation_stages=1,
+        brawl_appearances=4,
         training_games=1,
         training_caps={"heuristic": 64},
         candidate_limit=4,
@@ -87,9 +86,11 @@ def project_manifest(tmp_path):
     )
 
 
-def start_research(tmp_path, config=None):
+def start_research(tmp_path, config=None, opponents="bootstrap"):
     r = Research(tmp_path)
-    run = r.create(config or small_config())
+    if opponents == "bootstrap":
+        opponents = r.register(config or small_config())["bootstrap"]
+    run = r.create(config or small_config(), opponents=opponents)
     r.control(run, "resume")
     c = Controller(r)
     r.control(run, "resume")
@@ -109,7 +110,8 @@ def test_defaults_and_model_validation(tmp_path):
     assert sum(c["branches"] for c in cfg["combinations"]) == 14
     assert all(c["models"] == ["deepseek", "qwen"] for c in cfg["combinations"])
     assert cfg["candidate_limit"] == 1
-    assert cfg["opponent_limit"] == 4
+    assert cfg["opponent_limit"] == 3
+    assert cfg["brawl_promotions"] == 4 and cfg["evaluation_stages"] == 3
     assert cfg["agent_concurrency"] == 14
     assert cfg["training_caps"] == {
         "heuristic": 0,
@@ -234,14 +236,24 @@ def test_branch_isolation_atomic_submission_and_full_cycle(research):
             assert s["branches"][branch]["representative"].endswith("--initial")
             r.advance(s, db)
     with r.edit(run) as (s, db):
-        assert s["phase"] == "competing"
+        # Enough promotions start a common brawl without pausing iterations.
+        assert s["cycles"][-1]["status"] == "researching"
+        s["promotions_pending"] = s["config"]["brawl_promotions"]
+        r.advance(s, db)
+        assert s["cycles"][-1]["status"] == "competing"
+        assert s["phase"] == "researching" and r.startable(s)
         for j in [j for j in s["jobs"].values() if j.get("scope") == "competition"]:
             root = Path(s["root"]) / "jobs" / j["id"]
             root.mkdir(parents=True)
             r.accept(s, db, j, play(controller.task(s, j), root))
         r.advance(s, db)
-        assert s["phase"] == "finished" and s["status"] == "paused"
-        assert len(s["last_ranking"]) == 4
+        assert s["cycles"][-2]["status"] == "completed"
+        assert s["status"] == "running" and len(s["last_ranking"]) == 4
+        # The next stretch evaluates against the brawl's top three.
+        assert s["cycles"][-1]["reference"] == [
+            row["candidate_id"] for row in s["last_ranking"][:3]
+        ]
+        assert s["promotions_pending"] == 0
     snap = r.snapshot(run, branches[0])
     encoded = str(snap)
     assert (
@@ -274,8 +286,6 @@ def test_failure_consumes_once_and_config_boundaries(research):
         r.configure(run, {"evaluation_games": 8})
     with pytest.raises(ValueError, match="新建实验"):
         r.configure(run, {"game": {"rounds": 2}})
-    r.control(run, "extend", 3)
-    assert r.read(run)["config"]["total_rounds"] == 4
 
 
 def test_opponents_sample_with_replacement_and_allow_self():
@@ -297,7 +307,7 @@ def test_api_configuration_and_origin(tmp_path, monkeypatch):
     monkeypatch.setattr(Controller, "tick", lambda self: None)
     with TestClient(application(tmp_path)) as client:
         assert client.get("/").status_code == 200
-        assert client.get("/api/directions").json()["defaults"]["total_rounds"] == 10
+        assert client.get("/api/directions").json()["defaults"]["brawl_promotions"] == 4
         result = client.post("/api/experiments", json={"config": small_config()})
         assert result.status_code == 200
         run = result.json()["experiment"]["id"]
@@ -425,7 +435,11 @@ def test_training_cost_feedback_survives_pause_and_new_experiment(research):
     r.control(run, "pause")
     controller.tick()
     r.control(run, "close")
-    run2 = r.create(small_config() | {"iteration_seconds": 7200}, targets=[branch])
+    run2 = r.create(
+        small_config() | {"iteration_seconds": 7200},
+        targets=[branch],
+        opponents=[r.read()["branches"][branch]["representative"]],
+    )
     r.control(run2, "resume")
     with r.edit(run2) as (s, db):
         r.advance(s, db)
@@ -517,7 +531,7 @@ def test_candidate_quota_matches_prompt_and_rejects_before_preflight(
 
 
 def test_previous_iteration_draft_must_be_forked_before_submission(tmp_path):
-    r, run, _ = start_research(tmp_path, small_config() | {"iterations_per_round": 2})
+    r, run, _ = start_research(tmp_path)
     branch = next(iter(r.read(run)["branches"]))
     with r.edit(run) as (s, db):
         r.start_iteration(s, branch)
@@ -630,7 +644,6 @@ def test_each_iteration_starts_a_fresh_thread_with_handoff(research):
             status="completed", improved=True, spent=600.0
         )
         s["branches"][branch].update(thread_id="thread-1", status="ready", completed=1)
-        s["cycles"][-1]["targets"][branch] = 2
     with r.edit(run) as (s, db):
         second = r.start_iteration(s, branch)
         task = controller.task(s, s["jobs"][second["id"]])
@@ -761,8 +774,10 @@ def test_64_branches_use_dynamic_agent_slots(tmp_path, monkeypatch):
         s["cycles"] = [
             dict(
                 id=1,
+                experiment=s["id"],
                 status="researching",
-                targets={b: 20 for b in s["branches"]},
+                reference=["placeholder"],
+                started_at=time.time(),
                 config=s["config"],
             )
         ]
@@ -803,8 +818,10 @@ def test_agent_launches_are_paced(tmp_path, monkeypatch):
         s["cycles"] = [
             dict(
                 id=1,
+                experiment=s["id"],
                 status="researching",
-                targets={b: 20 for b in s["branches"]},
+                reference=["placeholder"],
+                started_at=time.time(),
                 config=s["config"],
             )
         ]
@@ -859,14 +876,31 @@ def test_submission_is_idempotent_and_releases_slot(research):
     assert (root / "submitted.flag").exists()
 
 
-def test_total_rounds_and_inner_iterations_are_independent(research):
+def test_brawl_trigger_counts_promotions_and_falls_back_after_waiting(research):
     r, run, c = research
     with r.edit(run) as (s, db):
-        s["cycles"] = []
-        s["config"].update(total_rounds=2, iterations_per_round=3)
-        r.begin_cycle(s, db)
-        assert s["cycles"][-1]["number"] == 1
-        assert set(s["cycles"][-1]["targets"].values()) == {3}
+        cycle = s["cycles"][-1]
+        s["config"].update(brawl_promotions=4, brawl_fallback_seconds=100)
+        s["promotions_pending"] = 3
+        assert r.brawl_due(s, cycle, now=cycle["started_at"] + 50) is None
+        assert r.brawl_due(s, cycle, now=cycle["started_at"] + 100) == "fallback"
+        s["promotions_pending"] = 0
+        assert r.brawl_due(s, cycle, now=cycle["started_at"] + 1000) is None
+        s["promotions_pending"] = 4
+        assert r.brawl_due(s, cycle, now=cycle["started_at"]) == "promotions"
+
+
+def test_opening_brawl_supplies_first_opponents_and_anchors_are_excluded(tmp_path):
+    r, run, c = start_research(tmp_path, opponents=None)
+    with r.edit(run) as (s, db):
+        cycle = s["cycles"][-1]
+        assert cycle["status"] == "competing" and cycle["reference"] == []
+        assert not r.startable(s)
+        s["last_ranking"] = [
+            dict(candidate_id=cid, branch=cid) for cid in ("anchor", "a", "b", "c", "d")
+        ]
+        s["config"]["anchors"] = ["anchor"]
+        assert r.default_opponents(s, 3) == ["a", "b", "c"]
 
 
 def test_pause_finishes_when_worker_exits_between_poll_and_cleanup(
@@ -969,7 +1003,7 @@ def finish_comparison(r, experiment):
     from mahjong_ai.evaluation.schedule import standings
 
     with r.edit(experiment) as (s, db):
-        assert s["phase"] == "competing"
+        assert s["cycles"][-1]["status"] == "competing"
         cycle = s["cycles"][-1]
         for job in [
             j
@@ -987,156 +1021,72 @@ def finish_comparison(r, experiment):
         r.advance(s, db)
 
 
-def test_selective_iterations_all_eligible_compete_and_top_k_automatically_refresh(
-    research,
-):
+def test_every_branch_competes_and_the_brawl_top_refreshes_opponents(research):
     r, experiment, controller = research
     ids = list(r.read(experiment)["branches"])
-    with r.edit(experiment) as (s, db):
-        # One already evaluated branch remains a competitor, but is not iterated.
-        s["branches"][ids[1]]["successful"] = 1
-        s["branches"][ids[1]]["completed"] = 1
     r.control(experiment, "pause")
     controller.tick()
     r.control(experiment, "close")
     config = small_config() | {
-        "total_rounds": 2,
         "opponent_limit": 1,
         "evaluation_games": 8,
+        "brawl_promotions": 1,
     }
     experiment = r.create(config, targets=[ids[0]], opponents=[ids[1] + "--initial"])
     r.control(experiment, "resume")
     with r.edit(experiment) as (s, db):
         r.advance(s, db)
-        assert list(s["cycles"][-1]["targets"]) == [ids[0]]
+        assert s["cycles"][-1]["reference"] == [ids[1] + "--initial"]
+        assert [b["id"] for b in r.startable(s)] == [ids[0]]
     first = finish_branch_with_receipts(r, experiment, controller, ids[0], "first")
     with r.edit(experiment) as (s, db):
+        # The single promotion reached brawl_promotions and started the brawl.
         cycle = s["cycles"][-1]
-        assert set(cycle["roster"]) == {ids[0], ids[1]}
-        assert cycle["reference"] == [ids[1] + "--initial"]
-        assignments = [
-            a
-            for j in s["jobs"].values()
-            if j.get("cycle") == cycle["id"] and j.get("scope") == "competition"
-            for a in j["assignments"]
-        ]
-        assert any(p in s["bootstrap"] for a in assignments for p in a["players"])
+        assert cycle["status"] == "competing" and cycle["brawl_reason"] == "promotions"
+        assert s["promotions_pending"] == 0
+        # Branches that are not iterating still send their representative.
+        assert set(cycle["roster"]) == set(ids)
     finish_comparison(r, experiment)
     s = r.read(experiment)
-    assert s["phase"] == "researching"
-    assert s["cycles"][-1]["number"] == 2
+    assert s["cycles"][-1]["number"] == 2 and s["cycles"][-1]["status"] == "researching"
     assert s["cycles"][-1]["reference"] == [s["last_ranking"][0]["candidate_id"]]
-    assert not any(cid in s["bootstrap"] for cid in s["cycles"][-1]["reference"])
-    finish_branch_with_receipts(
-        r, experiment, controller, ids[0], "second", improve=False
-    )
-    finish_comparison(r, experiment)
-    s = r.read(experiment)
-    assert s["phase"] == "finished"
     assert s["branches"][ids[0]]["representative"] == first
-    assert s["branches"][ids[0]]["completed"] == 2
-    assert s["branches"][ids[1]]["completed"] == 1
-    assert s["branches"][ids[2]]["completed"] == 0
-    assert s["experiments"][-1]["completed_rounds"] == 2
-    assert len(s["last_ranking"]) == 2
+    assert s["experiments"][-1]["completed_brawls"] == 1
+    assert len(s["last_ranking"]) == len(ids)
 
 
-def test_stop_plan_round_pauses_at_the_boundary(research):
+def test_stop_after_iteration_waits_for_running_iterations(research):
     r, experiment, controller = research
     ids = list(r.read(experiment)["branches"])
     with r.edit(experiment) as (s, db):
-        s["branches"][ids[1]]["successful"] = 1
-        s["branches"][ids[1]]["completed"] = 1
-    r.control(experiment, "pause")
-    controller.tick()
-    r.control(experiment, "close")
-    config = small_config() | {"total_rounds": 2, "opponent_limit": 1}
-    experiment = r.create(config, targets=[ids[0]], opponents=[ids[1] + "--initial"])
-    r.control(experiment, "resume")
-    r.control(experiment, "pause_after", options={"scope": "round"})
-    assert r.read(experiment)["stop_plan"] == {
-        "scope": "round",
-        "competition": True,
-    }
+        r.start_iteration(s, ids[0])
+    r.control(experiment, "pause_after", options={"scope": "iteration"})
+    assert r.read(experiment)["stop_plan"] == {"scope": "iteration"}
     r.control(experiment, "clear_stop")
     assert r.read(experiment)["stop_plan"] is None
-    r.control(experiment, "pause_after", options={"scope": "round"})
+    r.control(experiment, "pause_after", options={"scope": "iteration"})
     with r.edit(experiment) as (s, db):
+        assert not r.startable(s)
         r.advance(s, db)
-        assert s["cycles"][-1]["number"] == 1
-    finish_branch_with_receipts(r, experiment, controller, ids[0], "first")
-    finish_comparison(r, experiment)
-    s = r.read(experiment)
-    assert s["status"] == "paused" and s["phase"] == "boundary"
-    assert s["pause_reason"] == "本轮结束后暂停"
-    assert s["stop_plan"] is None
-    assert s["experiments"][-1]["completed_rounds"] == 1
-    assert [c["number"] for c in s["cycles"] if c["experiment"] == experiment] == [1]
-    assert r.snapshot(experiment)["experiment"]["stop_plan"] is None
-    # 继续后才开始下一轮，并且不会再次自动暂停。
+        assert s["status"] == "running"
+        it = s["iterations"][s["branches"][ids[0]]["iteration"]]
+        r.complete_iteration(s, db, it, "no candidate submitted")
+        r.advance(s, db)
+        assert s["status"] == "paused" and s["stop_plan"] is None
+        assert s["pause_reason"] == "本次迭代结束后暂停"
     r.control(experiment, "resume")
     with r.edit(experiment) as (s, db):
-        r.advance(s, db)
-    s = r.read(experiment)
-    assert s["status"] == "running" and s["phase"] == "researching"
-    assert s["cycles"][-1]["number"] == 2
+        assert r.startable(s)
 
 
 def test_pause_keeps_stop_plan(research):
     r, experiment, _ = research
     with r.edit(experiment) as (s, db):
-        s["stop_plan"] = {"scope": "round", "competition": True}
+        s["stop_plan"] = {"scope": "iteration"}
     r.control(experiment, "pause")
     state = r.read(experiment)
     assert state["status"] == "pausing"
-    assert state["stop_plan"] == {"scope": "round", "competition": True}
-
-
-def test_stop_after_iteration_shortens_cycle_and_pause_without_competition(research):
-    r, experiment, controller = research
-    ids = list(r.read(experiment)["branches"])
-    r.control(experiment, "pause")
-    controller.tick()
-    r.control(experiment, "close")
-    config = small_config() | {"total_rounds": 3, "iterations_per_round": 3}
-    experiment = r.create(config, targets=ids)
-    r.control(experiment, "resume")
-    with r.edit(experiment) as (s, db):
-        r.advance(s, db)
-        cycle = s["cycles"][-1]
-        assert set(cycle["targets"].values()) == {3}
-        r.start_iteration(s, ids[0])
-    r.control(experiment, "pause_after", options={"scope": "iteration"})
-    state = r.read(experiment)
-    plan = state["stop_plan"]
-    assert plan["scope"] == "iteration" and plan["competition"] is True
-    assert set(plan["targets"].values()) == {3}
-    with r.edit(experiment) as (s, db):
-        cycle = s["cycles"][-1]
-        assert cycle["targets"][ids[0]] == 1  # 在跑的那一拍收尾
-        assert cycle["targets"][ids[1]] == 0  # 没在跑的立即收工
-    # 取消安排要把目标还原，否则「本轮跑满」的打算会被静默改掉。
-    r.control(experiment, "clear_stop")
-    state = r.read(experiment)
-    assert state["stop_plan"] is None
-    with r.edit(experiment) as (s, db):
-        assert set(s["cycles"][-1]["targets"].values()) == {3}
-    r.control(experiment, "pause_after", options={"scope": "iteration"})
-    with r.edit(experiment) as (s, db):
-        cycle = s["cycles"][-1]
-        assert cycle["targets"][ids[0]] == 1
-        for bid in cycle["targets"]:
-            s["branches"][bid]["status"] = "waiting"
-        s["stop_plan"] = {"scope": "iteration", "competition": False}
-        r.advance(s, db)
-        assert s["status"] == "paused"
-        assert s["pause_reason"] == "迭代阶段结束，按安排暂停（未跑大乱斗）"
-        assert s["phase"] == "researching"
-        assert s["stop_plan"] is None
-    r.control(experiment, "resume")
-    with r.edit(experiment) as (s, db):
-        r.advance(s, db)
-        assert s["phase"] == "competing"
+    assert state["stop_plan"] == {"scope": "iteration"}
 
 
 def test_stop_now_discards_unfinished_iteration(research):
@@ -1149,166 +1099,19 @@ def test_stop_now_discards_unfinished_iteration(research):
     candidate = r.fork(experiment, ids[0], "doomed", "discard")["candidate_id"]
     r.control(experiment, "stop_now")
     state = r.read(experiment)
-    assert state["stop_plan"] == {"scope": "now", "competition": True}
+    assert state["stop_plan"] == {"scope": "now"}
     assert iteration["id"] not in state["iterations"]
     assert candidate not in state["candidates"]
     assert state["branches"][ids[0]]["iteration"] is None
     assert state["branches"][ids[0]]["status"] == "ready"
     assert state["jobs"][agent["id"]]["cancelled"] is True
-    assert state["cycles"][-1]["targets"][ids[0]] == 0
     with r.edit(experiment) as (s, db):
         r.advance(s, db)
-        assert s["phase"] == "competing"
+        assert s["status"] == "paused"
     assert any(
         event["kind"] == "iterations_discarded"
         for event in r.snapshot(experiment)["events"]
     )
-
-
-def test_new_experiment_preserves_branch_history_and_rejects_old_sessions(research):
-    r, experiment, controller = research
-    branch = next(iter(r.read(experiment)["branches"]))
-    original = r.read(experiment)["branches"][branch]["representative"]
-    r.control(experiment, "pause")
-    controller.tick()
-    r.control(experiment, "close")
-    assert all(
-        b["status"] in ("ready", "uninitialized") for b in r.read()["branches"].values()
-    )
-    second = r.create(
-        small_config(), targets=[branch], opponents=["bootstrap--balanced"]
-    )
-    assert second != experiment
-    state = r.read(second)
-    assert state["branches"][branch]["representative"] == original
-    assert len(state["branches"]) == 4
-    assert len(state["experiments"]) == 2
-    assert (
-        "/.local/strategies/heuristic-balanced/"
-        in state["candidates"][original]["spec"]["package_path"]
-    )
-    assert not (r.project / ".local/runs").exists()
-    with pytest.raises(ValueError, match="已不是当前实验"):
-        r.fork(experiment, branch, "stale", "old agent")
-    with pytest.raises(ValueError, match="当前实验"):
-        r.create(small_config())
-
-
-def test_registry_does_not_train_unselected_combinations(tmp_path):
-    r = Research(tmp_path)
-    r.register()
-    assert not r.read()["jobs"]
-    assert len(r.read()["bootstrap"]) == 3
-    experiment = r.create(targets=["heuristic-balanced--02"])
-    state = r.read(experiment)
-    assert set(state["baselines"]) == {"heuristic-balanced"}
-    assert len(state["jobs"]) == 1
-    assert state["branches"]["ppo--02"]["status"] == "uninitialized"
-
-
-def test_evaluation_shards_split_rotation_blocks_and_merge_into_one_result(tmp_path):
-    config = small_config() | {"evaluation_games": 8, "evaluation_shards": 2}
-    r, experiment, controller = start_research(tmp_path, config)
-    branch = next(iter(r.read(experiment)["branches"]))
-    with r.edit(experiment) as (s, db):
-        agent = r.start_iteration(s, branch)
-    r.declare_plan(experiment, branch, "shards", "split evaluation", "parallel")
-    candidate = r.fork(experiment, branch, "sharded", "split work")["candidate_id"]
-    r.submit(experiment, branch, [candidate])
-    with r.edit(experiment) as (s, db):
-        r.accept(s, db, s["jobs"][agent["id"]], {"status": "completed"})
-        r.advance(s, db)
-        it = s["iterations"][s["branches"][branch]["iteration"]]
-        preparation = next(
-            j
-            for j in s["jobs"].values()
-            if j.get("iteration") == it["id"] and j["kind"] == "prepare"
-        )
-        spec = {**s["candidates"][it["incumbent"]]["spec"], "version": candidate}
-        r.accept(
-            s,
-            db,
-            preparation,
-            {
-                "status": "completed",
-                "candidates": {candidate: {"status": "ready", "spec": spec}},
-            },
-        )
-        matches = [
-            j
-            for j in s["jobs"].values()
-            if j.get("iteration") == it["id"] and j["kind"] == "match"
-        ]
-        assert len(matches) == 4  # 两个候选 × 两个分片
-        for cid in (it["incumbent"], candidate):
-            shards = [j for j in matches if j["candidate"] == cid]
-            assert sorted(j["shard"] for j in shards) == [0, 1]
-            assert all(j["shards"] == 2 for j in shards)
-            assert sorted(
-                (a["block"], a["focal"]) for j in shards for a in j["assignments"]
-            ) == [(block, seat) for block in (0, 1) for seat in range(4)]
-        assert len({controller.task(s, j)["seed"] for j in matches}) == 1
-
-        def focal(job, mean):
-            return dict(
-                candidate_id=job["candidate"],
-                appearances=4,
-                utility_sum=mean * 4,
-                mean_utility=mean,
-                errors=0,
-                timeouts=0,
-                fallback_actions=0,
-                group_means=[mean],
-            )
-
-        first = matches[0]
-        sibling = next(
-            j
-            for j in matches
-            if j["candidate"] == first["candidate"] and j["id"] != first["id"]
-        )
-        sibling["status"] = "running"
-        r.accept(
-            s,
-            db,
-            first,
-            {"status": "completed", "summary": [], "focal": focal(first, 1.0)},
-        )
-        # 分片没到齐就不发布读数：卡片保持「进行中」，不显示半程均分。
-        assert s["iterations"][it["id"]]["results"] == {}
-        assert "last_result" not in s["candidates"][first["candidate"]]
-        folder = Path(s["root"]) / "jobs" / first["id"] / "matches"
-        folder.mkdir(parents=True)
-        for index in range(4):
-            (folder / f"{index:06d}.json").write_text("{}")
-        from mahjong_ai.research.progress import branch_progress
-
-        partial = branch_progress(s)[branch]["evaluation"][0]
-        assert partial["status"] == "running"
-        assert partial["mean_utility"] is None
-        assert partial["completed_games"] == 4
-        for job in matches:
-            if job["id"] == first["id"]:
-                continue
-            r.accept(
-                s,
-                db,
-                job,
-                {"status": "completed", "summary": [], "focal": focal(job, 2.0)},
-            )
-        merged = s["iterations"][it["id"]]["results"][first["candidate"]]
-        assert merged["candidate_id"] == first["candidate"]
-        assert merged["appearances"] == 8  # 两个分片各 4 场
-        assert merged["utility_sum"] == 12.0
-        assert merged["mean_utility"] == 1.5
-        assert merged["errors"] == merged["timeouts"] == 0
-        assert merged["group_means"] == [1.0, 2.0]
-        assert merged["standard_error"] == 0.5
-        assert merged["evaluation_groups"] == 2
-        # 现场口径缺失（旧回执）时主口径退回场口径，不显示半真半假的局读数。
-        assert merged["hand_mean_utility"] is None
-        assert merged["hand_group_means"] == []
-        assert s["branches"][branch]["completed"] == 1
 
 
 def test_iteration_selection_follows_the_field_metric_and_reports_hand_pairing(
@@ -1526,7 +1329,7 @@ def test_explicit_runtime_override_is_scoped_to_new_experiment_tasks(research):
             assert task["policies"][policy["id"]]["runtime_path"] == override
 
 
-def test_all_failed_branches_use_bootstrap_comparison_and_finish_round(research):
+def test_failed_iterations_neither_promote_nor_start_a_brawl(research):
     r, experiment, controller = research
     for branch in r.read(experiment)["branches"]:
         with r.edit(experiment) as (s, db):
@@ -1534,12 +1337,9 @@ def test_all_failed_branches_use_bootstrap_comparison_and_finish_round(research)
             r.accept(s, db, job, {"status": "failed", "error": "no candidate"})
             r.advance(s, db)
     state = r.read(experiment)
-    assert state["phase"] == "competing"
-    assert not state["cycles"][-1]["roster"]
-    finish_comparison(r, experiment)
-    state = r.read(experiment)
-    assert state["phase"] == "finished" and not state["last_ranking"]
-    assert r.snapshot()["default_opponents"] == state["bootstrap"]
+    assert state["promotions_pending"] == 0
+    assert state["cycles"][-1]["status"] == "researching"
+    assert all(b["status"] == "ready" for b in state["branches"].values())
 
 
 def test_completed_agent_without_submission_resumes_same_iteration(research):
@@ -1674,3 +1474,65 @@ def test_submitted_agent_does_not_continue_while_stop_flag_is_pending(research):
         assert not job.get("continuations")
         assert s["iterations"][job["iteration"]]["status"] == "submitted"
         assert s["branches"][branch]["failed"] == 0
+
+
+def test_staged_evaluation_adds_new_blocks_until_a_decision(tmp_path):
+    config = small_config() | {"evaluation_games": 8, "evaluation_stages": 2}
+    r, experiment, controller = start_research(tmp_path, config)
+    branch = next(iter(r.read(experiment)["branches"]))
+    with r.edit(experiment) as (s, db):
+        job = r.start_iteration(s, branch)
+    r.declare_plan(experiment, branch, "staged", "one variant", "test")
+    candidate = r.fork(experiment, branch, "staged", "controlled")["candidate_id"]
+    r.submit(experiment, branch, [candidate])
+
+    def play_stage(s, db, it, means):
+        jobs = [
+            j
+            for j in s["jobs"].values()
+            if j.get("iteration") == it["id"]
+            and j["kind"] == "match"
+            and j["status"] != "completed"
+        ]
+        played = {a["block"] for j in jobs for a in j["assignments"]}
+        for job in jobs:
+            blocks = sorted({a["block"] for a in job["assignments"]})
+            values = [
+                means[job["candidate"] == candidate][b % 2] for b in blocks
+            ]
+            appearances = len(job["assignments"])
+            focal = dict(
+                candidate_id=job["candidate"],
+                appearances=appearances,
+                utility_sum=sum(values) * 4,
+                mean_utility=sum(values) / len(values),
+                group_blocks=blocks,
+                group_means=values,
+                errors=0,
+                timeouts=0,
+                fallback_actions=0,
+            )
+            r.accept(s, db, job, {"status": "completed", "summary": [], "focal": focal})
+        return played
+
+    with r.edit(experiment) as (s, db):
+        r.accept(s, db, s["jobs"][job["id"]], {"status": "completed"})
+        r.advance(s, db)
+        it = s["iterations"][s["branches"][branch]["iteration"]]
+        prep = next(
+            j for j in s["jobs"].values()
+            if j.get("iteration") == it["id"] and j["kind"] == "prepare"
+        )
+        spec = {**s["candidates"][it["incumbent"]]["spec"], "version": candidate}
+        r.accept(s, db, prep, {"status": "completed",
+                               "candidates": {candidate: {"status": "ready", "spec": spec}}})
+        # Noisy first stage: the 99% interval straddles zero, so it continues.
+        first = play_stage(s, db, it, {False: [1, 1], True: [0, 3]})
+        assert first == {0, 1} and it["status"] == "evaluating" and it["stage"] == 1
+        result = it["results"][candidate]
+        assert result["promotion"]["reason"] == "continue"
+        assert result["promotion"]["confidence"] == 0.99
+        second = play_stage(s, db, it, {False: [1, 1], True: [2, 3]})
+        assert second == {2, 3} and it["status"] == "completed"
+        assert it["results"][candidate]["appearances"] == 16
+        assert it["results"][candidate]["promotion"]["confidence"] == 0.95

@@ -462,6 +462,15 @@ class PolicySpec:
                         f"candidate interpreter is unavailable: {interpreter}"
                     )
             return
+        if self.family == "model":
+            # An exported Actor served by the host's inference service,
+            # addressed by the SHA-256 of its weights.
+            weights = self.parameters.get("weights")
+            if set(self.parameters) != {"weights"} or not (
+                isinstance(weights, str) and len(weights) == 64
+            ):
+                raise ValueError("model policy requires exactly its weights SHA-256")
+            return
         if self.family not in ("rule", "rl"):
             raise ValueError("unknown builtin policy family")
         if self.program:
@@ -505,6 +514,10 @@ class PolicySpec:
                 self.response_seconds,
                 self.runtime_path,
             )
+        if self.family == "model":
+            from mahjong_ai.execution.model_seat import ModelPolicy
+
+            return ModelPolicy(self.parameters["weights"], self.version)
         if self.family == "rule":
             return RulePolicy(
                 version=self.version, program=self.program, **self.parameters
@@ -534,6 +547,9 @@ class PolicySpec:
     def identity(self):
         d = self.as_dict()
         d.pop("version")
+        if self.family == "model":
+            # The weights fully determine a served Actor; no candidate runtime.
+            return hashlib.sha256(json.dumps(d, sort_keys=True).encode()).hexdigest()
         if self.package_path:
             from mahjong_ai.execution.candidate_runtime import tree_hash
             import sys

@@ -12,13 +12,12 @@
         <span class="tile" aria-hidden="true">發</span>
         <div>
           <h1>杭州麻将策略研究</h1>
-          <p>策略持续积累，每轮重新较量</p>
+          <p>各分支连续迭代，共同大乱斗定期重排</p>
         </div>
       </div>
       <div class="toolbar">
         <button id="pause">暂停</button><button id="resume">继续</button
         ><button id="stopPlan">停止安排…</button
-        ><button id="extend">追加轮数</button
         ><button id="closeExperiment">结束本次实验</button>
       </div>
     </header>
@@ -31,13 +30,13 @@
         </div>
         <button id="resources">调整并发</button>
       </div>
-      <div class="phase-track" aria-label="每轮研究流程">
+      <div class="phase-track" aria-label="研究流程">
         <div id="iterationPhase">
-          <b>迭代阶段</b><span>固定对比池 · 选中分支独立改进</span>
+          <b>连续迭代</b><span>各分支面对前三名分段配对评估，不等其他分支</span>
         </div>
         <span class="arrow" aria-hidden="true">→</span>
         <div id="comparisonPhase">
-          <b>对比阶段</b><span>全体分支大乱斗 · 前 K 名成为下一轮对比对象</span>
+          <b>共同大乱斗</b><span>累计晋级后发起 · 前三名成为之后迭代的评估对手</span>
         </div>
         <span class="loop" aria-hidden="true">↻</span>
       </div>
@@ -70,21 +69,21 @@
         <form id="experimentForm">
           <div class="experiment-settings">
             <label
-              >研究总轮数<input
-                id="cfg-total_rounds"
+              >大乱斗触发晋级数<input
+                id="cfg-brawl_promotions"
                 type="number"
                 min="1"
                 max="1000000"
                 required /></label
             ><label
-              >每轮分支迭代次数<input
-                id="cfg-iterations_per_round"
+              >评估段数<input
+                id="cfg-evaluation_stages"
                 type="number"
                 min="1"
                 max="1000000"
                 required /></label
             ><label
-              >对比池前 K 名<input
+              >评估对手前 K 名<input
                 id="cfg-opponent_limit"
                 type="number"
                 min="1"
@@ -118,7 +117,7 @@
             <div class="sectionhead">
               <h2>策略分支 <span id="branchCount" class="count"></span></h2>
               <span class="muted"
-                >勾选决定本轮迭代哪些分支 · 卡片显示现役做法与本轮研究判断</span
+                >勾选决定哪些分支持续迭代 · 卡片显示现役做法与当前研究判断</span
               >
             </div>
             <p class="muted" id="poolSummary"></p>
@@ -267,24 +266,16 @@
         <form id="stopForm">
           <h2>停止安排</h2>
           <p class="muted">
-            默认先跑完大乱斗再停；取消勾选则停在迭代阶段末尾，继续时再补大乱斗。
+            安排停止后不再开始新迭代；正在进行的大乱斗照常跑完。
           </p>
           <div class="stop-options">
             <label
-              ><input type="radio" name="stopScope" value="round" checked />
-              本轮结束后（跑完本轮迭代与大乱斗）</label
-            >
-            <label
-              ><input type="radio" name="stopScope" value="iteration" />
-              本次迭代结束后（各分支跑完当前这一拍就收工）</label
+              ><input type="radio" name="stopScope" value="iteration" checked />
+              本次迭代结束后（各分支跑完当前这一次就收工）</label
             >
             <label
               ><input type="radio" name="stopScope" value="now" />
-              立即结束当前迭代（删除未完成的迭代记录，重新继续下一拍）</label
-            >
-            <label
-              ><input type="checkbox" id="stopCompetition" checked />
-              先跑大乱斗</label
+              立即结束当前迭代（删除未完成的迭代记录）</label
             >
           </div>
           <div class="dialogfoot">

@@ -42,21 +42,40 @@ MODELS = {
         "efforts": ["low", "high", "max"],
     },
     "qwen": {"profile": "netease-qwen-flash", "effort": "max", "efforts": ["max"]},
+    "astra-high": {
+        "model": "gpt-6-astra",
+        "profile": "cliproxyapi-gcp",
+        "effort": "high",
+        "efforts": ["low", "medium", "high", "xhigh", "max"],
+    },
 }
 DEFAULTS = {
-    "total_rounds": 10,
-    "iterations_per_round": 10,
-    "opponent_limit": 4,
-    "branch_iterations": {},
+    # Evaluation opponents: the top of the latest common brawl, excluding anchors.
+    "opponent_limit": 3,
     "training_caps": {"heuristic": 0, "search": 0, "value": 256, "ppo": 256},
     "iteration_seconds": 3600,
     "agent_concurrency": 14,
     "training_workers": 12,
     "match_workers": 12,
     "candidate_limit": 1,
+    # Staged paired evaluation: games per side double for each further stage;
+    # earlier stages decide only at early_confidence, the last at final_confidence.
     "evaluation_games": 256,
+    "evaluation_stages": 3,
+    "early_confidence": 0.99,
+    "final_confidence": 0.95,
     "evaluation_shards": 4,
-    "competition_games_per_branch": 512,
+    # Common brawl: appearances per entrant; starts after brawl_promotions
+    # promotions, or with any promotion pending after brawl_fallback_seconds.
+    "brawl_appearances": 512,
+    "brawl_promotions": 4,
+    "brawl_fallback_seconds": 43200,
+    "brawl_host": None,
+    # Fixed brawl entrants besides branch representatives: anchors only
+    # measure drift; guests (e.g. an RL model standing in for a branch that
+    # has no version yet) may become evaluation opponents.
+    "anchors": [],
+    "guests": [],
     "training_games": 128,
     "initialization_seconds": 3600,
     "combinations": [
@@ -76,7 +95,7 @@ DEFAULTS = {
     "resources": {"memory_mb": 4096, "threads": 1, "device": "cpu"},
 }
 MACHINE = {"agent_concurrency", "training_workers", "match_workers"}
-IMMEDIATE = MACHINE | {"total_rounds"}
+IMMEDIATE = MACHINE
 
 
 def merge(base, patch):
@@ -95,8 +114,6 @@ def validate(config):
     if unknown:
         raise ValueError("unknown settings: " + ", ".join(sorted(unknown)))
     for key in (
-        "total_rounds",
-        "iterations_per_round",
         "opponent_limit",
         "iteration_seconds",
         "agent_concurrency",
@@ -105,7 +122,10 @@ def validate(config):
         "candidate_limit",
         "evaluation_games",
         "evaluation_shards",
-        "competition_games_per_branch",
+        "evaluation_stages",
+        "brawl_appearances",
+        "brawl_promotions",
+        "brawl_fallback_seconds",
         "training_games",
         "initialization_seconds",
     ):
@@ -114,14 +134,18 @@ def validate(config):
             raise ValueError(key + " must be a positive integer")
     if config["candidate_limit"] > 4:
         raise ValueError("candidate_limit must be 1..4")
-    for k in ("evaluation_games", "competition_games_per_branch"):
+    for k in ("evaluation_games", "brawl_appearances"):
         if config[k] % 4:
             raise ValueError(k + " must be a multiple of four")
-    if not isinstance(config["branch_iterations"], dict) or any(
-        not isinstance(k, str) or type(v) is not int or not 1 <= v <= 1000000
-        for k, v in config["branch_iterations"].items()
-    ):
-        raise ValueError("branch_iterations requires positive integer allowances")
+    if not 0.5 < config["final_confidence"] <= config["early_confidence"] < 1:
+        raise ValueError("confidence levels must satisfy 0.5 < final <= early < 1")
+    if config["brawl_host"] is not None and not isinstance(config["brawl_host"], str):
+        raise ValueError("brawl_host must be a host name or null")
+    for key in ("anchors", "guests"):
+        if not isinstance(config[key], list) or any(
+            not isinstance(a, str) for a in config[key]
+        ):
+            raise ValueError(key + " must list registered version IDs")
     if not isinstance(config["training_caps"], dict) or any(
         k not in ("heuristic", "value", "ppo", "search")
         or type(v) is not int

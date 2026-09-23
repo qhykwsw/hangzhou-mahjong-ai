@@ -41,7 +41,10 @@ def ledger(state, branch=None):
             continue
         cycle = state["cycles"][iteration["cycle"] - 1]
         config = cycle["config"]
-        expected = config["evaluation_games"]
+        # Staged evaluations end at their own stage; opponents are frozen on
+        # the iteration (older history froze them on the round instead).
+        expected = iteration.get("stage_games") or config["evaluation_games"]
+        opponents = iteration.get("opponents", cycle["reference"])
         reference = iteration["results"].get(iteration["incumbent"]) or {}
         candidates = by_iteration.get(iteration["id"], [])
         # Agent failures before draft creation still carry a durable lesson.
@@ -129,7 +132,7 @@ def ledger(state, branch=None):
                         "cycle": iteration["cycle"],
                         "incumbent": iteration["incumbent"],
                         "parent": candidate.get("parent") if candidate else None,
-                        "opponents": list(cycle["reference"]),
+                        "opponents": list(opponents),
                         "game": deepcopy(config["game"]),
                         "timeouts": deepcopy(config["timeouts"]),
                         "resources": deepcopy(config["resources"]),

@@ -30,11 +30,13 @@ def branch_progress(state):
         else:
             for path in (root / job["id"] / "matches").glob("*.json"):
                 competition_done.update(read_json(path)["players"])
-    iterations = {
-        i["branch"]: i
-        for i in state["iterations"].values()
-        if i["experiment"] == state["id"] and i["cycle"] == cycle["id"]
-    }
+    # A branch's current iteration may have started before the latest brawl.
+    iterations = {}
+    for bid, branch in state["branches"].items():
+        current = state["iterations"].get(branch.get("iteration"))
+        if current and current["experiment"] == state["id"]:
+            iterations[bid] = current
+    targets = set(state["experiments"][-1]["targets"]) if state["experiments"] else set()
     output = {}
     for bid, branch in state["branches"].items():
         if branch["archived"]:
@@ -42,7 +44,7 @@ def branch_progress(state):
         iteration = iterations.get(bid)
         item = dict(
             iteration=iteration["number"] if iteration else None,
-            research="waiting" if bid in cycle["targets"] else "not_selected",
+            research="waiting" if bid in targets else "not_selected",
             preparation=[],
             evaluation=[],
             outcome=None,
@@ -174,7 +176,10 @@ def branch_progress(state):
                     candidate_id=cid,
                     status=status,
                     completed_games=completed,
-                    total_games=cycle["config"]["evaluation_games"],
+                    total_games=iteration.get("stage_games")
+                    or iteration.get("config", {}).get("evaluation_games")
+                    or cycle["config"]["evaluation_games"],
+                    stage=iteration.get("stage"),
                     mean_score=result.get("mean_score") if result else None,
                     mean_place_points=(
                         result.get("mean_place_points") if result else None
