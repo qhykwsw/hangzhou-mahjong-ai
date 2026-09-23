@@ -346,7 +346,7 @@ class Dispatcher:
     # A host unreachable this long is offline (ADR-0014).
     OFFLINE_SECONDS = 600.0
 
-    def __init__(self, host, models_root, poll_seconds=30.0, probe_seconds=60.0):
+    def __init__(self, host, models_root, poll_seconds=30.0, probe_seconds=60.0, online=True):
         import queue
         import threading
 
@@ -354,7 +354,9 @@ class Dispatcher:
         self.requests, self.running = queue.Queue(), {}
         self.errors = {}
         self.probe_seconds, self.training = probe_seconds, None  # unknown = busy
-        self.last_ok = time.monotonic()  # a fresh dispatcher starts online
+        # A host last known offline stays offline until a probe reaches it, so a
+        # service restart does not route work to it for OFFLINE_SECONDS.
+        self.last_ok = time.monotonic() - (0 if online else self.OFFLINE_SECONDS + 1)
         self.launched = {}  # job id -> wall time of launch, to detect reboots
         # Training process groups suspended while a common brawl runs here.
         self.suspended, self.brawls = [], set()

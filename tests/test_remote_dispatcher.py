@@ -119,3 +119,13 @@ def test_a_long_sync_does_not_make_a_reachable_host_offline(tmp_path, monkeypatc
     for _ in range(12):
         time.sleep(0.1)
         assert not d.offline()
+
+
+def test_a_host_last_known_offline_starts_offline_until_reached(tmp_path, monkeypatch):
+    monkeypatch.setattr(remote, "job_inputs", lambda task: set())
+    host = Host()
+    host.up = False
+    d = Dispatcher(host, tmp_path, poll_seconds=0.1, probe_seconds=0.1, online=False)
+    assert d.offline()
+    host.up = True
+    assert wait(lambda: not d.offline())

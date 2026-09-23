@@ -39,6 +39,7 @@ class Controller:
             self.dispatchers[name] = Dispatcher(
                 RemoteHost(name, config, self.research.project),
                 self.research.layout.research / "models",
+                online=s.get("hosts", {}).get(name, {}).get("online", True),
             )
         return self.dispatchers[name]
 
