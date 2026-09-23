@@ -28,6 +28,7 @@ class Controller:
         self.agent_launch_at = 0.0
         self.models = ModelService(research)
         self.dispatchers = {}
+        self.hosts_checked = 0.0
         self.recover()
 
     def dispatcher(self, s, name):
@@ -468,7 +469,22 @@ class Controller:
         self.processes[(s["id"], j["id"])] = process
         atomic_json(root / "process.json", {"pid": process.pid})
 
+    def idle_hosts(self):
+        """Keep host status current while no experiment runs (the page shows it)."""
+        if self.research.states(active_only=True) or time.monotonic() < self.hosts_checked + 30:
+            return
+        self.hosts_checked = time.monotonic()
+        s = self.research.store.read()
+        if not s or not s["config"].get("hosts"):
+            return
+        known = s.get("hosts", {})
+        current = {name: not self.dispatcher(s, name).offline() for name in s["config"]["hosts"]}
+        if any(known.get(n, {}).get("online") != v or n not in known for n, v in current.items()):
+            with self.research.edit() as (s, db):
+                self.hosts(s, db)
+
     def tick(self):
+        self.idle_hosts()
         admissions = []
         concluded = []
         waking = False

@@ -358,8 +358,6 @@ function render() {
     ? `已完成 ${experiment.completed_brawls ?? 0} 次大乱斗 · 待计入晋级 ${experiment.promotions_pending ?? 0}/${experiment.brawl_promotions ?? "—"} · ${active} 条活跃分支` +
       (experiment.drain ? " · 大乱斗主机离线，本机排空后在本机进行" : "")
     : `${active} 条已注册分支`;
-  $("iterationPhase").classList.toggle("active", experiment?.phase === "researching");
-  $("comparisonPhase").classList.toggle("active", state.cycle?.status === "competing");
   renderHosts();
   renderBranches();
   const roundNote = state.events

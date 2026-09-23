@@ -2490,7 +2490,7 @@ class Research:
                     "pause_reason": s["pause_reason"],
                     "stop_plan": s.get("stop_plan"),
                     "promotions_pending": s.get("promotions_pending", 0),
-                    "brawl_promotions": s["config"]["brawl_promotions"],
+                    "brawl_promotions": s["config"].get("brawl_promotions"),
                     "drain": s.get("drain"),
                     "config_error": s.get("config_error"),
                 }
