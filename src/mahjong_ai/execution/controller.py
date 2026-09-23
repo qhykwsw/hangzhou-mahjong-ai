@@ -48,6 +48,13 @@ class Controller:
                 # Also shrinks state that accumulated before compaction existed.
                 self.research.compact_jobs(s)
                 for j in s["jobs"].values():
+                    if j["status"] == "running" and self.detached(j):
+                        # Remote work and recipe trials outlive this service:
+                        # take them over again instead of stopping them.
+                        if j["kind"] == "trial" or self.dispatcher(s, j["host"]).adopt(
+                            j["id"], Path(s["root"]) / "jobs" / j["id"]
+                        ):
+                            continue
                     if j["status"] in ("running", "admitted"):
                         self.stop(s, j, force=True)
                         root = Path(s["root"]) / "jobs" / j["id"]
@@ -87,6 +94,30 @@ class Controller:
                         status="paused",
                         pause_reason="服务已重启，继续实验以恢复",
                     )
+
+    @staticmethod
+    def detached(job):
+        """Work that runs outside this machine and survives pauses and restarts."""
+        return job["kind"] == "trial" or bool(job.get("host"))
+
+    def local_live(self, s):
+        return any(
+            j["status"] in ("running", "admitted") and not self.detached(j)
+            for j in s["jobs"].values()
+        )
+
+    def hosts(self, s, db):
+        """Refresh host availability; work that must not wait leaves offline hosts."""
+        known = s.setdefault("hosts", {})
+        for name in s["config"].get("hosts", {}):
+            online = not self.dispatcher(s, name).offline()
+            if known.get(name, {}).get("online", True) == online and name in known:
+                continue
+            known[name] = {"online": online, "since": time.time()}
+            self.research.event(db, s, "host_status", {"host": name, "online": online})
+            if not online:
+                for jid in self.research.rehome(s, db, name):
+                    self.dispatcher(s, name).forget(jid)
 
     def stop(self, s, job, force=False):
         root = Path(s["root"]) / "jobs" / job["id"]
@@ -276,6 +307,13 @@ class Controller:
             )
         return task
 
+    def admissible(self, s, j, local_busy):
+        if j["kind"] == "trial" and not j.get("baseline"):
+            it = s["iterations"][j["iteration"]]
+            return self.research.online(s, it["config"].get("evaluation_host"))
+        # A brawl played here starts once this machine's iterations are done.
+        return not (j.get("scope") == "competition" and not j.get("host") and local_busy)
+
     def overflow(self, s, local_limit):
         """Move local paired evaluations that cannot start now to idle hosts."""
         live = ("running", "admitted")
@@ -297,7 +335,11 @@ class Controller:
             key=lambda j: j["created_at"],
         )[max(0, local_limit - local_used):]
         for host in s["config"].get("overflow_hosts", []):
-            if not backlog or not self.dispatcher(s, host).idle_for_overflow():
+            if (
+                not backlog
+                or not self.research.online(s, host)
+                or not self.dispatcher(s, host).idle_for_overflow()
+            ):
                 continue
             used = sum(
                 j["kind"] == "match" and j.get("host") == host
@@ -429,6 +471,7 @@ class Controller:
     def tick(self):
         admissions = []
         concluded = []
+        waking = False
         for run in self.research.states(active_only=True):
             with self.research.edit(run["id"]) as (s, db):
                 self.consume(s, db)
@@ -509,13 +552,6 @@ class Controller:
                                         if (root / cid / "artifact.json").exists()
                                     }
                                 atomic_json(root / "result.json", result)
-                    if (
-                        j.get("host")
-                        and j["status"] == "running"
-                        and s["status"] != "running"
-                        and "stop_requested" not in j
-                    ):
-                        self.stop(s, j)
                     # 作业已离开运行态（被取消/暂停）或整台实验不再运行时，
                     # 都要真正收掉还在跑的进程，否则迭代删了进程还在算。
                     if (
@@ -532,12 +568,16 @@ class Controller:
                             force=time.time() - j.get("stop_requested", time.time())
                             > 5,
                         )
-                if s["status"] == "pausing" and not any(
-                    j["status"] in ("running", "admitted") for j in s["jobs"].values()
-                ):
+                self.hosts(s, db)
+                # Pausing only waits for this machine's work; remote work and
+                # trials continue and are collected after resuming.
+                if s["status"] == "pausing" and not self.local_live(s):
                     s["status"] = "paused"
                 if s["status"] != "running":
                     continue
+                waking = waking or any(
+                    j["kind"] == "trial" and j["status"] == "running" for j in s["jobs"].values()
+                )
                 self.research.advance(s, db)
                 if s["status"] != "running":
                     continue
@@ -568,7 +608,10 @@ class Controller:
                     ("match", host, cfg["workers"])
                     for host, cfg in s["config"].get("hosts", {}).items()
                 ]
+                local_busy = self.research.local_busy(s)
                 for kind, host, limit in lanes:
+                    if host and not self.research.online(s, host):
+                        continue
                     used = sum(
                         j["kind"] == kind
                         and j.get("host") == host
@@ -582,6 +625,7 @@ class Controller:
                             if j["kind"] == kind
                             and j.get("host") == host
                             and j["status"] == "queued"
+                            and self.admissible(s, j, local_busy)
                         ),
                         key=lambda j: j["created_at"],
                     )
@@ -612,6 +656,9 @@ class Controller:
         for trial, promoted, evaluation in concluded:
             if self.recipes is not None:
                 self.recipes.conclude(trial, promoted, evaluation)
+        if self.recipes is not None and waking:
+            # Trials handed over before a restart continue once research runs.
+            self.recipes.wake()
         for key, p in list(self.processes.items()):
             if p.poll() is None:
                 continue
@@ -630,6 +677,6 @@ class Controller:
             time.sleep(0.1)
         for s in self.research.states():
             for j in s["jobs"].values():
-                if j["status"] == "running":
+                if j["status"] == "running" and not self.detached(j):
                     self.stop(s, j, force=True)
         self.models.close()

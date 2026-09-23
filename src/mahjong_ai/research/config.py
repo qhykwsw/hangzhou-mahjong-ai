@@ -84,6 +84,10 @@ DEFAULTS = {
     # Hosts that take local paired evaluations waiting beyond local capacity,
     # but only while no training runs on them.
     "overflow_hosts": [],
+    # Branch modes by branch ID: iterating (default), competing or archived.
+    # Configured branches not listed iterate; registered branches no longer
+    # configured are archived.
+    "modes": {},
     "training_games": 128,
     "initialization_seconds": 3600,
     "combinations": [
@@ -104,6 +108,12 @@ DEFAULTS = {
 }
 MACHINE = {"agent_concurrency", "training_workers", "match_workers"}
 IMMEDIATE = MACHINE
+# Settings a running experiment takes from research.toml (ADR-0014); all
+# others are evaluation conditions frozen with the experiment.
+LIVE = MACHINE | {
+    "combinations", "models", "modes", "anchors", "guests",
+    "hosts", "overflow_hosts", "brawl_host",
+}
 
 
 def merge(base, patch):
@@ -245,6 +255,16 @@ def validate(config):
             raise ValueError("positive training_games required")
     if not config["combinations"]:
         raise ValueError("register at least one combination")
+    configured = {
+        f"{c['id']}--{suffix}"
+        for c in config["combinations"]
+        for suffix in c.get("branch_ids", [f"{i + 1:02d}" for i in range(c["branches"])])
+    }
+    if not isinstance(config["modes"], dict) or any(
+        k not in configured or v not in ("iterating", "competing", "archived")
+        for k, v in config["modes"].items()
+    ):
+        raise ValueError("modes maps configured branch IDs to iterating, competing or archived")
     for model in config["models"].values():
         if model["effort"] not in model["efforts"]:
             raise ValueError("unsupported reasoning effort")

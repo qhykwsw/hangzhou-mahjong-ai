@@ -14,6 +14,7 @@ import subprocess
 import sys
 import time
 import traceback
+import urllib.error
 import urllib.request
 
 from starlette.applications import Starlette
@@ -21,7 +22,6 @@ from starlette.responses import FileResponse, JSONResponse
 from starlette.routing import Route
 from starlette.staticfiles import StaticFiles
 from mahjong_ai.research.service import Research
-from mahjong_ai.research.config import configuration, COMBINATIONS
 from mahjong_ai.execution.controller import Controller
 from mahjong_ai.persistence.artifacts import atomic_json, exclusive_lock, read_json
 from mahjong_ai.interfaces.service_host import open_url, start_service, stop_service
@@ -48,9 +48,22 @@ def application(project, tailscale_url=None):
         if recipes is not None:
             await asyncio.to_thread(recipes.recover)
         stopped = asyncio.Event()
+        watched = {"stamp": None}
+
+        def apply_configuration():
+            """research.toml is the only control surface for branches (ADR-0014)."""
+            files = [arena.project / "research.toml", arena.project / ".local/machine.toml"]
+            stamp = tuple(f.stat().st_mtime_ns if f.exists() else 0 for f in files)
+            if stamp != watched["stamp"]:
+                watched["stamp"] = stamp
+                arena.apply()
 
         async def loop():
             while not stopped.is_set():
+                try:
+                    await asyncio.to_thread(apply_configuration)
+                except Exception:
+                    traceback.print_exc()
                 try:
                     await asyncio.to_thread(controller.tick)
                 except Exception:
@@ -171,17 +184,6 @@ def application(project, tailscale_url=None):
         except (KeyError, ValueError) as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
 
-    async def directions(request):
-        return JSONResponse(
-            {
-                "defaults": configuration(arena.project),
-                "combinations": [
-                    {"id": k, "name": v[1], "family": v[0]}
-                    for k, v in COMBINATIONS.items()
-                ],
-            }
-        )
-
     async def mutate(request):
         origin = request.headers.get("origin")
         if origin and origin != str(request.base_url).rstrip("/"):
@@ -193,20 +195,12 @@ def application(project, tailscale_url=None):
             if request.url.path == "/api/experiments":
                 identity = await asyncio.to_thread(
                     arena.create,
-                    value.get("config"),
-                    value.get("targets"),
+                    None,
+                    None,
                     value.get("opponents"),
                     value.get("candidate_runtime_path"),
                 )
                 result = await asyncio.to_thread(arena.control, identity, "resume")
-            elif request.url.path == "/api/config":
-                result = await asyncio.to_thread(
-                    arena.configure, value["experiment"], value["patch"]
-                )
-            elif request.url.path == "/api/branches":
-                result = await asyncio.to_thread(
-                    arena.archive, value["branch"], value["archived"]
-                )
             else:
                 result = await asyncio.to_thread(
                     arena.control,
@@ -237,45 +231,16 @@ def application(project, tailscale_url=None):
         except (AttributeError, ValueError) as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
 
-    async def recipe_mutate(request):
-        origin = request.headers.get("origin")
-        if origin and origin != str(request.base_url).rstrip("/"):
-            return JSONResponse(
-                {"error": "local same-origin request required"}, status_code=403
-            )
-        if recipes is None:
-            return JSONResponse({"error": "训练方案迭代未启用"}, status_code=400)
-        try:
-            value = await request.json()
-            if request.url.path == "/api/recipes/experiments":
-                await asyncio.to_thread(recipes.create, value.get("limit"))
-                result = await asyncio.to_thread(recipes.control, "resume")
-            else:
-                result = await asyncio.to_thread(
-                    recipes.control,
-                    value["action"],
-                    value.get("line"),
-                    value.get("count", 0),
-                )
-            return JSONResponse(result)
-        except (ValueError, KeyError, TypeError) as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
-
     app = Starlette(
         lifespan=lifespan,
         routes=[
             Route("/", home),
             Route("/api/recipes/state", recipe_state),
             Route("/api/recipes/trial", recipe_trial),
-            Route("/api/recipes/experiments", recipe_mutate, methods=["POST"]),
-            Route("/api/recipes/control", recipe_mutate, methods=["POST"]),
             Route("/api/health", health),
             Route("/api/state", state),
             Route("/api/activity", activity),
-            Route("/api/directions", directions),
             Route("/api/experiments", mutate, methods=["POST"]),
-            Route("/api/config", mutate, methods=["POST"]),
-            Route("/api/branches", mutate, methods=["POST"]),
             Route("/api/control", mutate, methods=["POST"]),
         ],
     )
@@ -440,6 +405,13 @@ def main(argv=None):
     p.add_argument("--no-open", action="store_true")
     sub.add_parser("status")
     sub.add_parser("stop")
+    # The workbench is read-only; experiments are operated from here.
+    p = sub.add_parser("control", help="pause, resume, stop or close the experiment")
+    p.add_argument("action", choices=["pause", "resume", "pause_after", "stop_now",
+                                      "clear_stop", "close"])
+    p = sub.add_parser("create", help="start a new experiment from research.toml")
+    p.add_argument("--opponents", nargs="*", default=None)
+    p.add_argument("--candidate-runtime", default=None)
     p = sub.add_parser("serve")
     p.add_argument("--port", type=int, required=True)
     p.add_argument("--tailscale-ip", help=argparse.SUPPRESS)
@@ -471,6 +443,32 @@ def main(argv=None):
         running = health_at(url, args.project) or {}
         if running.get("tailscale_url"):
             print("Tailscale: " + running["tailscale_url"])
+    elif args.command in ("control", "create"):
+        record = root / "service.json"
+        value = read_json(record) if record.exists() else {}
+        if not value or not health_at(value["url"], args.project):
+            raise SystemExit("服务未运行，先执行 start")
+        if args.command == "create":
+            path, body = "/api/experiments", {
+                "opponents": args.opponents,
+                "candidate_runtime_path": args.candidate_runtime,
+            }
+        else:
+            with urllib.request.urlopen(value["url"] + "/api/state?summary=1", timeout=60) as r:
+                experiment = (json.load(r).get("experiment") or {}).get("id")
+            path, body = "/api/control", {"experiment": experiment, "action": args.action}
+        request = urllib.request.Request(
+            value["url"] + path, json.dumps(body).encode(),
+            {"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=600) as r:
+                state = json.load(r)
+        except urllib.error.HTTPError as exc:
+            raise SystemExit(json.load(exc).get("error", str(exc)))
+        current = state.get("experiment") or {}
+        print(json.dumps({k: current.get(k) for k in ("id", "status", "phase", "pause_reason")},
+                         ensure_ascii=False))
     elif args.command == "stop":
         record = root / "service.json"
         value = read_json(record) if record.exists() else {}

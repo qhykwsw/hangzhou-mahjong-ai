@@ -150,17 +150,6 @@ function renderRecipes() {
     return;
   }
   const e = data.experiment;
-  const open = e && e.phase !== "closed";
-  $("recipeStart").disabled = Boolean(open);
-  const can = {
-    pause: e?.status === "running",
-    resume: open && e.status === "paused",
-    pause_after: e?.status === "running" && !e.stop_after_trial,
-    stop_now: open && e.status !== "pausing",
-    extend: open,
-    close: open && e.status === "paused",
-  };
-  document.querySelectorAll("[data-recipe]").forEach((b) => (b.disabled = !can[b.dataset.recipe]));
   $("recipeStatus").textContent = e
     ? `${recipeStatus[e.status] || e.status}${recipePhase[e.phase] ? " · " + recipePhase[e.phase] : ""}${e.stop_after_trial ? " · 当前尝试后停" : ""}`
     : "尚未开始";
@@ -197,37 +186,6 @@ async function refreshRecipes() {
   }
 }
 
-async function recipeControl(action) {
-  const body = { action };
-  if (action === "extend") {
-    const value = prompt("每条方案线追加多少次尝试？", "6");
-    if (value === null) return;
-    body.count = Number(value);
-  }
-  if (action === "stop_now" && !confirm("立即结束两条方案线正在进行的尝试？这些尝试不计入次数，远端训练会被终止。"))
-    return;
-  if (action === "close" && !confirm("结束本次训练方案迭代实验？结束后不能继续。")) return;
-  try {
-    recipeState = { enabled: true, ...(await api("/api/recipes/control", body)) };
-    notice("");
-    renderRecipes();
-  } catch (e) {
-    notice(e.message);
-  }
-}
-
-document.querySelectorAll("[data-recipe]").forEach((b) => (b.onclick = () => recipeControl(b.dataset.recipe)));
-$("recipeStart").onclick = async () => {
-  const value = prompt("每条方案线的尝试次数上限（之后可追加）", "24");
-  if (value === null) return;
-  try {
-    recipeState = { enabled: true, ...(await api("/api/recipes/experiments", { limit: Number(value) })) };
-    notice("");
-    renderRecipes();
-  } catch (e) {
-    notice(e.message);
-  }
-};
 $("closeRecipeDialog").onclick = () => $("recipeDialog").close();
 $("recipeTrials").onclick = async (event) => {
   const row = event.target.closest("[data-trial]");

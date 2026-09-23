@@ -28,6 +28,7 @@ ACTIVE = ("queued", "admitted", "running")
 LIVE = ACTIVE + ("paused",)
 # Evaluation belongs to the research framework (ADR-0013): a trained trial is
 # handed off and waits there until research concludes it.
+RESTARTED = "服务已重启，继续实验以恢复"
 STAGE_JOB = {"designing": "agent", "training": "train"}
 OUTCOMES = {
     "promoted": "晋级",
@@ -504,6 +505,12 @@ class RecipeIteration:
         if result.get("status") == "paused":
             j["status"] = "paused"
             return
+        if result.get("status") == "host_fault":
+            # Not a trial failure and not a retry: the same job runs again,
+            # re-attaching to remote work that survived or redoing lost work.
+            j.update(status="queued", error=(result.get("error") or "")[:2000])
+            self.store.event(db, s, "host_fault", {"job": j["id"], "line": j.get("line")})
+            return
         getattr(self, "accept_" + j["kind"])(s, db, j, result)
 
     def failed(self, j, result):
@@ -882,6 +889,15 @@ class RecipeIteration:
             j["consumed"] = receipt.stat().st_mtime_ns
             self.accept(s, db, j, read_json(receipt))
 
+    def wake(self):
+        """Continue after a service restart once research runs again."""
+        experiment = self.store.current()
+        if not experiment:
+            return
+        s = self.store.read(experiment)
+        if s["status"] == "paused" and s["phase"] == "active" and s["pause_reason"] == RESTARTED:
+            self.control("resume")
+
     def recover(self):
         experiment = self.store.current()
         if not experiment:
@@ -916,7 +932,7 @@ class RecipeIteration:
                         continue
                 j["status"] = "paused"
             if s["status"] in ("running", "pausing"):
-                s.update(status="paused", pause_reason="服务已重启，继续实验以恢复")
+                s.update(status="paused", pause_reason=RESTARTED)
 
     def tick(self):
         experiment = self.store.current()

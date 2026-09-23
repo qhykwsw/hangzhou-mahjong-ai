@@ -8,25 +8,7 @@ const esc = (value) =>
         c
       ],
   );
-let state, catalog, formConfig, selectionExperiment, detailBranch;
-let wasBusy = false;
-let targets = new Set();
-const fields = {
-  brawl_promotions: "大乱斗触发晋级数",
-  evaluation_stages: "评估段数",
-  opponent_limit: "评估对手前 K 名",
-  agent_concurrency: "Agent 并发",
-  training_workers: "训练 worker",
-  match_workers: "比赛 worker",
-  candidate_limit: "每次迭代候选上限",
-  evaluation_games: "首段每边评估场数",
-  brawl_appearances: "大乱斗每支出场数",
-  training_games: "候选训练场数",
-  iteration_seconds: "单次分支迭代上限（秒）",
-  initialization_seconds: "初始训练上限（秒）",
-};
-const mainFields = Object.keys(fields).slice(0, 6),
-  concurrency = ["agent_concurrency", "training_workers", "match_workers"];
+let state, detailBranch;
 const jobNames = {
   agent: "研究会话",
   prepare: "候选训练与准备",
@@ -41,8 +23,13 @@ const eventNames = {
   experiment_created: "实验已创建",
   pause: "暂停实验",
   resume: "继续实验",
-  configuration: "并发已更新",
-  branch_archived: "归档状态已更新",
+  configuration: "配置已应用",
+  configuration_rejected: "配置未应用",
+  branch_mode: "分支状态已更新",
+  host_status: "主机状态变化",
+  host_offline: "主机离线，工作已迁回",
+  host_fault: "主机故障，任务重做",
+  brawl_drain: "大乱斗排空中",
   plan_declared: "研究判断已记录",
   conclusion_recorded: "累计研究结论已更新",
 };
@@ -54,6 +41,9 @@ const roundEvents = new Set([
   "pause",
   "resume",
   "configuration",
+  "configuration_rejected",
+  "host_status",
+  "brawl_drain",
 ]);
 const labels = {
   idle: "准备实验",
@@ -75,65 +65,15 @@ function notice(value) {
   $("notice").textContent = value;
   $("notice").hidden = !value;
 }
-async function api(path, body) {
-  const response = await fetch(
-    path,
-    body === undefined
-      ? {}
-      : {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        },
-  );
+async function api(path) {
+  const response = await fetch(path);
   const result = await response.json();
   if (!response.ok) throw Error(result.error || "请求失败");
   return result;
 }
-const busy = () =>
-  state?.experiment && !["finished", "closed"].includes(state.experiment.phase);
 const combinationName = (id) =>
   state?.combinations.find((c) => c.id === id)?.name || id;
 const shortVersion = (id) => String(id ?? "").split("--").at(-1) || "—";
-function filterOptions(id, rows, label) {
-  const value = $(id).value;
-  $(id).innerHTML =
-    `<option value="">${label}</option>` +
-    rows
-      .map(
-        ([key, name]) =>
-          `<option value="${esc(key)}" ${value === key ? "selected" : ""}>${esc(name)}</option>`,
-      )
-      .join("");
-}
-const matchingBranch = (b) =>
-  (!$("branchCombination").value ||
-    b.combination === $("branchCombination").value) &&
-  (!$("branchModel").value || b.model === $("branchModel").value);
-/* Mirrors Research.default_opponents: latest ranking first, then the rest. */
-function rankedPool(limit) {
-  const eligible = state.branches.filter(
-    (b) => !b.archived && b.successful > 0 && b.representative,
-  );
-  if (!eligible.length) return [...state.bootstrap];
-  const known = new Set(state.candidates.map((c) => c.id)),
-    branches = new Set(eligible.map((b) => b.id));
-  const pool = (state.history.at(-1)?.ranking || [])
-    .filter((r) => branches.has(r.branch) && known.has(r.candidate_id))
-    .map((r) => r.candidate_id);
-  for (const b of [...eligible].sort((x, y) => (x.id < y.id ? -1 : 1)))
-    if (!pool.includes(b.representative)) pool.push(b.representative);
-  return pool.slice(0, Math.max(1, limit));
-}
-function comparisonPool() {
-  if (busy())
-    return [
-      ...(state.cycle?.reference || state.experiment?.initial_opponents || []),
-    ];
-  const limit =
-    Number($("cfg-opponent_limit").value) || catalog.defaults.opponent_limit;
-  return rankedPool(limit);
-}
 function poolSummary(pool) {
   const entries = pool.map((cid) => ({
     candidate: state.candidates.find((c) => c.id === cid),
@@ -149,60 +89,12 @@ function poolSummary(pool) {
       return `<span class="chip ${candidate?.branch ? "" : "bootstrap"}" title="${esc(id)}">${esc(name)}</span>`;
     })
     .join("");
-  const state_ = entries.some(({ candidate }) => !candidate?.branch)
-    ? "尚无分支完成有效评估，先用启动策略"
-    : busy()
-      ? `本次实验已固定 ${pool.length} 支`
-      : `自动取最近排名前 ${pool.length} 名`;
-  return `对比池 · ${esc(state_)}：${names}`;
-}
-function applyDefaults() {
-  targets = new Set(state.branches.filter((b) => !b.archived).map((b) => b.id));
-}
-function initializeForm() {
-  formConfig = structuredClone(catalog.defaults);
-  for (const key of mainFields) $("cfg-" + key).value = formConfig[key];
-  $("advancedFields").innerHTML =
-    Object.entries(fields)
-      .slice(6)
-      .map(
-        ([key, label]) =>
-          `<label>${label}<input id="cfg-${key}" type="number" ${key.includes("games") && key !== "training_games" ? 'min="4" step="4"' : 'min="1"'} value="${formConfig[key]}" required></label>`,
-      )
-      .join("") +
-    `<label>每进程内存上限（MB）<input id="memory" type="number" min="128" value="${formConfig.resources.memory_mb}" required></label><label>每进程计算线程<input id="threads" type="number" min="1" value="${formConfig.resources.threads}" required></label>`;
-  applyDefaults();
-}
-function syncExperimentSelection() {
-  const experiment = state.experiment;
-  if (busy()) {
-    targets = new Set(experiment.targets);
-    if (selectionExperiment !== experiment.id) {
-      formConfig = structuredClone(state.config);
-      for (const key in fields) $("cfg-" + key).value = formConfig[key];
-      $("memory").value = formConfig.resources.memory_mb;
-      $("threads").value = formConfig.resources.threads;
-    }
-  } else if (
-    selectionExperiment !== undefined &&
-    selectionExperiment !== (experiment?.id || null)
-  ) {
-    applyDefaults();
-  }
-  if (!busy() && wasBusy) applyDefaults();
-  wasBusy = Boolean(busy());
-  selectionExperiment = experiment?.id || null;
+  return `评估对手 · 最近一次大乱斗前 ${pool.length} 名：${names}`;
 }
 const progressStates = {
   waiting: "等待准备", queued: "排队", admitted: "即将开始", running: "进行中",
   completed: "完成", paused: "已暂停", cancelled: "已取消", failed: "失败",
 };
-function stopPlanLabel(plan) {
-  if (!plan) return "停止安排…";
-  const text =
-    { iteration: "迭代后停", now: "已结束当前迭代" }[plan.scope] || "停止安排";
-  return `${text} ✓`;
-}
 function progressRow(label, value, completed = null, total = null, note = "") {
   const bar = completed != null && total > 0
     ? `<progress aria-label="${esc(label)}" value="${completed}" max="${total}"></progress>` : "";
@@ -337,98 +229,66 @@ function branchPlan(branch) {
     : "尚无研究判断记录";
   return `<div class="branch-plan">${rows.join("")}<small>${esc(note)}</small></div>`;
 }
-function branchCard(branch, { archived = false, iterating = false, comparisonVersion = null } = {}) {
-  const frozen = busy() ? "disabled" : "";
-  const running = Boolean(busy());
-  const badges = archived
-    ? '<span class="badge archived">已归档 · 退出对比池</span>'
-    : (comparisonVersion ? '<span class="badge pool">对比对象</span>' : "") +
-      `<span class="badge ${iterating ? "iterating" : "skipped"}">${
-        running
-          ? iterating
-            ? "持续迭代"
-            : "不参与迭代"
-          : iterating
-            ? "参与迭代"
-            : "不参与迭代"
-      }</span>`;
+const modeNames = { iterating: "迭代中", competing: "仅参赛", archived: "已归档" };
+const modeOf = (b) => b.mode || (b.archived ? "archived" : "iterating");
+function branchCard(branch, evaluationVersion = null) {
+  const mode = modeOf(branch);
+  const archived = mode === "archived";
+  const badges =
+    (evaluationVersion ? '<span class="badge pool">评估对手</span>' : "") +
+    `<span class="badge ${mode === "iterating" ? "iterating" : mode === "competing" ? "skipped" : "archived"}">${modeNames[mode]}</span>`;
   const versions = [
-    [
-      "当前最好版本",
-      branch.representative ? shortVersion(branch.representative) : "尚无",
-    ],
-    ...(comparisonVersion ? [["对比版本", shortVersion(comparisonVersion)]] : []),
-    ...(archived
-      ? [
-          ["迭代次数", `${branch.completed} 次`],
-          [
-            "最近迭代",
-            branch.last_run
-              ? new Date(branch.last_run * 1000).toLocaleDateString()
-              : "—",
-          ],
-        ]
-      : []),
+    ["现役代表", branch.representative ? shortVersion(branch.representative) : "尚无"],
+    ...(evaluationVersion ? [["评估对手版本", shortVersion(evaluationVersion)]] : []),
+    ["最近迭代", branch.last_run ? new Date(branch.last_run * 1000).toLocaleString() : "—"],
   ]
-    .map(
-      ([label, value]) =>
-        `<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`,
-    )
+    .map(([label, value]) => `<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`)
     .join("");
-  const head = archived
-    ? `<div class="choice-main"><span class="archive-mark" aria-hidden="true">停</span><span><strong>${esc(combinationName(branch.combination))}</strong><span class="muted">${esc(branch.model)} · ${esc(shortVersion(branch.id))}</span></span></div>`
-    : `<label class="choice-main"><input type="checkbox" data-target="${esc(branch.id)}" ${iterating ? "checked" : ""} ${frozen}><span><strong>${esc(combinationName(branch.combination))}</strong><span class="muted">${esc(branch.model)} · ${esc(shortVersion(branch.id))} · ${esc(labels[branch.status] || branch.status)}</span></span></label>`;
-  const footer = archived
-    ? `<div class="choice-footer"><button type="button" data-detail="${esc(branch.id)}">累计 ${branch.completed} 次 · 提升 ${branch.improved} 次</button><button type="button" data-restore="${esc(branch.id)}" ${frozen} title="${frozen ? "结束本次实验后可以恢复" : "恢复后重新纳入对比池"}">恢复分支</button></div>`
-    : `<div class="choice-footer"><button type="button" data-detail="${esc(branch.id)}">累计 ${branch.completed} 次 · 提升 ${branch.improved} 次</button></div>`;
+  const head = `<div class="choice-main"><span><strong>${esc(combinationName(branch.combination))}</strong><span class="muted">${esc(branch.model)} · ${esc(shortVersion(branch.id))}${archived ? "" : " · " + esc(labels[branch.status] || branch.status)}</span></span></div>`;
+  const footer = `<div class="choice-footer"><button type="button" data-detail="${esc(branch.id)}">累计 ${branch.completed} 次 · 提升 ${branch.improved} 次</button></div>`;
   const progress = archived ? "" : `<div class="choice-progress" id="progress-${esc(branch.id)}"></div>`;
-  return `<article class="choice branch-card ${archived ? "archived" : ""} ${iterating ? "selected" : ""} ${comparisonVersion ? "in-pool" : ""}" title="${esc(branch.id)}">${head}<div class="badges">${badges}</div><dl class="branch-meta">${versions}</dl>${branchPlan(branch)}${progress}${footer}</article>`;
+  return `<article class="choice branch-card ${archived ? "archived" : ""} ${mode === "iterating" ? "selected" : ""} ${evaluationVersion ? "in-pool" : ""}" title="${esc(branch.id)}">${head}<div class="badges">${badges}</div><dl class="branch-meta">${versions}</dl>${branchPlan(branch)}${progress}${footer}</article>`;
 }
-function renderArchived() {
-  const rows = state.branches
-    .filter((b) => b.archived)
-    .sort((a, b) =>
-      (a.combination + a.id).localeCompare(b.combination + b.id, "zh"),
-    );
-  $("archivedCount").textContent = rows.length ? `${rows.length} 条` : "";
-  $("archived").innerHTML =
-    rows.map((b) => branchCard(b, { archived: true })).join("") ||
-    '<p class="muted">暂无归档分支。</p>';
-}
-function renderSelection() {
-  const rows = state.branches.filter((b) => !b.archived);
-  const combinations = new Set(rows.map((b) => b.combination));
-  filterOptions(
-    "branchCombination",
-    state.combinations
-      .filter((c) => combinations.has(c.id))
-      .map((c) => [c.id, c.name]),
-    "全部策略",
-  );
-  filterOptions(
-    "branchModel",
-    [...new Set(rows.map((b) => b.model))].map((model) => [model, model]),
-    "全部研究模型",
-  );
-  const pool = comparisonPool();
+function renderBranches() {
+  const byName = (a, b) => (a.combination + a.id).localeCompare(b.combination + b.id, "zh");
+  const active = state.branches.filter((b) => modeOf(b) !== "archived").sort(byName);
+  const archived = state.branches.filter((b) => modeOf(b) === "archived").sort(byName);
+  const pool = [...(state.cycle?.reference || [])];
   const inPool = new Map();
   for (const cid of pool) {
     const candidate = state.candidates.find((c) => c.id === cid);
     if (candidate?.branch) inPool.set(candidate.branch, cid);
   }
-  $("branchList").innerHTML =
-    rows
-      .filter(matchingBranch)
-      .map((branch) =>
-        branchCard(branch, {
-          iterating: targets.has(branch.id),
-          comparisonVersion: inPool.get(branch.id),
-        }),
-      )
-      .join("") || '<p class="empty">没有符合筛选条件的分支。</p>';
-  $("branchCount").textContent = `${targets.size} 条迭代 · ${pool.length} 支对比`;
-  $("poolSummary").innerHTML = poolSummary(pool);
+  const html = active.map((b) => branchCard(b, inPool.get(b.id))).join("") ||
+    '<p class="empty">尚无研究分支。</p>';
+  if ($("branchList").dataset.html !== html) {
+    $("branchList").innerHTML = html;
+    $("branchList").dataset.html = html;
+  }
+  const iterating = active.filter((b) => modeOf(b) === "iterating").length;
+  $("branchCount").textContent = `${iterating} 条迭代中 · ${active.length - iterating} 条仅参赛`;
+  $("poolSummary").innerHTML = pool.length ? poolSummary(pool) : "等待共同大乱斗产生评估对手。";
+  $("archivedCount").textContent = archived.length ? `${archived.length} 条` : "";
+  const archivedHtml = archived.map((b) => branchCard(b)).join("") || '<p class="muted">暂无归档分支。</p>';
+  if ($("archived").dataset.html !== archivedHtml) {
+    $("archived").innerHTML = archivedHtml;
+    $("archived").dataset.html = archivedHtml;
+  }
   renderCardProgress();
+}
+function renderHosts() {
+  const hosts = Object.entries(state.hosts || {});
+  const drain = state.experiment?.drain;
+  const brawlHost = state.cycle?.status === "competing" ? state.cycle.brawl_host || "本机" : null;
+  const cells = [["本机", { online: true }], ...hosts].map(([name, h]) => {
+    const role = [];
+    if (brawlHost === name) role.push("大乱斗中");
+    if (name === "本机" && drain) role.push("排空中");
+    if (name === state.brawl_host) role.push("大乱斗主机");
+    const since = h.since ? ` · ${new Date(h.since * 1000).toLocaleString()} 起` : "";
+    return `<div class="host ${h.online ? "online" : "offline"}"><b>${esc(name)}</b><span>${h.online ? "在线" : "离线"}${esc(since)}</span>${role.length ? `<small>${esc(role.join(" · "))}</small>` : ""}</div>`;
+  });
+  $("hosts").innerHTML = cells.join("");
 }
 function renderRanking() {
   const historyId = $("rankingHistory").value;
@@ -443,7 +303,7 @@ function renderRanking() {
       )
       .join("");
   const historical = state.history.find((h) => String(h.cycle) === historyId);
-  const active = new Set(state.branches.filter((b) => !b.archived).map((b) => b.id));
+  const active = new Set(state.branches.filter((b) => modeOf(b) !== "archived").map((b) => b.id));
   const fixed = new Set([...(state.config.anchors || []), ...(state.config.guests || [])]);
   const ranking = (historical?.ranking || state.ranking).filter(
     (r) => active.has(r.branch) || fixed.has(r.branch),
@@ -475,48 +335,24 @@ function renderRanking() {
     .reverse()
     .map(
       (e) =>
-        `<div class="event">${new Date(e.created_at * 1000).toLocaleString()} · ${e.targets.length} 条迭代分支 · 已完成 ${e.completed_brawls ?? 0} 次大乱斗</div>`,
+        `<div class="event">${new Date(e.created_at * 1000).toLocaleString()} · 实验 ${esc(e.id)} · 已完成 ${e.completed_brawls ?? 0} 次大乱斗</div>`,
     )
     .join("");
 }
 function render() {
   const experiment = state.experiment;
-  syncExperimentSelection();
   $("phase").textContent = experiment
     ? `${labels[experiment.status]} · ${labels[experiment.phase]}`
-    : "准备实验";
+    : "尚未开始实验";
+  const active = state.branches.filter((b) => modeOf(b) !== "archived").length;
   $("summary").textContent = experiment
-    ? `已完成 ${experiment.completed_brawls ?? 0} 次大乱斗 · 待计入晋级 ${experiment.promotions_pending ?? 0}/${experiment.brawl_promotions ?? "—"} · ${state.branches.filter((b) => !b.archived).length} 条长期分支`
-    : `${state.branches.filter((b) => !b.archived).length} 条已注册分支 · 勾选迭代分支后开始`;
-  $("iterationPhase").classList.toggle(
-    "active",
-    experiment?.phase === "researching",
-  );
-  $("comparisonPhase").classList.toggle(
-    "active",
-    state.cycle?.status === "competing",
-  );
-  $("pause").disabled = experiment?.status !== "running";
-  $("stopPlan").disabled = experiment?.status !== "running";
-  $("stopPlan").textContent = stopPlanLabel(experiment?.stop_plan);
-  $("resume").disabled =
-    !experiment ||
-    experiment.status !== "paused" ||
-    experiment.phase === "closed";
-  $("closeExperiment").disabled = !busy() || experiment.status !== "paused";
-  $("resources").disabled =
-    !experiment || ["closed", "finished"].includes(experiment.phase);
-  $("startExperiment").disabled = Boolean(busy());
-  $("experimentHint").textContent = busy()
-    ? "本次对象与评估条件已固定。修改实验方式前，请暂停并结束本次实验。"
-    : "各分支连续迭代；累计晋级后发起共同大乱斗，前三名成为之后迭代的评估对手。";
-  for (const key in fields) $("cfg-" + key).disabled = Boolean(busy());
-  $("memory").disabled = $("threads").disabled = Boolean(busy());
-  document
-    .querySelectorAll("[data-select],[data-clear]")
-    .forEach((e) => (e.disabled = Boolean(busy())));
-  if (!$("selectionPanel").contains(document.activeElement)) renderSelection();
-  renderCardProgress();
+    ? `已完成 ${experiment.completed_brawls ?? 0} 次大乱斗 · 待计入晋级 ${experiment.promotions_pending ?? 0}/${experiment.brawl_promotions ?? "—"} · ${active} 条活跃分支` +
+      (experiment.drain ? " · 大乱斗主机离线，本机排空后在本机进行" : "")
+    : `${active} 条已注册分支`;
+  $("iterationPhase").classList.toggle("active", experiment?.phase === "researching");
+  $("comparisonPhase").classList.toggle("active", state.cycle?.status === "competing");
+  renderHosts();
+  renderBranches();
   const roundNote = state.events
     .filter((e) => roundEvents.has(e.kind))
     .slice(-2)
@@ -525,21 +361,16 @@ function render() {
       (e) =>
         `${new Date(e.at * 1000).toLocaleTimeString()} ${eventNames[e.kind] || e.kind}` +
         (e.data?.round ? ` · 第 ${e.data.round} 次` : "") +
+        (e.data?.host ? ` · ${e.data.host}${e.data.online === undefined ? "" : e.data.online ? " 在线" : " 离线"}` : "") +
         (e.data?.reason ? ` · ${{ promotions: "晋级数达到", fallback: "等待超时", opening: "开局" }[e.data.reason] || e.data.reason}` : ""),
     )
     .join(" · ");
   $("roundNote").textContent = roundNote;
-  renderArchived();
   renderRanking();
-  if (
-    experiment?.pause_reason &&
-    ![
-      "ready",
-      "user paused",
-      "experiment closed",
-    ].includes(experiment.pause_reason)
-  )
-    notice(experiment.pause_reason);
+  const problems = [experiment?.config_error];
+  if (experiment?.pause_reason && !["ready", "user paused", "experiment closed"].includes(experiment.pause_reason))
+    problems.push(experiment.status === "running" ? null : experiment.pause_reason);
+  notice(problems.filter(Boolean).join("；"));
 }
 let refreshing = false;
 /* Polls the summary; a slow response is never overlapped by the next poll. */
@@ -555,127 +386,6 @@ async function refresh() {
     refreshing = false;
   }
 }
-$("selectionPanel").addEventListener("change", (e) => {
-  const node = e.target;
-  if (node.dataset.target)
-    node.checked
-      ? targets.add(node.dataset.target)
-      : targets.delete(node.dataset.target);
-  if (node.tagName === "SELECT" || node.type === "checkbox") renderSelection();
-});
-for (const action of ["select", "clear"])
-  document.querySelector(`[data-${action}="all"]`).onclick = () => {
-    for (const b of state.branches
-      .filter((b) => !b.archived)
-      .filter(matchingBranch))
-      action === "select" ? targets.add(b.id) : targets.delete(b.id);
-    renderSelection();
-  };
-$("cfg-opponent_limit").onchange = () => {
-  if (!busy()) renderSelection();
-};
-$("experimentForm").onsubmit = async (event) => {
-  event.preventDefault();
-  try {
-    if (!targets.size) throw Error("请至少选择一条迭代分支。");
-    const opponents = comparisonPool();
-    const config = structuredClone(formConfig);
-    for (const key in fields) config[key] = Number($("cfg-" + key).value);
-    config.resources.memory_mb = Number($("memory").value);
-    config.resources.threads = Number($("threads").value);
-    state = await api("/api/experiments", {
-      config,
-      targets: [...targets],
-      opponents,
-    });
-    notice("");
-    render();
-  } catch (e) {
-    notice(e.message);
-  }
-};
-for (const [id, action] of [
-  ["pause", "pause"],
-  ["resume", "resume"],
-  ["closeExperiment", "close"],
-])
-  $(id).onclick = async () => {
-    try {
-      state = await api("/api/control", {
-        experiment: state.experiment.id,
-        action,
-      });
-      notice("");
-      render();
-    } catch (e) {
-      notice(e.message);
-    }
-  };
-$("stopPlan").onclick = () => {
-  const plan = state.experiment?.stop_plan;
-  const scope = plan?.scope === "now" ? "iteration" : plan?.scope || "iteration";
-  document.querySelector(
-    `input[name="stopScope"][value="${scope}"]`,
-  ).checked = true;
-  $("stopDialog").showModal();
-};
-$("closeStop").onclick = () => $("stopDialog").close();
-$("stopForm").onsubmit = async (event) => {
-  event.preventDefault();
-  try {
-    const scope =
-      document.querySelector('input[name="stopScope"]:checked')?.value || "iteration";
-    state = await api("/api/control", {
-      experiment: state.experiment.id,
-      action: scope === "now" ? "stop_now" : "pause_after",
-      options: { scope },
-    });
-    $("stopDialog").close();
-    notice(scope === "now" ? "已结束当前迭代，未完成的迭代记录已删除" : "");
-    render();
-  } catch (e) {
-    notice(e.message);
-  }
-};
-$("clearStop").onclick = async () => {
-  try {
-    state = await api("/api/control", {
-      experiment: state.experiment.id,
-      action: "clear_stop",
-    });
-    $("stopDialog").close();
-    notice("");
-    render();
-  } catch (e) {
-    notice(e.message);
-  }
-};
-$("resources").onclick = () => {
-  $("resourceFields").innerHTML = concurrency
-    .map(
-      (k) =>
-        `<label>${fields[k]}<input id="resource-${k}" type="number" min="1" value="${state.config[k]}" required></label>`,
-    )
-    .join("");
-  $("resourceDialog").showModal();
-};
-$("closeResources").onclick = () => $("resourceDialog").close();
-$("resourceForm").onsubmit = async (e) => {
-  e.preventDefault();
-  try {
-    state = await api("/api/config", {
-      experiment: state.experiment.id,
-      patch: Object.fromEntries(
-        concurrency.map((k) => [k, Number($("resource-" + k).value)]),
-      ),
-    });
-    $("resourceDialog").close();
-    notice("");
-    render();
-  } catch (error) {
-    notice(error.message);
-  }
-};
 for (const name of ["work", "ranking", "recipe"])
   $(name + "Tab").onclick = () => {
     for (const key of ["work", "ranking", "recipe"]) {
@@ -689,10 +399,6 @@ $("closeDetail").onclick = () => $("detailDialog").close();
 async function showDetail(button) {
   detailBranch = button.dataset.detail;
   $("detailTitle").textContent = detailBranch;
-  const row = state.branches.find((b) => b.id === detailBranch);
-  $("archiveBranch").hidden = Boolean(row?.archived);
-  $("archiveNote").hidden = Boolean(row?.archived);
-  $("archiveBranch").disabled = Boolean(busy());
   $("detailContent").innerHTML = "<p class='muted'>加载中…</p>";
   if (!$("detailDialog").open) $("detailDialog").showModal();
   const branch = detailBranch;
@@ -761,42 +467,9 @@ for (const id of ["branchList", "archived"])
     const button = event.target.closest("[data-detail]");
     if (button) showDetail(button);
   };
-$("archiveBranch").onclick = async () => {
-  try {
-    state = await api("/api/branches", {
-      branch: detailBranch,
-      archived: true,
-    });
-    targets.delete(detailBranch);
-    $("detailDialog").close();
-    render();
-  } catch (e) {
-    notice(e.message);
-  }
-};
-$("archived").onclick = async (e) => {
-  const detail = e.target.closest("[data-detail]");
-  if (detail) {
-    showDetail(detail);
-    return;
-  }
-  const b = e.target.closest("[data-restore]");
-  if (!b) return;
-  try {
-    state = await api("/api/branches", {
-      branch: b.dataset.restore,
-      archived: false,
-    });
-    render();
-  } catch (error) {
-    notice(error.message);
-  }
-};
 (async () => {
   try {
-    catalog = await api("/api/directions");
     state = await api("/api/state?summary=1");
-    initializeForm();
     render();
     setInterval(refresh, 2000);
   } catch (e) {

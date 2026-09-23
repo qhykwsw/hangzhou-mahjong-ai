@@ -7,6 +7,10 @@ import time
 from mahjong_ai.persistence.artifacts import read_json
 
 
+def branch_mode(b):
+    return b.get("mode") or ("archived" if b["archived"] else "iterating")
+
+
 def branch_progress(state):
     cycles = state["cycles"]
     if not cycles or cycles[-1]["experiment"] != state["id"]:
@@ -36,15 +40,14 @@ def branch_progress(state):
         current = state["iterations"].get(branch.get("iteration"))
         if current and current["experiment"] == state["id"]:
             iterations[bid] = current
-    targets = set(state["experiments"][-1]["targets"]) if state["experiments"] else set()
     output = {}
     for bid, branch in state["branches"].items():
-        if branch["archived"]:
+        if branch_mode(branch) == "archived":
             continue
         iteration = iterations.get(bid)
         item = dict(
             iteration=iteration["number"] if iteration else None,
-            research="waiting" if bid in targets else "not_selected",
+            research="waiting" if branch_mode(branch) == "iterating" else "not_selected",
             preparation=[],
             evaluation=[],
             outcome=None,

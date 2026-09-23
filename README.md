@@ -20,7 +20,7 @@ python3 -m venv .venv
 
 启动打开研究控制台，不自动运行实验。仓库只保存源码和配置，不附带历史实验、训练模型或发布版本。当前配置使用 DeepSeek，开始研究前需在 `CODEX_HOME`（默认 `~/.codex`）配置 `netease-deepseek-flash.config.toml`；仅启动控制台不需要这个配置。
 
-当前项目注册牌效优先、番型经营、局势自适应、自由规则四种组合，各一条 DeepSeek 分支。在卡片列表勾选要迭代的分支后开始；每轮先配对选优，再由全体代表大乱斗产生下一轮对手池。默认研究 10 轮、每轮每支迭代 3 次，配对选优每版本 1024 场、大乱斗每支目标 4096 场，每场 16 局（跟随锦标赛配置）。具体设置以 [research.toml](projects/agent-research/research.toml) 与网页创建实验时的设置为准，完整操作见[研究手册](docs/reference/strategy-agent.md)。
+研究分支分为规则代码的策略分支和训练方案的方案分支，各自连续迭代：每次迭代面对最近一次共同大乱斗的前三名做分段配对评估，累计若干次晋级后，全体现役代表再进行共同大乱斗。分支阵容与状态以 [research.toml](projects/agent-research/research.toml) 为准，改动后自动应用；网页只读，实验用 `mahjong create` / `mahjong control` 操作。完整说明见[研究手册](docs/reference/strategy-agent.md)。
 
 ```bash
 .venv/bin/mahjong status
@@ -28,7 +28,7 @@ python3 -m venv .venv
 .venv/bin/mahjong-ai play --rounds 8 --check-invariants
 ```
 
-服务独立于启动终端运行；WSL 实例本身必须保持运行，`wsl --shutdown`、Windows 重启或实例退出都会停止服务。重新启动服务后，未完成的实验须在网页手动继续；已完成实验保留结果，不自动追加研究。当前自动研究项目位于 `projects/agent-research/`，`mahjong start` 会在仓库根目录自动选择它；也可以显式传入 `--project projects/agent-research`。SSH 启动输出本机与已连接的 Tailscale 地址，不打开远端电脑浏览器；WSL 优先用 `wslview` 打开 Windows 默认浏览器，没有浏览器时仍输出访问地址。
+服务独立于启动终端运行；WSL 实例本身必须保持运行，`wsl --shutdown`、Windows 重启或实例退出都会停止服务。重新启动服务后，未完成的实验须用 `mahjong control resume` 继续；已结束的实验保留结果，不自动追加研究。当前自动研究项目位于 `projects/agent-research/`，`mahjong start` 会在仓库根目录自动选择它；也可以显式传入 `--project projects/agent-research`。SSH 启动输出本机与已连接的 Tailscale 地址，不打开远端电脑浏览器；WSL 优先用 `wslview` 打开 Windows 默认浏览器，没有浏览器时仍输出访问地址。
 
 ## 入口
 

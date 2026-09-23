@@ -156,9 +156,7 @@ def test_reduced_model_roster_preserves_branch_histories(tmp_path):
         for branch in s["branches"].values():
             branch.update(thread_id="thread-" + branch["id"], completed=3)
     before = r.read()["branches"]
-    for branch in before.values():
-        if branch["model"] == "astra":
-            r.archive(branch["id"])
+    # Branches no longer configured are archived.
     r.register()
     after = r.read()
     active = [b for b in after["branches"].values() if not b["archived"]]
@@ -236,12 +234,13 @@ def test_branch_isolation_atomic_submission_and_full_cycle(research):
             assert s["branches"][branch]["representative"].endswith("--initial")
             r.advance(s, db)
     with r.edit(run) as (s, db):
-        # Enough promotions start a common brawl without pausing iterations.
+        # Enough promotions start a common brawl; played on this machine it
+        # holds back iterations evaluated here until it ends (brawl drain).
         assert s["cycles"][-1]["status"] == "researching"
         s["promotions_pending"] = s["config"]["brawl_promotions"]
         r.advance(s, db)
         assert s["cycles"][-1]["status"] == "competing"
-        assert s["phase"] == "researching" and r.startable(s)
+        assert s["phase"] == "researching" and not r.startable(s)
         for j in [j for j in s["jobs"].values() if j.get("scope") == "competition"]:
             root = Path(s["root"]) / "jobs" / j["id"]
             root.mkdir(parents=True)
@@ -303,12 +302,14 @@ def test_balanced_four_seat_schedule():
         ] * 4
 
 
-def test_api_configuration_and_origin(tmp_path, monkeypatch):
+def test_api_is_read_only_except_experiment_control(tmp_path, monkeypatch):
     monkeypatch.setattr(Controller, "tick", lambda self: None)
     with TestClient(application(tmp_path)) as client:
         assert client.get("/").status_code == 200
-        assert client.get("/api/directions").json()["defaults"]["brawl_promotions"] == 4
-        result = client.post("/api/experiments", json={"config": small_config()})
+        # Settings come from research.toml only (ADR-0014).
+        for path in ("/api/config", "/api/branches", "/api/recipes/control"):
+            assert client.post(path, json={}).status_code in (404, 405)
+        result = client.post("/api/experiments", json={"opponents": None})
         assert result.status_code == 200
         run = result.json()["experiment"]["id"]
         assert (
@@ -319,12 +320,8 @@ def test_api_configuration_and_origin(tmp_path, monkeypatch):
             ).status_code
             == 403
         )
-        assert (
-            client.post(
-                "/api/config", json={"experiment": run, "patch": {"match_workers": 3}}
-            ).json()["config"]["match_workers"]
-            == 3
-        )
+        paused = client.post("/api/control", json={"experiment": run, "action": "pause"})
+        assert paused.json()["experiment"]["status"] in ("paused", "pausing")
 
 
 def test_pause_submission_recovery_does_not_repeat_agent(research):
@@ -1634,3 +1631,178 @@ def test_waiting_evaluations_overflow_to_an_idle_host(tmp_path, monkeypatch):
             j.pop("host", None)
         controller.overflow(s, 2)
         assert not any(j.get("host") for j in jobs)
+
+
+GPU = {"ssh": "h", "distro": "d", "user": "u", "python": "/p", "root": "/r", "workers": 2}
+
+
+def live_config(monkeypatch, config):
+    """research.toml content for Research.apply."""
+    import mahjong_ai.research.service as service
+    from mahjong_ai.research.config import merge
+
+    monkeypatch.setattr(
+        service, "configuration",
+        lambda project, overrides=None: configuration(project, merge(config, overrides or {})),
+    )
+
+
+def test_branches_modes_and_models_change_live_but_evaluation_stays_frozen(
+    research, monkeypatch
+):
+    r, run, controller = research
+    config = small_config()
+    config["modes"] = {"heuristic-balanced--02": "competing"}
+    config["agent_concurrency"] = 3
+    live_config(monkeypatch, config)
+    assert r.apply(run)
+    s = r.read(run)
+    assert s["branches"]["heuristic-balanced--02"]["mode"] == "competing"
+    assert s["config"]["agent_concurrency"] == 3
+    with r.edit(run) as (s, db):
+        startable = {b["id"] for b in r.startable(s)}
+    assert "heuristic-balanced--02" not in startable and len(startable) == 3
+    # A new branch joins mid-experiment; a branch left out is archived.
+    config["combinations"][0].update(branches=3, models=["astra"] * 3)
+    config["combinations"].append(dict(
+        id="heuristic-fan", branches=1, models=["deepseek"], training_games=1))
+    assert r.apply(run)
+    s = r.read(run)
+    assert s["branches"]["heuristic-balanced--04"]["mode"] == "archived"
+    assert s["branches"]["heuristic-fan--01"]["status"] == "initializing"
+    assert any(j["kind"] == "prepare" and j.get("combination") == "heuristic-fan"
+               for j in s["jobs"].values())
+    # Evaluation conditions do not change under a running experiment.
+    frozen = dict(config, evaluation_games=8)
+    live_config(monkeypatch, frozen)
+    assert not r.apply(run)
+    s = r.read(run)
+    assert "evaluation_games" in s["config_error"]
+    assert s["config"]["evaluation_games"] == 4
+
+
+def test_a_new_brawl_entrant_counts_once_as_a_pending_promotion(research):
+    r, run, controller = research
+    with r.edit(run) as (s, db):
+        cycle = s["cycles"][-1]
+        s["cycles"].insert(-1, dict(cycle, id=0, status="completed",
+                                    roster={bid: {} for bid in s["branches"]}))
+        pending = s.get("promotions_pending", 0)
+        r.count_entrants(s, cycle)
+        assert s["promotions_pending"] == pending
+        s["config"]["guests"] = ["guest"]
+        r.count_entrants(s, cycle)
+        r.count_entrants(s, cycle)
+        assert s["promotions_pending"] == pending + 1
+
+
+def test_brawl_drains_this_machine_when_the_brawl_host_is_offline(research):
+    r, run, controller = research
+    branch = next(iter(r.read(run)["branches"]))
+    with r.edit(run) as (s, db):
+        s["config"].update(hosts={"gpu": GPU}, brawl_host="gpu")
+        s["hosts"] = {"gpu": {"online": False}}
+        r.start_iteration(s, branch)
+        s["promotions_pending"] = s["config"]["brawl_promotions"]
+        r.advance(s, db)
+        # No new iteration here until the running one ends; then the brawl
+        # is played on this machine.
+        assert s["cycles"][-1]["status"] == "researching"
+        assert s["drain"] == "promotions" and r.startable(s) == []
+        r.complete_iteration(s, db, s["iterations"][s["branches"][branch]["iteration"]], "done")
+        r.advance(s, db)
+        cycle = s["cycles"][-1]
+        assert cycle["status"] == "competing" and cycle["brawl_host"] is None
+        brawl = [j for j in s["jobs"].values() if j.get("scope") == "competition"]
+        assert brawl and not any(j.get("host") for j in brawl)
+        assert r.startable(s) == []
+
+
+def test_brawl_goes_to_its_host_when_it_is_back_before_the_drain_ends(research):
+    r, run, controller = research
+    branch = next(iter(r.read(run)["branches"]))
+    with r.edit(run) as (s, db):
+        s["config"].update(hosts={"gpu": GPU}, brawl_host="gpu")
+        s["hosts"] = {"gpu": {"online": False}}
+        r.start_iteration(s, branch)
+        s["promotions_pending"] = s["config"]["brawl_promotions"]
+        r.advance(s, db)
+        assert s["drain"]
+        s["hosts"]["gpu"]["online"] = True
+        r.advance(s, db)
+        assert s["cycles"][-1]["brawl_host"] == "gpu" and not s["drain"]
+        assert r.startable(s)  # iterations continue beside a remote brawl
+
+
+def test_offline_host_returns_overflow_and_brawl_work_but_keeps_its_own(research):
+    r, run, controller = research
+    with r.edit(run) as (s, db):
+        s["config"]["hosts"] = {"gpu": GPU}
+        cycle = s["cycles"][-1]["id"]
+        cid = next(iter(s["branches"].values()))["representative"]
+        match = dict(index=0, block=0, focal=0, players=[cid] * 4)
+        overflow = r.queue(s, "match", scope="paired", cycle=cycle, host="gpu",
+                           overflow=True, assignments=[match])
+        own = r.queue(s, "match", scope="paired", cycle=cycle, host="gpu", assignments=[match])
+        brawl = r.queue(s, "match", scope="competition", cycle=cycle, host="gpu",
+                        assignments=[match] * 130)
+        for j in (overflow, own, brawl):
+            j["status"] = "running"
+        moved = r.rehome(s, db, "gpu")
+        assert set(moved) == {overflow["id"], brawl["id"]}
+        assert overflow["host"] is None and overflow["status"] == "queued"
+        assert own["host"] == "gpu" and own["status"] == "running"
+        assert brawl["status"] == "completed" and brawl["cancelled"]
+        parts = [j for j in s["jobs"].values()
+                 if j.get("scope") == "competition" and j["status"] == "queued"]
+        assert sorted(len(j["assignments"]) for j in parts) == [2, 64, 64]
+        assert not any(j.get("host") for j in parts)
+        # A lost remote job is redone, not counted as a failure.
+        r.accept(s, db, own, {"status": "host_fault", "error": "rebooted"})
+        assert own["status"] == "queued" and own["host"] == "gpu"
+        assert not s["iterations"] or all(
+            not it.get("execution_failures") for it in s["iterations"].values())
+
+
+def test_restart_and_pause_leave_remote_work_running(research, monkeypatch):
+    from mahjong_ai.persistence.artifacts import atomic_json
+
+    r, run, controller = research
+    with r.edit(run) as (s, db):
+        s["config"]["hosts"] = {"gpu": GPU}
+        cid = next(iter(s["branches"].values()))["representative"]
+        job = r.queue(s, "match", scope="paired", cycle=s["cycles"][-1]["id"], host="gpu",
+                      assignments=[dict(index=0, block=0, focal=0, players=[cid] * 4)])
+        job.update(status="running", started_at=time.time())
+        root = Path(s["root"]) / "jobs" / job["id"]
+        atomic_json(root / "remote.json", {"host": "gpu", "pid": 7, "at": time.time()})
+
+    class Remote:
+        adopted, cancelled = [], []
+
+        def adopt(self, jid, root):
+            self.adopted.append(jid)
+            return True
+
+        def cancel(self, *args, **kwargs):
+            self.cancelled.append(args)
+
+        def offline(self):
+            return False
+
+        def idle_for_overflow(self):
+            return False
+
+    remote = Remote()
+    monkeypatch.setattr(Controller, "dispatcher", lambda self, s, name: remote)
+    restarted = Controller(r)
+    s = r.read(run)
+    assert remote.adopted == [job["id"]] and not remote.cancelled
+    assert s["jobs"][job["id"]]["status"] == "running"
+    assert s["status"] == "paused"  # a restart never resumes on its own
+    r.control(run, "resume")
+    r.control(run, "pause")
+    restarted.tick()
+    s = r.read(run)
+    assert s["status"] == "paused" and s["jobs"][job["id"]]["status"] == "running"
+    assert not remote.cancelled

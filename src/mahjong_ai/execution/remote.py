@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 import subprocess
 import tarfile
+import time
 import io
 
 SERVICE_PORT = 8830
@@ -324,6 +325,8 @@ class Dispatcher:
 
     # Training on a host (imitation, recipe trials) means it is not idle.
     TRAINING = r"guided\.(imitate|trial|run)\b"
+    # A host unreachable this long is offline (ADR-0014).
+    OFFLINE_SECONDS = 600.0
 
     def __init__(self, host, models_root, poll_seconds=30.0, probe_seconds=60.0):
         import queue
@@ -333,11 +336,53 @@ class Dispatcher:
         self.requests, self.running = queue.Queue(), {}
         self.errors = {}
         self.probe_seconds, self.training = probe_seconds, None  # unknown = busy
+        self.last_ok = time.monotonic()  # a fresh dispatcher starts online
+        self.launched = {}  # job id -> wall time of launch, to detect reboots
         # Training process groups suspended while a common brawl runs here.
         self.suspended, self.brawls = [], set()
         self.lock = threading.Lock()
         self.thread = threading.Thread(target=self._loop, name=f"remote-{host.name}", daemon=True)
         self.thread.start()
+
+    def offline(self):
+        return time.monotonic() - self.last_ok > self.OFFLINE_SECONDS
+
+    def adopt(self, job_id, root):
+        """Take over a job launched before a controller restart."""
+        marker = Path(root) / "remote.json"
+        if not marker.exists():
+            return False
+        value = json.loads(marker.read_text())
+        with self.lock:
+            self.running[job_id] = (Path(root), value["pid"])
+        self.launched[job_id] = value.get("at", 0.0)
+        return True
+
+    def forget(self, job_id):
+        """Stop tracking a job that was moved elsewhere; its receipt is ignored."""
+        with self.lock:
+            self.running.pop(job_id, None)
+        self.launched.pop(job_id, None)
+        self.brawls.discard(job_id)
+
+    def _reachable(self):
+        try:
+            self.host.python("import json\nprint(json.dumps(True))\n", timeout=60)
+        except Exception:
+            return False
+        self.last_ok = time.monotonic()
+        return True
+
+    def _rebooted_since(self, launched):
+        """True when the host booted after ``launched`` (its work was lost)."""
+        try:
+            boot = self.host.python(
+                "import json,time\nprint(json.dumps(time.time()-float(open('/proc/uptime').read().split()[0])))\n",
+                timeout=60,
+            )
+        except Exception:
+            return False
+        return boot > launched - 60
 
     def submit(self, job_id, root, task, runtime, env):
         self.requests.put(("launch", job_id, Path(root), task, runtime, env))
@@ -364,6 +409,7 @@ class Dispatcher:
                 + repr(self.TRAINING) + "],capture_output=True).returncode==0))\n",
                 timeout=120,
             ))
+            self.last_ok = time.monotonic()
         except Exception:
             self.training = None
 
@@ -428,15 +474,19 @@ class Dispatcher:
                     env["MAHJONG_SELFPLAY"] = self.host.service_code + "/projects/personal/selfplay"
                 jobs.append((root, task, runtime, env))
             pids = self.host.launch_many(jobs)
+            self.last_ok = time.monotonic()
         except Exception as exc:
+            status = "failed" if self._reachable() else "host_fault"
             for job_id, root, _, _, _ in batch:
                 self.brawls.discard(job_id)
-                self._write(root, {"status": "failed", "error": f"远程启动失败：{exc}"[:4000]})
+                self._write(root, {"status": status, "error": f"远程启动失败：{exc}"[:4000]})
             if self.suspended:
                 self._resume_training()
             return
+        now = time.time()
         for (job_id, root, _, _, _), pid in zip(batch, pids):
-            atomic_json(root / "remote.json", {"host": self.host.name, "pid": pid})
+            atomic_json(root / "remote.json", {"host": self.host.name, "pid": pid, "at": now})
+            self.launched[job_id] = now
             with self.lock:
                 self.running[job_id] = (root, pid)
 
@@ -449,18 +499,26 @@ class Dispatcher:
             return
         try:
             states = self.host.poll(jobs)
+            self.last_ok = time.monotonic()
         except Exception:
-            return  # A relay hiccup: try again on the next poll.
+            return  # Unreachable: jobs keep running there; ask again later.
         for job_id, state in states.items():
             root, _ = jobs[job_id]
+            with self.lock:
+                if job_id not in self.running:
+                    continue  # moved elsewhere meanwhile
             if "result" in state:
                 self._write(root, state["result"])
             elif not state["alive"]:
-                self._write(root, {"status": "failed", "error": "远程任务进程已退出且没有回执"})
+                if self._rebooted_since(self.launched.get(job_id, 0.0)):
+                    self._write(root, {"status": "host_fault", "error": "远程主机重启，任务丢失"})
+                else:
+                    self._write(root, {"status": "failed", "error": "远程任务进程已退出且没有回执"})
             else:
                 continue
             with self.lock:
                 self.running.pop(job_id, None)
+            self.launched.pop(job_id, None)
             self.brawls.discard(job_id)
         if self.suspended:
             self._resume_training()
@@ -491,9 +549,11 @@ class Dispatcher:
             elif request and request[0] == "call":
                 try:
                     request[1](self.host)
+                    self.last_ok = time.monotonic()
                 except Exception as exc:
                     if request[2] is not None:
-                        self._write(request[2], {"status": "failed", "error": f"远程准备失败：{exc}"[:4000]})
+                        status = "failed" if self._reachable() else "host_fault"
+                        self._write(request[2], {"status": status, "error": f"远程准备失败：{exc}"[:4000]})
             elif request and request[0] == "cancel":
                 with self.lock:
                     entry = self.running.pop(request[1], None)

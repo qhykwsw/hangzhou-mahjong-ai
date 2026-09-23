@@ -31,7 +31,6 @@ HOST_FILES = (
 EXTRA_FILES = ("pyproject.toml",)
 POLL_SECONDS = 15
 # Consecutive failed status probes tolerated before a running job is given up.
-PROBE_RETRIES = 8
 
 
 def absolute(path):
@@ -186,6 +185,30 @@ def _recipe_files(package):
     return files
 
 
+class HostFault(RuntimeError):
+    """The host lost the work (it restarted); redo it once the host is back."""
+
+
+def reachable(host):
+    try:
+        remote.execute(host, "print(1)", timeout=60)
+        return True
+    except (RuntimeError, subprocess.TimeoutExpired):
+        return False
+
+
+def rebooted_since(host, launched):
+    try:
+        boot = float(remote.execute(
+            host,
+            "import time\nprint(time.time()-float(open('/proc/uptime').read().split()[0]))",
+            timeout=60,
+        ).strip().splitlines()[-1])
+    except (RuntimeError, subprocess.TimeoutExpired, ValueError):
+        return False
+    return boot > launched - 60
+
+
 def _run_remote(task, progress, command, plan, timeout):
     """Upload the plan, run one trial.py command detached, poll until it finishes."""
     host, root = task["host"], task["remote_dir"]
@@ -219,23 +242,23 @@ except OSError:
 print(json.dumps({{'status':status,'alive':alive}}))
 """
     started = time.time()
-    failures = 0
     while True:
         try:
             reply = json.loads(
                 remote.execute(host, probe, timeout=90).strip().splitlines()[-1]
             )
-            failures = 0
         except (RuntimeError, subprocess.TimeoutExpired):
-            # The detached job keeps running; a relayed SSH hop may drop briefly.
-            failures += 1
-            if failures > PROBE_RETRIES:
-                raise
+            # The detached job keeps running while the host is unreachable;
+            # wait for it however long that takes (ADR-0014).
+            progress(f"{command}: 等待主机恢复连接")
             time.sleep(POLL_SECONDS)
             continue
         state = reply["status"].get("state")
         if state in ("complete", "failed", "timeout"):
             return reply["status"]
+        if not reply["alive"] and rebooted_since(host, launched["time"]):
+            launch_file.unlink()  # the next attempt starts the work afresh
+            raise HostFault("远程主机重启，训练丢失")
         if not reply["alive"] and time.time() - launched["time"] > 30:
             log = remote.execute(
                 host,
@@ -417,13 +440,22 @@ def run(job_dir):
         )
 
     try:
+        if task.get("host"):
+            while not reachable(task["host"]):
+                progress("等待主机恢复连接")
+                time.sleep(60)
         result = {"status": "completed", "output": KINDS[task["kind"]](task, progress)}
+    except HostFault as exc:
+        result = {"status": "host_fault", "error": str(exc)}
     except BaseException as exc:
         result = {
             "status": "failed",
             "error": f"{type(exc).__name__}: {exc}",
             "trace": traceback.format_exc()[-6000:],
         }
+        # Losing the host mid-step is not the recipe's failure.
+        if task.get("host") and isinstance(exc, Exception) and not reachable(task["host"]):
+            result["status"] = "host_fault"
     atomic_json(result_path, result | {"finished": time.time()})
     return result
 

@@ -197,3 +197,28 @@ def test_research_cancel_discards_the_trial(service, tmp_path):
     s = service.store.read()
     assert {t["status"] for t in s["trials"].values()} == {"discarded"}
     assert s["lines"][line]["trial"] is None and s["lines"][line]["request"] is None
+
+
+def test_a_lost_host_redoes_the_same_training_job_without_counting_it(service, tmp_path):
+    line = start(service)[0]
+    request(service, line, tmp_path)
+    submit(service, line)
+    retries = service.store.read()["config"]["trial"]["retries"]
+    for _ in range(retries + 2):
+        with service.store.edit() as (s, db):
+            job = live(s, "train", line)
+            first = job["id"]
+            job["status"] = "running"
+            service.accept(s, db, job, {"status": "host_fault", "error": "rebooted"})
+            service.advance(s, db)
+            assert live(s, "train", line)["id"] == first
+    s = service.store.read()
+    assert s["status"] == "running" and s["trials"][f"{line}-001"]["status"] == "training"
+    # After a service restart the trial continues once research runs again.
+    with service.store.edit() as (s, db):
+        live(s, "train", line)["status"] = "running"
+    service.recover()
+    assert service.store.read()["status"] == "paused"
+    service.wake()
+    s = service.store.read()
+    assert s["status"] == "running" and live(s, "train", line)["status"] == "queued"

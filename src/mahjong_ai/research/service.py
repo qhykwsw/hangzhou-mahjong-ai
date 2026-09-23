@@ -36,6 +36,7 @@ from mahjong_ai.research.config import (
     merge,
     validate,
     IMMEDIATE,
+    LIVE,
 )
 from mahjong_ai.evaluation.schedule import (
     schedule,
@@ -123,6 +124,14 @@ def strip_groups(result):
     if result:
         for key in [k for k in result if k.endswith("group_means") or k == "group_blocks"]:
             result.pop(key)
+
+
+MODES = ("iterating", "competing", "archived")
+
+
+def branch_mode(b):
+    """Iterating, competing only, or archived (see CONTEXT.md)."""
+    return b.get("mode") or ("archived" if b["archived"] else "iterating")
 
 
 class Research:
@@ -217,6 +226,7 @@ class Research:
                     raise ValueError("注册策略前先暂停实验")
                 for combination in config["combinations"]:
                     self.add_combination(state, combination, config["models"])
+                self.apply_modes(state, db, config)
                 if not state["bootstrap"]:
                     self.ensure_bootstrap(state, state["runtime_path"])
         return self.read()
@@ -383,8 +393,7 @@ class Research:
             if bid in s["branches"]:
                 b = s["branches"][bid]
                 if b["model"] != model or b["model_config"] != models[model]:
-                    if s["id"] and s["phase"] not in ("finished", "closed", "idle"):
-                        raise ValueError("切换研究模型前先结束当前实验")
+                    # Takes effect from the branch's next iteration.
                     s["model_history"].append(
                         dict(
                             branch=bid,
@@ -407,6 +416,7 @@ class Research:
                 model_config=deepcopy(models[model]),
                 status="uninitialized",
                 archived=False,
+                mode="iterating",
                 completed=0,
                 successful=0,
                 improved=0,
@@ -438,20 +448,26 @@ class Research:
         with self.edit() as (s, db):
             if s["id"] and s["phase"] not in ("finished", "closed"):
                 raise ValueError("已存在未完成的实验")
-            selected = (
-                list(targets)
-                if targets is not None
-                else [b for b, row in s["branches"].items() if not row["archived"]]
-            )
-            if (
-                not selected
-                or len(selected) != len(set(selected))
-                or any(
-                    bid not in s["branches"] or s["branches"][bid]["archived"]
-                    for bid in selected
-                )
-            ):
-                raise ValueError("请选择互不重复、已注册且未归档的迭代分支")
+            if targets is not None:
+                # Selected branches iterate; the other active ones only compete.
+                if (
+                    not targets
+                    or len(targets) != len(set(targets))
+                    or any(
+                        bid not in s["branches"]
+                        or branch_mode(s["branches"][bid]) == "archived"
+                        for bid in targets
+                    )
+                ):
+                    raise ValueError("请选择互不重复、已注册且未归档的迭代分支")
+                for bid, b in s["branches"].items():
+                    if branch_mode(b) != "archived":
+                        b.update(mode="iterating" if bid in targets else "competing")
+            selected = [
+                bid for bid, b in s["branches"].items() if branch_mode(b) == "iterating"
+            ]
+            if not selected:
+                raise ValueError("没有处于迭代中的分支")
             self.ensure_bootstrap(s, runtime)
             # Without explicit opponents the experiment opens with a common
             # brawl; its ranking supplies the first evaluation opponents.
@@ -492,60 +508,189 @@ class Research:
             for b in s["branches"].values():
                 b["status"] = "ready" if b["representative"] else "uninitialized"
             for bid in selected:
-                b = s["branches"][bid]
-                if b["representative"]:
-                    b["status"] = "ready"
-                    continue
-                b["status"] = "initializing"
-                key = b["combination"]
-                if s["definitions"][key]["family"] == "recipe":
-                    # Version 0 is the baseline recipe trained once by the
-                    # recipe service; it does not hold up the other branches.
-                    self.queue(s, "trial", branch=bid, baseline=True,
-                               line=s["definitions"][key]["parameters"]["line"])
-                    continue
-                if key in s["baselines"]:
-                    continue
-                combination = s["definitions"][key]
-                cid = "baseline--" + key
-                package = self.layout.strategies / key / "baseline/source"
-                package.mkdir(parents=True, exist_ok=True)
-                (package / "strategy.py").write_text(
-                    baseline_source(
-                        key, combination["parameters"], combination["family"]
-                    )
-                )
-                s["candidates"][cid] = dict(
-                    id=cid,
-                    branch=None,
-                    combination=key,
-                    status="submitted",
-                    workspace=str(package),
-                    parent=None,
-                    hypothesis="shared initialized baseline",
-                    requirements=["lightgbm==4.6.0"]
-                    if combination["parameters"].get("algorithm") == "lightgbm"
-                    else [],
-                    runtime_path=runtime,
-                )
-                s["baselines"][key] = cid
-                self.queue(
-                    s,
-                    "prepare",
-                    branch=None,
-                    candidates=[cid],
-                    combination=key,
-                    initialization=True,
-                    training_games=combination.get(
-                        "training_games", config["training_games"]
-                    ),
-                )
+                self.initialize_branch(s, bid)
             root = Path(s["root"]) / "experiments" / identity
             atomic_json(root / "experiment.json", experiment)
             self.event(
                 db, s, "experiment_created", {"targets": selected, "opponents": pool}
             )
         return identity
+
+    def initialize_branch(self, s, bid):
+        """Give an iterating branch without a version its initial version."""
+        b = s["branches"][bid]
+        if b["representative"]:
+            b["status"] = "ready"
+            return
+        if b["status"] == "initializing":
+            return
+        b["status"] = "initializing"
+        key = b["combination"]
+        combination = s["definitions"][key]
+        if combination["family"] == "recipe":
+            # Version 0 is the baseline recipe trained once by the recipe
+            # service; it does not hold up the other branches.
+            self.queue(s, "trial", branch=bid, baseline=True,
+                       line=combination["parameters"]["line"])
+            return
+        if key in s["baselines"] and s["candidates"][s["baselines"][key]]["status"] != "failed":
+            return
+        cid = "baseline--" + key
+        package = self.layout.strategies / key / "baseline/source"
+        package.mkdir(parents=True, exist_ok=True)
+        (package / "strategy.py").write_text(
+            baseline_source(key, combination["parameters"], combination["family"])
+        )
+        s["candidates"][cid] = dict(
+            id=cid,
+            branch=None,
+            combination=key,
+            status="submitted",
+            workspace=str(package),
+            parent=None,
+            hypothesis="shared initialized baseline",
+            requirements=["lightgbm==4.6.0"]
+            if combination["parameters"].get("algorithm") == "lightgbm"
+            else [],
+            runtime_path=s["runtime_path"],
+        )
+        s["baselines"][key] = cid
+        self.queue(
+            s,
+            "prepare",
+            branch=None,
+            candidates=[cid],
+            combination=key,
+            initialization=True,
+            training_games=combination.get(
+                "training_games", s["config"]["training_games"]
+            ),
+        )
+
+    def apply(self, experiment=None):
+        """Apply research.toml to the running experiment (ADR-0014).
+
+        Branches, their modes, research models, fixed entrants and host
+        placement change live. Evaluation conditions and scoring stay frozen:
+        a file that changes them is not applied and the reason is kept.
+        """
+        if self.store.read() is None:
+            self.register()
+        config = configuration(self.project)
+        with self.edit(experiment) as (s, db):
+            frozen = sorted(
+                k for k in set(config) | set(s["config"])
+                if k not in LIVE and config.get(k) != s["config"].get(k)
+            )
+            known = {c["id"]: c for c in s["config"]["combinations"]}
+            for c in config["combinations"]:
+                old = known.get(c["id"])
+                if old and any(
+                    c.get(k) != old.get(k)
+                    for k in ("family", "parameters", "evaluation_games", "training_games")
+                ):
+                    frozen.append("combinations." + c["id"])
+            if frozen and s["id"] and s["phase"] not in ("finished", "closed"):
+                error = "以下设置属于评估条件，运行中不能修改：" + ", ".join(frozen)
+                if s.get("config_error") != error:
+                    s["config_error"] = error
+                    self.event(db, s, "configuration_rejected", {"keys": frozen})
+                return False
+            for k in LIVE:
+                s["config"][k] = deepcopy(config[k])
+            for combination in config["combinations"]:
+                self.add_combination(s, combination, config["models"])
+            self.apply_modes(s, db, config)
+            s["config_error"] = None
+            self.event(db, s, "configuration", {"applied": True})
+        return True
+
+    def apply_modes(self, s, db, config):
+        configured = {
+            f"{c['id']}--{suffix}"
+            for c in config["combinations"]
+            for suffix in c.get("branch_ids", [f"{n + 1:02d}" for n in range(c["branches"])])
+        }
+        active = bool(s["id"]) and s["phase"] not in ("idle", "finished", "closed")
+        for bid, b in s["branches"].items():
+            new = config["modes"].get(bid, "iterating") if bid in configured else "archived"
+            old = branch_mode(b)
+            if new != old or "mode" not in b:
+                b.update(mode=new, archived=new == "archived")
+                self.event(db, s, "branch_mode", {"branch": bid, "mode": new, "previous": old})
+            # A branch that joins a running experiment starts from its initial version.
+            if active and new == "iterating" and b["status"] == "uninitialized":
+                self.initialize_branch(s, bid)
+
+    @staticmethod
+    def online(s, host):
+        return host is None or s.get("hosts", {}).get(host, {}).get("online", True)
+
+    @staticmethod
+    def evaluation_host(s, b):
+        return s["definitions"][b["combination"]].get("evaluation_host")
+
+    def local_busy(self, s):
+        """Iterations whose evaluation runs on this machine are still in flight."""
+        return any(
+            it["experiment"] == s["id"]
+            and it["status"] != "completed"
+            and not it["config"].get("evaluation_host")
+            for it in s["iterations"].values()
+        )
+
+    @staticmethod
+    def local_brawl(s):
+        return any(
+            j.get("scope") == "competition" and not j.get("host")
+            and j["status"] != "completed" and j["experiment"] == s["id"]
+            for j in s["jobs"].values()
+        )
+
+    def rehome(self, s, db, host):
+        """A host went offline: bring back work that must not wait for it.
+
+        Overflowed rule evaluations return to this machine; brawl chunks are
+        split to local size and wait for the brawl drain. Work that belongs
+        to the host (a recipe branch's evaluation) waits for it.
+        """
+        moved = []
+        for j in list(s["jobs"].values()):
+            if j.get("host") != host or j["kind"] != "match" or j["status"] == "completed":
+                continue
+            if j.get("overflow"):
+                j.update(host=None, overflow=False, status="queued")
+                j.pop("stop_requested", None)
+                moved.append(j["id"])
+            elif j.get("scope") == "competition":
+                j.update(status="completed", cancelled=True, rehomed=True)
+                moved.append(j["id"])
+                chunk = 4 * COMPETITION_BLOCKS_PER_JOB
+                for block in range(0, len(j["assignments"]), chunk):
+                    self.queue(
+                        s, "match", scope="competition", cycle=j["cycle"], host=None,
+                        assignments=j["assignments"][block : block + chunk],
+                    )
+        if moved:
+            self.event(db, s, "host_offline", {"host": host, "moved": moved})
+        return moved
+
+    def count_entrants(self, s, cycle):
+        """A version newly entering the brawl counts as one pending promotion."""
+        previous = next(
+            (c for c in reversed(s["cycles"][:-1]) if c.get("roster")), None
+        )
+        if previous is None or cycle["status"] != "researching":
+            return
+        keys = {
+            bid for bid, b in s["branches"].items()
+            if branch_mode(b) != "archived" and b["representative"]
+        } | set(s["config"].get("anchors", [])) | set(s["config"].get("guests", []))
+        counted = set(cycle.setdefault("counted_entrants", []))
+        for key in sorted(keys - set(previous["roster"]) - counted):
+            cycle["counted_entrants"].append(key)
+            s["promotions_pending"] = s.get("promotions_pending", 0) + 1
+            s["promotions_since"] = s.get("promotions_since") or time.time()
 
     @staticmethod
     def eligible(s):
@@ -618,7 +763,8 @@ class Research:
                     if j["experiment"] == s["id"] and j["status"] == "paused":
                         j["status"] = "queued"
                 selected_combinations = {
-                    s["branches"][bid]["combination"] for bid in current["targets"]
+                    b["combination"] for b in s["branches"].values()
+                    if branch_mode(b) == "iterating"
                 }
                 for combination, cid in s["baselines"].items():
                     if (
@@ -721,18 +867,6 @@ class Research:
             s["revisions"].append(dict(experiment=s["id"], at=time.time(), patch=patch))
             self.event(db, s, "configuration", {"keys": list(patch)})
         return self.snapshot(experiment)
-
-    def archive(self, branch, archived=True):
-        if type(archived) is not bool:
-            raise ValueError("archived 必须是布尔值")
-        with self.edit() as (s, db):
-            if s["phase"] not in ("idle", "finished", "closed"):
-                raise ValueError("归档前先结束或关闭实验")
-            s["branches"][branch]["archived"] = archived
-            self.event(
-                db, s, "branch_archived", {"branch": branch, "archived": archived}
-            )
-        return self.snapshot()
 
     @staticmethod
     def own(s, branch, cid):
@@ -1340,9 +1474,10 @@ class Research:
             return "fallback"
         return None
 
-    def start_brawl(self, s, db, cycle, reason):
+    def start_brawl(self, s, db, cycle, reason, host=None):
         """Freeze every active branch's representative plus anchors and play."""
         cycle["status"] = "competing"
+        cycle["brawl_host"] = host
         cycle["brawl_reason"] = reason
         cycle["brawl_started_at"] = time.time()
         cycle["roster"] = {
@@ -1353,7 +1488,7 @@ class Research:
                 effort=b["model_config"]["effort"],
             )
             for b in s["branches"].values()
-            if not b["archived"] and b["representative"]
+            if branch_mode(b) != "archived" and b["representative"]
         }
         for role in ("anchors", "guests"):
             for cid in s["config"].get(role, []):
@@ -1387,7 +1522,6 @@ class Research:
         matches = (matches + 3) // 4 * 4
         key = read_json(Path(s["root"]) / "private/random.json")["key"]
         assignments = schedule(roster, matches, digest([key, "competition", cycle["id"]]))
-        host = cycle["config"].get("brawl_host")
         chunk = 4 * COMPETITION_BLOCKS_PER_JOB
         if host:
             # Remote launches cost SSH round trips: one job per host worker.
@@ -1402,9 +1536,10 @@ class Research:
                 host=host,
                 assignments=assignments[block : block + chunk],
             )
+        s["drain"] = None
         self.event(
             db, s, "competition_started",
-            {"cycle": cycle["id"], "matches": matches, "reason": reason},
+            {"cycle": cycle["id"], "matches": matches, "reason": reason, "host": host},
         )
 
     def startable(self, s):
@@ -1418,12 +1553,18 @@ class Research:
             or not cycle["reference"]
         ):
             return []
-        targets = set(s["experiments"][-1]["targets"])
-        return [
-            b
-            for b in s["branches"].values()
-            if b["id"] in targets and not b["archived"] and b["status"] == "ready"
-        ]
+        draining = bool(s.get("drain")) or self.local_brawl(s)
+        ready = []
+        for b in s["branches"].values():
+            if branch_mode(b) != "iterating" or b["status"] != "ready":
+                continue
+            host = self.evaluation_host(s, b)
+            # A branch evaluated on another host waits while that host is
+            # offline; branches evaluated here wait while a brawl drains them.
+            if (host and not self.online(s, host)) or (draining and not host):
+                continue
+            ready.append(b)
+        return ready
 
     def start_iteration(self, s, branch):
         b = s["branches"][branch]
@@ -1480,15 +1621,15 @@ class Research:
         experiment = s["experiments"][-1]
         if s["phase"] == "initializing":
             if any(
-                not s["branches"][bid]["representative"]
-                and s["definitions"][s["branches"][bid]["combination"]]["family"]
-                != "recipe"
-                for bid in experiment["targets"]
+                branch_mode(b) == "iterating"
+                and not b["representative"]
+                and s["definitions"][b["combination"]]["family"] != "recipe"
+                for b in s["branches"].values()
             ):
                 return
             cycle = self.open_epoch(s, db, experiment["initial_opponents"])
             if not cycle["reference"]:
-                self.start_brawl(s, db, cycle, "opening")
+                cycle["opening"] = True
         cycle = self.current_cycle(s)
         for b in s["branches"].values():
             it = s["iterations"].get(b.get("iteration"))
@@ -1525,10 +1666,21 @@ class Research:
                 cycle = self.open_epoch(
                     s, db, self.default_opponents(s, s["config"]["opponent_limit"])
                 )
-        elif not s.get("stop_plan"):
-            reason = self.brawl_due(s, cycle)
-            if reason:
-                self.start_brawl(s, db, cycle, reason)
+        elif cycle.get("opening") or not s.get("stop_plan"):
+            self.count_entrants(s, cycle)
+            reason = "opening" if cycle.get("opening") else self.brawl_due(s, cycle)
+            host = s["config"].get("brawl_host")
+            if not reason:
+                s["drain"] = None
+            elif self.online(s, host):
+                self.start_brawl(s, db, cycle, reason, host)
+            elif not self.local_busy(s):
+                # The brawl host is offline: play here once this machine's
+                # iterations have finished (brawl drain).
+                self.start_brawl(s, db, cycle, reason, None)
+            elif s.get("drain") != reason:
+                s["drain"] = reason
+                self.event(db, s, "brawl_drain", {"reason": reason, "host": host})
         plan = s.get("stop_plan")
         if plan and cycle["status"] != "competing" and not any(
             it["experiment"] == s["id"] and it["status"] != "completed"
@@ -1760,6 +1912,16 @@ class Research:
             raise ValueError("实验回执已过期")
         if result["status"] == "paused":
             job["status"] = "paused"
+            return
+        if result["status"] == "host_fault":
+            # Not the candidate's failure: the work is redone when possible.
+            job["status"] = "queued"
+            job.pop("stop_requested", None)
+            job["host_faults"] = job.get("host_faults", 0) + 1
+            if job.get("overflow"):
+                job.update(host=None, overflow=False)
+            self.event(db, s, "host_fault", {"job": job["id"], "host": job.get("host"),
+                                             "error": result.get("error")})
             return
         if not (job["kind"] == "match" and result["status"] != "completed"):
             self.store.receipt(
@@ -2328,6 +2490,8 @@ class Research:
                     "stop_plan": s.get("stop_plan"),
                     "promotions_pending": s.get("promotions_pending", 0),
                     "brawl_promotions": s["config"]["brawl_promotions"],
+                    "drain": s.get("drain"),
+                    "config_error": s.get("config_error"),
                 }
             )
             if current
@@ -2349,6 +2513,11 @@ class Research:
             jobs=jobs,
             **({"branch_progress": branch_progress(s)} if branch is None else {}),
             default_opponents=opponents,
+            hosts={
+                name: {"online": True, **s.get("hosts", {}).get(name, {})}
+                for name in s["config"].get("hosts", {})
+            },
+            brawl_host=s["config"].get("brawl_host"),
             bootstrap=list(s["bootstrap"]),
             history=[
                 dict(
