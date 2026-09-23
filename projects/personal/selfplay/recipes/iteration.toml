@@ -1,40 +1,29 @@
-# 训练方案迭代的固定条件，见 docs/adr/0012-recipe-iteration-for-rl-training.md。
-# 新实验创建时整体冻结进实验状态；改这里只影响之后创建的实验。
+# 方案分支（统一研究架构中的强化学习分支）的执行条件，见 ADR-0013 与 ADR-0012。
+# 研究框架发起每次尝试、冻结评估对手并负责分段配对评估与共同大乱斗；
+# 这里只规定设计与训练。新实验创建时整体冻结进实验状态。
 
-baseline = "recipes/baseline/recipe"  # 首次尝试的工作区从这里复制
+baseline = "recipes/baseline/recipe"  # 第 0 版与首次尝试的方案从这里复制
 
 [agent]
-model = "deepseek"  # 研究模型档案，取自自动研究的 MODELS
-seconds = 300  # 每次尝试 Agent 的思考时限；冒烟检查的实际耗时另计
+model = "astra-high"  # 研究模型档案，取自自动研究的 MODELS
+seconds = 600  # 每次尝试 Agent 的思考时限；冒烟检查的实际耗时另计
 continuations = 2  # 回复结束但未提交时，同一会话最多续写的次数
 smoke_limit = 3  # 每次尝试最多计入时限补偿的冒烟检查次数
 
 [trial]
-budget_seconds = 7200  # recipe.train 的默认训练时限；方案线可以单独覆盖。基线约每 10～14 分钟走一步，前两步略降，约 6 步后才稳定转正，30 分钟测不出强化学习的效果
-incumbent = "baseline"  # 第 0 版：start = 起点本身；baseline = 基线方案从起点训练一个时限的产物。基线本身在提升，新方案要和它在同样时长里比
+budget_seconds = 14400  # recipe.train 的最长训练时限（4 小时，约 100 万局）；方案可提前结束，只比较最终强度
+incumbent = "baseline"  # 第 0 版：基线方案从固定起点训练一个时限的产物
 smoke_seconds = 60
-evaluation_games = 4096  # 挑战者和现役各打的场数，配对差 95% 区间下界 > 0 才晋级；新旧模型几乎每场都走岔，配对降噪有限，1024 场只能分辨约 2.6 分
-brawl_appearances = 1024  # 五方大乱斗里每方的出场数
-limit = 24  # 每条方案线的尝试次数上限，可在网页追加
-retries = 2  # 基础设施失败（SSH、远端进程丢失）的重试次数，用完暂停实验
+limit = 100000  # 尝试由研究框架按需发起，不在这里限额
+retries = 2  # 基础设施失败（SSH、远端进程丢失）的重试次数，用完暂停
 
 [[lines]]
-id = "large"
-name = "4090 大模型"
-host = "4090"
-budget_seconds = 7200
-# 起点：40 分钟模仿后再低学习率纯模仿 20 分钟，已到模仿平台（远端仓库根下的相对路径，两台各自的模型）
-start_checkpoint = ".local/guided-starts/20260922-imitation20/actor"
-execution = { workers = 20, tables = 64, inference_batch_limit = 128 }
+id = "rl"
+name = "4070 大模型"
+host = "4070"
+# 固定起点：4090 模仿阶段的甜点快照（大模型），拷到 4070 仓库根下的这个相对路径
+start_checkpoint = ".local/guided-starts/20260923-material-dose-large/actor"
+execution = { workers = 22, tables = 16, inference_batch_limit = 64 }
 # 训练进程的硬上限：显存按分配器比例封顶（超了是 CUDA OOM，不会溢出到共享内存），
 # 进程组常驻内存超过 WSL 总内存的比例就整组结束。超限记为训练失败。
-limits = { gpu_memory_fraction = 0.9, ram_fraction = 0.75 }
-
-[[lines]]
-id = "small"
-name = "4070 小模型"
-host = "4070"
-budget_seconds = 7200
-start_checkpoint = ".local/guided-starts/20260922-imitation20/actor"
-execution = { workers = 22, tables = 16, inference_batch_limit = 64 }
 limits = { gpu_memory_fraction = 0.75, ram_fraction = 0.75 }  # 4070 同时承担桌面显示，留出余量

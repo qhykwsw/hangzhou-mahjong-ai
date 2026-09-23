@@ -1536,3 +1536,67 @@ def test_staged_evaluation_adds_new_blocks_until_a_decision(tmp_path):
         assert second == {2, 3} and it["status"] == "completed"
         assert it["results"][candidate]["appearances"] == 16
         assert it["results"][candidate]["promotion"]["confidence"] == 0.95
+
+
+def test_recipe_branch_hands_trained_model_to_staged_evaluation(tmp_path):
+    import hashlib
+    import json
+
+    host = {"ssh": "h", "distro": "d", "user": "u", "python": "/p", "root": "/r", "workers": 2}
+    config = small_config() | {
+        "hosts": {"gpu": host},
+        "combinations": small_config()["combinations"]
+        + [dict(id="rl-recipe", branches=1, models=["astra"], parameters={"line": "rl"},
+                evaluation_games=8, evaluation_host="gpu")],
+    }
+
+    def actor(folder, payload):
+        folder.mkdir(parents=True)
+        (folder / "actor.pt").write_bytes(payload)
+        sha = hashlib.sha256(payload).hexdigest()
+        (folder / "meta.json").write_text(json.dumps({"weights_sha256": sha, "config": {}}))
+        return folder
+
+    r = Research(tmp_path)
+    bootstrap = r.register(config)["bootstrap"]
+    run = r.create(config, opponents=bootstrap)
+    controller = Controller(r)
+    r.control(run, "resume")
+    with r.edit(run) as (s, db):
+        trial = next(j for j in s["jobs"].values() if j["kind"] == "trial")
+        assert trial["baseline"] and trial["line"] == "rl"
+        r.accept(s, db, trial, {"status": "completed", "baseline": True,
+                                "local_actor": str(actor(tmp_path / "v0", b"zero"))})
+        branch = s["branches"]["rl-recipe--01"]
+        assert branch["representative"] == "rl-recipe--01--initial"
+        assert s["candidates"][branch["representative"]]["spec"]["family"] == "model"
+        # Rule branches still initialize; the recipe branch never blocks them.
+        for job in [j for j in s["jobs"].values() if j["kind"] == "prepare"]:
+            task = controller.task(s, job)
+            root = Path(s["root"]) / "jobs" / job["id"]
+            root.mkdir(parents=True)
+            r.accept(s, db, job, prepare(task, root, time.monotonic() + 30))
+        r.advance(s, db)
+        assert s["phase"] == "researching"
+        job = r.start_iteration(s, "rl-recipe--01")
+        assert job["kind"] == "trial" and not any(
+            j["kind"] == "agent" and j.get("branch") == "rl-recipe--01"
+            for j in s["jobs"].values()
+        )
+        r.advance(s, db)
+        assert not any(j["kind"] == "prepare" and j.get("branch") == "rl-recipe--01"
+                       for j in s["jobs"].values())
+        r.accept(s, db, job, {
+            "status": "completed", "trial": "rl-001",
+            "plan": {"assessment": "a", "direction": "d", "reason": "r"},
+            "candidates": {job["candidate"]: {
+                "status": "ready", "local_actor": str(actor(tmp_path / "v1", b"one"))}},
+        })
+        it = s["iterations"][job["iteration"]]
+        assert it["status"] == "evaluating" and it["recipe_trial"] == "rl-001"
+        assert it["plan"]["direction"] == "d"
+        matches = [j for j in s["jobs"].values()
+                   if j.get("iteration") == it["id"] and j["kind"] == "match"]
+        assert matches and all(j["host"] == "gpu" for j in matches)
+        blocks = {a["block"] for j in matches for a in j["assignments"]}
+        assert blocks == {0, 1}  # 8 games per side in the first stage

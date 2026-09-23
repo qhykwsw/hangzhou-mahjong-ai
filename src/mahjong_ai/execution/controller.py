@@ -9,7 +9,7 @@ import time
 from mahjong_ai.persistence.artifacts import atomic_json, read_json, digest
 from mahjong_ai.domain.engine import derive_seed
 from mahjong_ai.execution.model_service import ModelService, SERVER_ENV
-from mahjong_ai.execution.remote import Dispatcher, RemoteHost
+from mahjong_ai.execution.remote import Dispatcher, RemoteHost, opponent_specs
 import json
 
 # 逐个放出 Agent，避免同一秒把整个并发上限压给模型网关触发限流。
@@ -17,8 +17,11 @@ AGENT_LAUNCH_INTERVAL = 5.0
 
 
 class Controller:
-    def __init__(self, research):
+    def __init__(self, research, recipes=None):
         self.research = research
+        # The recipe iteration service designs and trains recipe branches'
+        # candidates; research only hands trials over and evaluates them.
+        self.recipes = recipes
         self.processes = {}
         self.agent_launch_interval = AGENT_LAUNCH_INTERVAL
         self.agent_launch_at = 0.0
@@ -90,6 +93,10 @@ class Controller:
         (root / "cancel.flag").touch()
         if job.get("host") and "stop_requested" not in job:
             self.dispatcher(s, job["host"]).cancel(job["id"], root)
+        if job["kind"] == "trial" and "stop_requested" not in job and self.recipes:
+            self.recipes.cancel(job["line"])
+            if not (root / "result.json").exists():
+                atomic_json(root / "result.json", {"status": "paused", "reason": "operator interruption"})
         job.setdefault("stop_requested", time.time())
         for file in ("codex-process.json", "process.json"):
             p = root / file
@@ -266,9 +273,33 @@ class Controller:
             )
         return task
 
+    def launch_trial(self, s, j, root):
+        if self.recipes is None:
+            raise RuntimeError("训练方案服务未启用，方案分支无法迭代")
+        j.update(status="running", started_at=time.time())
+        j.pop("stop_requested", None)
+        if j.get("baseline"):
+            self.recipes.request(j["line"], root, "baseline")
+            return
+        it = s["iterations"][j["iteration"]]
+        host = it["config"].get("evaluation_host")
+        candidates = {cid: s["candidates"][cid] for cid in it["opponents"]}
+        timeouts, models = it["config"]["timeouts"], self.research.layout.research / "models"
+        recipes, line, candidate, number = self.recipes, j["line"], j["candidate"], it["number"]
+
+        def hand_over(remote):
+            specs = opponent_specs(remote, candidates, models, timeouts)
+            recipes.request(line, root, "trial", candidate=candidate, opponents=specs,
+                            iteration=number)
+
+        self.dispatcher(s, host).call(hand_over, root)
+
     def launch(self, s, j):
         root = Path(s["root"]) / "jobs" / j["id"]
         root.mkdir(parents=True, exist_ok=True)
+        if j["kind"] == "trial":
+            (root / "result.json").unlink(missing_ok=True)
+            return self.launch_trial(s, j, root)
         if (root / "result.json").exists():
             attempts = root / "attempts"
             attempts.mkdir(exist_ok=True)
@@ -355,9 +386,21 @@ class Controller:
 
     def tick(self):
         admissions = []
+        concluded = []
         for run in self.research.states(active_only=True):
             with self.research.edit(run["id"]) as (s, db):
                 self.consume(s, db)
+                for it in s["iterations"].values():
+                    if (
+                        it.get("recipe_trial")
+                        and it["status"] == "completed"
+                        and not it.get("recipe_notified")
+                    ):
+                        it["recipe_notified"] = True
+                        result = it["results"].get(it["candidates"][0]) or {}
+                        concluded.append((it["recipe_trial"], bool(it.get("improved")),
+                                          {k: result.get(k) for k in ("paired", "promotion",
+                                           "appearances", "mean_score")}))
                 for j in s["jobs"].values():
                     process = self.processes.get((s["id"], j["id"]))
                     root = Path(s["root"]) / "jobs" / j["id"]
@@ -469,6 +512,7 @@ class Controller:
                 # Local work shares this machine's limits; each remote host
                 # has its own worker count.
                 lanes = [(kind, None, limit) for kind, limit in limits.items()]
+                lanes.append(("trial", None, 10**6))
                 lanes += [
                     ("match", host, cfg["workers"])
                     for host, cfg in s["config"].get("hosts", {}).items()
@@ -514,6 +558,9 @@ class Controller:
                         Path(s["root"]) / "jobs" / jid / "result.json",
                         {"status": "failed", "error": str(exc)[:2000]},
                     )
+        for trial, promoted, evaluation in concluded:
+            if self.recipes is not None:
+                self.recipes.conclude(trial, promoted, evaluation)
         for key, p in list(self.processes.items()):
             if p.poll() is None:
                 continue

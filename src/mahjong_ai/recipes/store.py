@@ -18,17 +18,10 @@ def configuration(project):
     for key in ("seconds", "continuations", "smoke_limit"):
         if type(agent[key]) is not int or agent[key] < 0:
             raise ValueError(f"agent.{key} must be a non-negative integer")
-    for key in (
-        "budget_seconds",
-        "smoke_seconds",
-        "evaluation_games",
-        "brawl_appearances",
-        "limit",
-    ):
+    # Evaluation and brawls belong to the research framework (ADR-0013).
+    for key in ("budget_seconds", "smoke_seconds", "limit"):
         if type(trial[key]) is not int or trial[key] < 1:
             raise ValueError(f"trial.{key} must be a positive integer")
-    if trial["evaluation_games"] % 4 or trial["brawl_appearances"] % 16:
-        raise ValueError("evaluation needs whole seat rotations and brawl whole blocks")
     if trial.get("incumbent", "start") not in ("start", "baseline"):
         raise ValueError("trial.incumbent must be start or baseline")
     for line in config["lines"]:

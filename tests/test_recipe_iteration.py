@@ -51,25 +51,6 @@ def prepared(lines):
     }
 
 
-def brawl_result():
-    rows = {
-        name: {"mean": 0.0, "lower": -1.0, "upper": 1.0, "appearances": 16}
-        for name in ["model:incumbent", "rule-a", "rule-b", "rule-c", "rule-d"]
-    }
-    return {
-        "status": "completed",
-        "output": {
-            "ok": True,
-            "result": {
-                "results": rows,
-                "ranking": list(rows),
-                "games": 20,
-                "seconds": 1.0,
-            },
-        },
-    }
-
-
 def live(s, kind, line=None):
     jobs = [
         j
@@ -90,7 +71,7 @@ def step(service, kind, line, result):
         service.advance(s, db)
 
 
-def start(service):
+def start(service, tmp_path=None):
     service.create(limit=3)
     service.control("resume")
     with service.store.edit() as (s, db):
@@ -101,8 +82,20 @@ def start(service):
     for line in lines:
         if baseline:
             step(service, "baseline", line, trained())
-        step(service, "brawl", line, brawl_result())
     return lines
+
+
+def request(service, line, root, candidate="rl--01--trial-00001"):
+    service.request(line, root, "trial", candidate=candidate,
+                    opponents={"rule-x": {"family": "code"}}, iteration=1)
+    with service.store.edit() as (s, db):
+        service.advance(s, db)
+
+
+def reply(root):
+    import json
+
+    return json.loads((Path(root) / "result.json").read_text())
 
 
 def submit(service, line):
@@ -120,68 +113,74 @@ def trained(ok=True):
             "ok": ok,
             "status": status,
             "actor": "/remote/trained" if ok else None,
+            "local_actor": "/local/trained" if ok else None,
             "metrics": [{"iteration": 1, "loss": 0.5}],
         },
     }
 
 
-def evaluated(lower):
-    difference = {"mean": lower + 1, "lower": lower, "upper": lower + 2}
-    return {
-        "status": "completed",
-        "output": {
-            "ok": True,
-            "result": {
-                "games": 1024,
-                "challenger": {"mean": 1.0},
-                "incumbent": {"mean": 0.0},
-                "difference": difference,
-                "promoted": lower > 0,
-                "seconds": 1.0,
-            },
-        },
-    }
-
-
-def test_promotion_brawls_the_new_version_before_the_next_trial(service):
+def test_trials_start_on_research_request_and_hand_off_after_training(service, tmp_path):
     line = start(service)[0]
     s = service.store.read()
-    assert s["lines"][line]["curve"][0]["version"] == 0
-    assert live(s, "agent", line)["trial"] == f"{line}-001"
+    assert not s["trials"]
+    request(service, line, tmp_path)
+    s = service.store.read()
+    trial = s["trials"][f"{line}-001"]
+    assert trial["request"]["candidate"] == "rl--01--trial-00001"
     submit(service, line)
+    s = service.store.read()
+    task = (service.job_root(s, live(s, "train", line)["id"]) / "task.json").read_text()
+    assert '"rule-x"' in task and '"fetch_actor": true' in task
     step(service, "train", line, trained())
-    step(service, "evaluate", line, evaluated(0.5))
+    s = service.store.read()
+    assert s["trials"][f"{line}-001"]["status"] == "handed_off"
+    receipt = reply(tmp_path)
+    assert receipt["candidates"]["rl--01--trial-00001"] == {
+        "status": "ready", "local_actor": "/local/trained",
+        "training": s["trials"][f"{line}-001"]["training"],
+    }
+    # Nothing else runs until research concludes the evaluation.
+    assert not any(j["status"] == "queued" for j in s["jobs"].values())
+    service.conclude(f"{line}-001", True, {"paired": {"delta": 1.0}})
     s = service.store.read()
     state = s["lines"][line]
-    assert state["version"] == 1 and state["used"] == 1
-    assert state["versions"][1]["actor"] == "/remote/trained"
-    assert live(s, "brawl", line)["version"] == 1
-    assert not any(
-        j["kind"] == "agent" and j["status"] == "queued" and j["line"] == line
-        for j in s["jobs"].values()
-    )
-    step(service, "brawl", line, brawl_result())
-    s = service.store.read()
-    assert [p["version"] for p in s["lines"][line]["curve"]] == [0, 1]
-    assert s["trials"][f"{line}-002"]["incumbent_version"] == 1
+    assert state["version"] == 1 and state["versions"][1]["local_actor"] == "/local/trained"
+    assert s["trials"][f"{line}-001"]["outcome"] == "promoted"
+    request(service, line, tmp_path / "next")
+    assert service.store.read()["trials"][f"{line}-002"]["incumbent_version"] == 1
 
 
-def test_rejected_and_crashed_trials_consume_the_allowance(service):
+def test_crashed_or_unsubmitted_trials_reply_without_a_candidate(service, tmp_path):
     line = start(service)[0]
+    request(service, line, tmp_path)
     submit(service, line)
     step(service, "train", line, trained(ok=False))
     s = service.store.read()
     assert s["trials"][f"{line}-001"]["outcome"] == "crashed"
-    submit(service, line)
-    step(service, "train", line, trained())
-    step(service, "evaluate", line, evaluated(-0.5))
+    assert reply(tmp_path)["candidates"]["rl--01--trial-00001"]["status"] == "failed"
+    request(service, line, tmp_path / "second")
+    step(service, "agent", line, {"status": "completed", "usage": {"wall_seconds": 30}})
+    step(service, "agent", line, {"status": "completed", "usage": {"wall_seconds": 900}})
     s = service.store.read()
-    assert s["trials"][f"{line}-002"]["outcome"] == "rejected"
-    assert s["lines"][line]["used"] == 2 and s["lines"][line]["version"] == 0
+    assert s["trials"][f"{line}-002"]["outcome"] == "unsubmitted"
+    assert reply(tmp_path / "second")["candidates"]
 
 
-def test_infrastructure_failures_retry_then_pause(service):
+def test_baseline_request_replies_with_version_zero(tmp_path):
+    service = make_service(tmp_path, "baseline")
     line = start(service)[0]
+    service.request(line, tmp_path / "baseline", "baseline")
+    with service.store.edit() as (s, db):
+        service.advance(s, db)
+    receipt = reply(tmp_path / "baseline")
+    assert receipt["baseline"] and receipt["local_actor"] == "/local/trained"
+
+
+
+
+def test_infrastructure_failures_retry_then_pause(service, tmp_path):
+    line = start(service)[0]
+    request(service, line, tmp_path)
     submit(service, line)
     retries = service.store.read()["config"]["trial"]["retries"]
     for _ in range(retries + 1):
@@ -189,47 +188,12 @@ def test_infrastructure_failures_retry_then_pause(service):
     s = service.store.read()
     assert s["status"] == "pausing" and "ssh down" in s["pause_reason"]
     assert s["trials"][f"{line}-001"]["status"] == "training"
-    assert s["lines"][line]["used"] == 0
 
 
-def test_stop_now_discards_trials_without_counting_them(service):
-    lines = start(service)
-    service.control("stop_now")
-    s = service.store.read()
-    assert all(s["lines"][key]["used"] == 0 for key in lines)
-    assert {t["status"] for t in s["trials"].values()} == {"discarded"}
-    assert s["status"] == "pausing"
-
-
-def test_unsubmitted_session_continues_while_time_remains(service):
+def test_research_cancel_discards_the_trial(service, tmp_path):
     line = start(service)[0]
-    step(service, "agent", line, {"status": "completed", "usage": {"wall_seconds": 30}})
+    request(service, line, tmp_path)
+    service.cancel(line)
     s = service.store.read()
-    job = live(s, "agent", line)
-    assert job["continuations"] == 1
-    step(service, "agent", line, {"status": "completed", "usage": {"wall_seconds": 500}})
-    s = service.store.read()
-    assert s["trials"][f"{line}-001"]["outcome"] == "unsubmitted"
-    assert s["lines"][line]["used"] == 1
-
-
-def test_baseline_incumbent_is_trained_before_the_start_brawl(tmp_path):
-    service = make_service(tmp_path, "baseline")
-    service.create(limit=3)
-    service.control("resume")
-    with service.store.edit() as (s, db):
-        service.advance(s, db)
-        lines = list(s["lines"])
-    step(service, "prepare", None, prepared(lines))
-    s = service.store.read()
-    line = lines[0]
-    job = live(s, "baseline", line)
-    task = (service.job_root(s, job["id"]) / "task.json").read_text()
-    assert '"kind": "train"' in task
-    assert s["lines"][line]["versions"][0]["actor"] is None
-    budgets = {v["id"]: v["budget_seconds"] for v in s["lines"].values()}
-    assert f'"budget_seconds": {budgets[line]}' in task
-    step(service, "baseline", line, trained())
-    s = service.store.read()
-    assert s["lines"][line]["versions"][0]["actor"] == "/remote/trained"
-    assert live(s, "brawl", line)["version"] == 0
+    assert {t["status"] for t in s["trials"].values()} == {"discarded"}
+    assert s["lines"][line]["trial"] is None and s["lines"][line]["request"] is None

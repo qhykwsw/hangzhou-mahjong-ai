@@ -247,6 +247,25 @@ print(json.dumps(True))
         return value
 
 
+def opponent_specs(host, candidates, models_root, timeouts):
+    """Host-side specs of frozen versions for training seats, synced first."""
+    specs, paths, runtimes = {}, set(), set()
+    for cid, candidate in candidates.items():
+        spec = candidate["spec"]
+        if spec.get("family") == "model":
+            local = Path(models_root) / spec["parameters"]["weights"]
+            paths.add(local)
+            specs[cid] = {"family": "model", "path": host.remote_path(local)}
+            continue
+        spec = dict(spec, action_seconds=timeouts["discard"], response_seconds=timeouts["response"])
+        paths |= {spec["package_path"], spec["runtime_path"]}
+        runtimes.add(spec["runtime_path"])
+        specs[cid] = host._rewrite(host._interpreter(spec))
+    host.sync(paths)
+    host.build_native(sorted(runtimes))
+    return specs
+
+
 def service_code_files():
     """Repository files the host's inference service needs."""
     repo = Path(__file__).resolve().parents[3]
@@ -303,6 +322,10 @@ class Dispatcher:
 
     def cancel(self, job_id, root):
         self.requests.put(("cancel", job_id, Path(root)))
+
+    def call(self, function, root):
+        """Run slow host work (syncs, then a hand-off) off the controller loop."""
+        self.requests.put(("call", function, Path(root)))
 
     def busy(self):
         with self.lock:
@@ -365,6 +388,11 @@ class Dispatcher:
                 request = None
             if request and request[0] == "launch":
                 self._launch(*request[1:])
+            elif request and request[0] == "call":
+                try:
+                    request[1](self.host)
+                except Exception as exc:
+                    self._write(request[2], {"status": "failed", "error": f"远程准备失败：{exc}"[:4000]})
             elif request and request[0] == "cancel":
                 with self.lock:
                     entry = self.running.pop(request[1], None)

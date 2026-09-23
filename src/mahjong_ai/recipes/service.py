@@ -26,7 +26,9 @@ from mahjong_ai.recipes.store import RecipeStore, configuration
 
 ACTIVE = ("queued", "admitted", "running")
 LIVE = ACTIVE + ("paused",)
-STAGE_JOB = {"designing": "agent", "training": "train", "evaluating": "evaluate"}
+# Evaluation belongs to the research framework (ADR-0013): a trained trial is
+# handed off and waits there until research concludes it.
+STAGE_JOB = {"designing": "agent", "training": "train"}
 OUTCOMES = {
     "promoted": "晋级",
     "rejected": "未晋级",
@@ -175,7 +177,8 @@ class RecipeIteration:
                     }
                 ],
                 "curve": [],
-                "pending_brawl": 0,
+                "pending_brawl": None,
+                "request": None,
                 "conclusions": [],
                 "failures": 0,
                 "trial": None,
@@ -332,7 +335,61 @@ class RecipeIteration:
             return
         self.queue(s, kind, line, trial, version)
 
-    def start_trial(self, s, db, line):
+    # ---- research framework hand-off -------------------------------------------
+
+    def request(self, line_id, root, kind, candidate=None, opponents=None, iteration=None):
+        """Queue work asked for by a research iteration; the reply is its receipt."""
+        with self.store.edit() as (s, db):
+            line = s["lines"][line_id]
+            line["request"] = dict(
+                kind=kind, root=str(root), candidate=candidate,
+                opponents=opponents or {}, iteration=iteration, at=time.time(),
+            )
+            if s["status"] == "paused" and s["phase"] == "active":
+                s.update(status="running", pause_reason="")
+            self.store.event(db, s, "requested", {"line": line_id, "kind": kind})
+
+    @staticmethod
+    def reply(request, payload):
+        atomic_json(Path(request["root"]) / "result.json", payload)
+
+    @staticmethod
+    def baseline_reply(line):
+        v0 = line["versions"][0]
+        return {"status": "completed", "baseline": True, "local_actor": v0.get("local_actor"),
+                "recipe": v0["recipe"], "training": v0.get("training")}
+
+    def conclude(self, trial_id, promoted, evaluation=None):
+        """Research decided a handed-off trial; promotion makes it the new base."""
+        with self.store.edit() as (s, db):
+            trial = s["trials"].get(trial_id)
+            if not trial or trial["status"] != "handed_off":
+                return
+            line = s["lines"][trial["line"]]
+            trial["evaluation"] = evaluation
+            if promoted:
+                line["version"] += 1
+                line["versions"].append({
+                    "version": line["version"], "trial": trial["id"],
+                    "recipe": trial["submitted"], "actor": trial["actor"],
+                    "local_actor": trial.get("local_actor"), "at": time.time(),
+                })
+            self.complete_trial(s, db, trial, "promoted" if promoted else "rejected")
+
+    def cancel(self, line_id):
+        with self.store.edit() as (s, db):
+            s["lines"][line_id]["request"] = None
+            trial = s["trials"].get(s["lines"][line_id]["trial"])
+            if trial:
+                trial.update(status="discarded", finished_at=time.time())
+                s["lines"][line_id]["trial"] = None
+                for j in s["jobs"].values():
+                    if j.get("trial") == trial["id"] and j["status"] in LIVE:
+                        j["status"] = "cancelled"
+                        self.stop(s, j)
+                        self.kill_remote(s, j)
+
+    def start_trial(self, s, db, line, request=None):
         number = 1 + sum(t["line"] == line["id"] for t in s["trials"].values())
         tid = f"{line['id']}-{number:03d}"
         incumbent = line["versions"][-1]
@@ -350,6 +407,7 @@ class RecipeIteration:
             "reviewed": False,
             "thread_id": None,
             "created_at": time.time(),
+            "request": request,
         }
         workspace = self.trial_root(s, trial) / "workspace" / "recipe"
         copy_recipe(incumbent["recipe"], workspace)
@@ -361,6 +419,17 @@ class RecipeIteration:
 
     def complete_trial(self, s, db, trial, outcome, error=None):
         line = s["lines"][trial["line"]]
+        request = trial.get("request")
+        if request and outcome not in ("promoted", "rejected"):
+            # Nothing to evaluate: the research iteration ends without candidates.
+            self.reply(request, {
+                "status": "completed",
+                "trial": trial["id"],
+                "plan": trial.get("plan"),
+                "summary": trial.get("summary"),
+                "candidates": {request["candidate"]: {
+                    "status": "failed", "error": error or OUTCOMES.get(outcome, outcome)}},
+            })
         trial.update(
             status="completed", outcome=outcome, finished_at=time.time(), error=error
         )
@@ -386,11 +455,10 @@ class RecipeIteration:
             if line["versions"][0]["actor"] is None:
                 idle = False
                 self.ensure(s, db, "baseline", line["id"])
-            elif line["pending_brawl"] is not None:
-                idle = False
-                self.ensure(s, db, "brawl", line["id"], version=line["pending_brawl"])
             elif trial:
                 idle = False
+                if trial["status"] == "handed_off":
+                    continue
                 if trial["status"] == "submitted":
                     trial["status"] = "training"
                 if trial["status"] == "designing":
@@ -402,9 +470,15 @@ class RecipeIteration:
                     self.ensure(
                         s, db, STAGE_JOB[trial["status"]], line["id"], trial["id"]
                     )
-            elif not s["stop_after_trial"] and line["used"] < line["limit"]:
+            elif line.get("request"):
+                # Trials start only when the research framework asks for one.
                 idle = False
-                self.start_trial(s, db, line)
+                request = line["request"]
+                line["request"] = None
+                if request["kind"] == "baseline":
+                    self.reply(request, self.baseline_reply(line))
+                else:
+                    self.start_trial(s, db, line, request)
             if s["status"] != "running":
                 return
         if not idle:
@@ -516,6 +590,7 @@ class RecipeIteration:
         line["versions"][0]["training"] = self.training_summary(j, out)
         if out["ok"]:
             line["versions"][0]["actor"] = out["actor"]
+            line["versions"][0]["local_actor"] = out.get("local_actor")
             self.store.event(db, s, "baseline_trained", {"line": line["id"]})
         else:
             s.update(
@@ -533,7 +608,19 @@ class RecipeIteration:
         status = out["status"]
         trial["training"] = self.training_summary(j, out)
         if out["ok"]:
-            trial.update(actor=out["actor"], status="evaluating")
+            trial.update(actor=out["actor"], local_actor=out.get("local_actor"),
+                         status="handed_off")
+            request = trial.get("request")
+            if request:
+                self.reply(request, {
+                    "status": "completed",
+                    "trial": trial["id"],
+                    "plan": trial.get("plan"),
+                    "summary": trial.get("summary"),
+                    "candidates": {request["candidate"]: {
+                        "status": "ready", "local_actor": out.get("local_actor"),
+                        "training": trial["training"]}},
+                })
         else:
             reason = {
                 "timeout": "训练超时",
@@ -645,6 +732,7 @@ class RecipeIteration:
                 budget_seconds=budget(s, line),
                 smoke_seconds=cfg["smoke_seconds"],
                 seed=seed_for(s["id"], line["id"], "baseline"),
+                fetch_actor=True,
             )
         elif j["kind"] == "train":
             task.update(
@@ -654,21 +742,8 @@ class RecipeIteration:
                 budget_seconds=budget(s, line),
                 smoke_seconds=cfg["smoke_seconds"],
                 seed=seed_for(s["id"], line["id"], trial["number"], "train"),
-            )
-        elif j["kind"] == "evaluate":
-            task.update(
-                challenger=trial["actor"],
-                incumbent=line["versions"][trial["incumbent_version"]]["actor"],
-                games=cfg["evaluation_games"],
-                seed=seed_for(s["id"], line["id"], trial["number"], "evaluate"),
-                namespace=f"recipe-{s['id']}-{line['id']}-{trial['number']}",
-            )
-        elif j["kind"] == "brawl":
-            task.update(
-                incumbent=line["versions"][j["version"]]["actor"],
-                appearances=cfg["brawl_appearances"],
-                # One wall sequence per line keeps every curve point comparable.
-                seed=seed_for(s["id"], line["id"], "brawl"),
+                opponents=(trial.get("request") or {}).get("opponents") or {},
+                fetch_actor=True,
             )
         return task
 
@@ -687,6 +762,7 @@ class RecipeIteration:
             "execution": line["execution"],
             "limits": line.get("limits") or {},
             "recipe": trial["workspace"],
+            "opponents": (trial.get("request") or {}).get("opponents") or {},
             "start_actor": p["lines"][line["id"]]["start_actor"],
             "budget_seconds": budget(s, line),
             "smoke_seconds": s["config"]["trial"]["smoke_seconds"],
@@ -1058,8 +1134,6 @@ class RecipeIteration:
                 "created_at": s["created_at"],
                 "incumbent": s["config"]["trial"].get("incumbent", "start"),
                 "agent_seconds": s["config"]["agent"]["seconds"],
-                "evaluation_games": s["config"]["trial"]["evaluation_games"],
-                "brawl_appearances": s["config"]["trial"]["brawl_appearances"],
                 "model": s["config"]["agent"]["model"],
                 "teacher": prepared.get("teacher"),
                 "rules": prepared.get("rules"),

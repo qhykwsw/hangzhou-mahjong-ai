@@ -316,6 +316,13 @@ class Research:
         The artifact is copied under research/models/<weights SHA-256>, the
         name every host's inference service uses to find it.
         """
+        with self.edit() as (s, db):
+            self.model_candidate(s, db, cid, source, branch=branch,
+                                 combination=combination, note=note)
+        return cid
+
+    def model_candidate(self, s, db, cid, source, *, branch=None, combination="model",
+                        note="", status=None):
         if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", cid):
             raise ValueError("模型版本 ID 不合法")
         source = Path(source)
@@ -333,26 +340,25 @@ class Research:
                 shutil.copy2(source / name, temporary / name)
             temporary.rename(target)
         spec = dict(family="model", version=cid, parameters={"weights": weights})
-        with self.edit() as (s, db):
-            existing = s["candidates"].get(cid)
-            if existing and existing.get("spec") != spec:
-                raise ValueError("同名版本已存在且内容不同")
-            s["candidates"][cid] = dict(
-                id=cid,
-                branch=branch,
-                combination=combination,
-                status="resident" if branch is None else "ready",
-                workspace=str(target),
-                spec=spec,
-                parent=None,
-                hypothesis=note or "exported Actor",
-                requirements=[],
-                runtime_path=s["runtime_path"],
-                model=dict(config=meta.get("config"), weights=weights,
-                           source=str(source)),
-            )
-            self.event(db, s, "model_registered", {"candidate": cid, "weights": weights})
-        return cid
+        existing = s["candidates"].get(cid)
+        if existing and existing.get("spec") != spec:
+            raise ValueError("同名版本已存在且内容不同")
+        s["candidates"][cid] = dict(
+            (existing or {}),
+            id=cid,
+            branch=branch,
+            combination=combination,
+            status=status or ("resident" if branch is None else "ready"),
+            workspace=str(target),
+            spec=spec,
+            parent=(existing or {}).get("parent"),
+            hypothesis=note or (existing or {}).get("hypothesis") or "exported Actor",
+            requirements=[],
+            runtime_path=s["runtime_path"],
+            model=dict(config=meta.get("config"), weights=weights, source=str(source)),
+        )
+        self.event(db, s, "model_registered", {"candidate": cid, "weights": weights})
+        return s["candidates"][cid]
 
     def add_combination(self, s, combination, models):
         key = combination["id"]
@@ -486,6 +492,12 @@ class Research:
                     continue
                 b["status"] = "initializing"
                 key = b["combination"]
+                if s["definitions"][key]["family"] == "recipe":
+                    # Version 0 is the baseline recipe trained once by the
+                    # recipe service; it does not hold up the other branches.
+                    self.queue(s, "trial", branch=bid, baseline=True,
+                               line=s["definitions"][key]["parameters"]["line"])
+                    continue
                 if key in s["baselines"]:
                     continue
                 combination = s["definitions"][key]
@@ -1410,6 +1422,9 @@ class Research:
         cfg = deepcopy(s["config"])
         combination = s["definitions"][b["combination"]]
         cfg["training_games"] = combination.get("training_games", cfg["training_games"])
+        for key in ("evaluation_games", "evaluation_host"):
+            if key in combination:
+                cfg[key] = combination[key]
         number = b["completed"] + 1
         iid = f"{branch}--iteration-{number:05d}"
         s["iterations"][iid] = dict(
@@ -1438,6 +1453,13 @@ class Research:
             # state forward, so a branch's context stops growing with its history.
             thread_id=None,
         )
+        if combination["family"] == "recipe":
+            # The recipe service designs and trains; research evaluates.
+            cid = f"{branch}--trial-{number:05d}"
+            s["iterations"][iid].update(status="submitted", candidates=[cid])
+            b["status"] = "preparing"
+            return self.queue(s, "trial", branch=branch, iteration=iid, candidate=cid,
+                              line=combination["parameters"]["line"])
         return self.queue(s, "agent", branch=branch, iteration=iid)
 
     def advance(self, s, db):
@@ -1448,6 +1470,8 @@ class Research:
         if s["phase"] == "initializing":
             if any(
                 not s["branches"][bid]["representative"]
+                and s["definitions"][s["branches"][bid]["combination"]]["family"]
+                != "recipe"
                 for bid in experiment["targets"]
             ):
                 return
@@ -1461,10 +1485,11 @@ class Research:
                 it
                 and it["status"] == "submitted"
                 and not any(
-                    j["kind"] == "agent"
-                    and j.get("iteration") == it["id"]
-                    and j["status"] in ("running", "queued", "admitted")
+                    (j["kind"] == "agent"
+                     and j["status"] in ("running", "queued", "admitted"))
+                    or j["kind"] == "trial"
                     for j in s["jobs"].values()
+                    if j.get("iteration") == it["id"]
                 )
             ):
                 it["status"] = "preparing"
@@ -1516,6 +1541,56 @@ class Research:
             cycle,
         )
         self.event(db, s, "round_completed", {"round": cycle["number"], "ranking": table})
+
+    def accept_trial(self, s, db, job, result):
+        """A recipe trial came back: its trained model enters paired evaluation."""
+        b = s["branches"][job["branch"]]
+        if job.get("baseline"):
+            if result.get("baseline") and result.get("local_actor"):
+                cid = f"{b['id']}--initial"
+                self.model_candidate(
+                    s, db, cid, result["local_actor"], branch=b["id"],
+                    combination=b["combination"], note="基线方案训练的第 0 版",
+                    status="representative",
+                )
+                b.update(status="ready", representative=cid)
+            else:
+                s.update(status="pausing",
+                         pause_reason="方案分支第 0 版训练失败：" + str(result.get("error")))
+            return
+        it = s["iterations"][job["iteration"]]
+        it["recipe_trial"] = result.get("trial")
+        if result.get("plan"):
+            it["plan"] = dict(result["plan"], declared_at=time.time(), updated_at=time.time())
+        ready = []
+        for cid, row in (result.get("candidates") or {}).items():
+            if row.get("status") == "ready" and row.get("local_actor"):
+                candidate = self.model_candidate(
+                    s, db, cid, row["local_actor"], branch=b["id"],
+                    combination=b["combination"], note=result.get("summary") or "",
+                )
+                candidate.update(parent=it["incumbent"], iteration=it["id"],
+                                 experiment=s["id"], training=row.get("training"))
+                ready.append(cid)
+            else:
+                s["candidates"][cid] = dict(
+                    id=cid, branch=b["id"], combination=b["combination"],
+                    status="failed", error=row.get("error"), parent=it["incumbent"],
+                    iteration=it["id"], experiment=s["id"], requirements=[],
+                    hypothesis=result.get("summary") or "", workspace="",
+                    runtime_path=s["runtime_path"],
+                )
+        if not ready:
+            errors = [r.get("error") for r in (result.get("candidates") or {}).values()]
+            self.complete_iteration(
+                s, db, it, "; ".join(e for e in errors if e) or result.get("error")
+                or "方案尝试没有产出模型",
+            )
+            return
+        it["status"] = "evaluating"
+        b["status"] = "evaluating"
+        it["evaluated"] = [it["incumbent"], *ready]
+        self.queue_stage(s, it, 0)
 
     def queue_stage(self, s, it, stage):
         """Queue one stage of the paired evaluation; stages add new blocks only.
@@ -1751,6 +1826,8 @@ class Research:
                 s["branches"][it["branch"]]["status"] = "evaluating"
                 it["evaluated"] = [it["incumbent"], *ready]
                 self.queue_stage(s, it, 0)
+        elif job["kind"] == "trial":
+            self.accept_trial(s, db, job, result)
         elif job["kind"] == "match":
             if result["status"] != "completed":
                 job["status"] = "paused"

@@ -39,6 +39,7 @@ class Game:
         train=False,
         bc=False,
         group=None,
+        external=None,
     ):
         from mahjong_ai.domain.types import RoundConfig
         from .artifacts import build_policy
@@ -48,10 +49,16 @@ class Game:
         self.config = RoundConfig(rounds=cfg["rounds"], allow_tiebreak=False)
         self.specs = seat_specs
         self.policies = {}
+        # Frozen versions outside the bundle (e.g. evaluation opponents from
+        # another runtime) come from the worker's pool of isolated processes.
+        self.borrowed = []
         for seat, spec in enumerate(seat_specs):
             if not spec.startswith("model:"):
-                source = entries[spec]
-                policy = build_policy(source, spec)
+                if external is not None and spec in external.specs:
+                    policy = external.acquire(spec)
+                    self.borrowed.append((spec, policy))
+                else:
+                    policy = build_policy(entries[spec], spec)
                 policy.reset(seed_for(seed, "policy", seat))
                 self.policies[seat] = policy
         self.teacher = build_policy(bundle, teacher) if teacher else None
@@ -186,6 +193,39 @@ class Game:
         self.state.step(action)
 
 
+class External:
+    """Per-worker pool of sandboxed policies for versions outside the bundle.
+
+    Each is a frozen package run in its own runtime (mahjong_ai's
+    RemotePolicy); a process is reused by later games in the same worker.
+    """
+
+    def __init__(self, specs):
+        self.specs, self.free = specs, {k: [] for k in specs}
+
+    def acquire(self, spec):
+        from mahjong_ai.strategies.common import PolicySpec
+
+        if self.free[spec]:
+            return self.free[spec].pop()
+        policy = PolicySpec(**self.specs[spec]).build()
+        if hasattr(policy, "start"):
+            policy.start()
+        return policy
+
+    def release(self, borrowed):
+        for spec, policy in borrowed:
+            self.free[spec].append(policy)
+
+    def close(self):
+        for policies in self.free.values():
+            for policy in policies:
+                try:
+                    policy.close()
+                except Exception:
+                    pass
+
+
 def worker(conn, cfg, bundle_path, panel_path, worker_index, command):
     """One bounded collection/evaluation job; no policy crosses job boundaries."""
     try:
@@ -197,6 +237,10 @@ def worker(conn, cfg, bundle_path, panel_path, worker_index, command):
         entries = {e["id"]: panel for e in panel["entries"]}
         entries.update({e["id"]: bundle for e in bundle["entries"]})
         rules = [e["id"] for e in bundle["entries"]]
+        external = External(command.get("specs") or {})
+        # Opponent seats draw from the command's pool when given (frozen
+        # evaluation opponents), otherwise from the bundle's rules.
+        pool = list(command.get("pool") or rules)
         rng = random.Random(
             seed_for(cfg["seed"], "worker", command["iteration"], worker_index)
         )
@@ -232,7 +276,7 @@ def worker(conn, cfg, bundle_path, panel_path, worker_index, command):
                 seats = [
                     rng.choice(slots)
                     if slots and rng.random() < cfg["history_probability"]
-                    else rng.choice(rules)
+                    else rng.choice(pool)
                     for _ in range(4)
                 ]
                 seats[focal] = "model:current"
@@ -252,6 +296,7 @@ def worker(conn, cfg, bundle_path, panel_path, worker_index, command):
                     teacher=bundle["teacher"] if command["labels"] else None,
                     train=True,
                     bc=cfg["bc_only"],
+                    external=external,
                 )
             games[next_id] = game
             next_id += 1
@@ -264,6 +309,7 @@ def worker(conn, cfg, bundle_path, panel_path, worker_index, command):
             for ident, game in list(games.items()):
                 request = game.advance()
                 if request is None:
+                    external.release(game.borrowed)
                     completed_games += 1
                     completed_samples += len(game.rows)
                     finished.append(
@@ -303,4 +349,6 @@ def worker(conn, cfg, bundle_path, panel_path, worker_index, command):
     except BaseException:
         conn.send(("error", traceback.format_exc()))
     finally:
+        if "external" in locals():
+            external.close()
         conn.close()

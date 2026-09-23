@@ -44,7 +44,7 @@ def application(project, tailscale_url=None):
 
     @asynccontextmanager
     async def lifespan(app):
-        controller = Controller(arena)
+        controller = Controller(arena, recipes)
         if recipes is not None:
             await asyncio.to_thread(recipes.recover)
         stopped = asyncio.Event()

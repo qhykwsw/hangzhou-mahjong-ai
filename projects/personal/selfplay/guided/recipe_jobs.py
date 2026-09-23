@@ -280,6 +280,8 @@ def trial_train(task, progress, smoke=False):
         "line": task["line"],
         "limits": task.get("limits") or {},
         "snapshot_seconds": task.get("snapshot_seconds") or [],
+        # Frozen evaluation opponents of the trial, with host-side paths.
+        "opponents": task.get("opponents") or {},
     }
     budget = plan["smoke_seconds"] if smoke else plan["budget_seconds"]
     status = _run_remote(
@@ -294,15 +296,36 @@ def trial_train(task, progress, smoke=False):
             for line in metrics.read_text().splitlines()
             if line.strip()
         ]
+    ok = status.get("state") == "complete"
+    local_actor = None
+    if ok and task.get("fetch_actor") and not smoke:
+        local_actor = fetch_directory(
+            task["host"], task["remote_dir"] + "/actor", Path(task["job_dir"]) / "actor"
+        )
     return {
         "status": status,
-        "ok": status.get("state") == "complete",
-        "actor": task["remote_dir"] + "/actor"
-        if status.get("state") == "complete"
-        else None,
+        "ok": ok,
+        "actor": task["remote_dir"] + "/actor" if ok else None,
+        "local_actor": str(local_actor) if local_actor else None,
         "metrics": rows[-400:],
         "snapshots": json.loads(snapshots.read_text()) if snapshots else [],
     }
+
+
+def fetch_directory(host, source, destination):
+    """Copy a small artifact directory back as a tar stream (relay friendly)."""
+    destination = Path(destination)
+    destination.mkdir(parents=True, exist_ok=True)
+    args = [
+        "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", remote.HOSTS[host],
+        f"wsl.exe -d Ubuntu-20.04 -u user -- tar -czf - -C {source} .",
+    ]
+    data = subprocess.run(args, capture_output=True, timeout=1800, check=True).stdout
+    subprocess.run(["tar", "-xzf", "-", "-C", str(destination)], input=data, check=True)
+    meta = json.loads((destination / "meta.json").read_text())
+    if hashlib.sha256((destination / "actor.pt").read_bytes()).hexdigest() != meta["weights_sha256"]:
+        raise ValueError("fetched Actor does not match its checksum")
+    return destination
 
 
 def trial_evaluate(task, progress):

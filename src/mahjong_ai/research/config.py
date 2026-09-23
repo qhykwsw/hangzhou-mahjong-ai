@@ -18,6 +18,9 @@ COMBINATIONS = {
     "heuristic-efficiency": ("heuristic", "牌效优先", {"style": "efficiency"}),
     "heuristic-fan": ("heuristic", "番型经营", {"style": "fan"}),
     "heuristic-adaptive": ("heuristic", "局势自适应", {"style": "adaptive"}),
+    # A recipe branch: candidates are training recipes run by the recipe
+    # iteration service on one of its lines (ADR-0013).
+    "rl-recipe": ("recipe", "强化学习训练方案", {"line": "rl"}),
 }
 # Framework fallback roster; projects select their own combinations explicitly.
 DEFAULT_COMBINATIONS = (
@@ -157,7 +160,7 @@ def validate(config):
         ):
             raise ValueError(key + " must list registered version IDs")
     if not isinstance(config["training_caps"], dict) or any(
-        k not in ("heuristic", "value", "ppo", "search")
+        k not in ("heuristic", "value", "ppo", "search", "recipe")
         or type(v) is not int
         or not 0 <= v <= 1000000
         for k, v in config["training_caps"].items()
@@ -177,7 +180,7 @@ def validate(config):
         default = COMBINATIONS.get(c["id"])
         c.setdefault("family", default[0] if default else None)
         c.setdefault("name", default[1] if default else c["id"])
-        if c["family"] not in ("heuristic", "value", "ppo", "search"):
+        if c["family"] not in ("heuristic", "value", "ppo", "search", "recipe"):
             raise ValueError("combination requires a supported algorithm family")
         params = c.setdefault("parameters", deepcopy(default[2]) if default else {})
         required = {
@@ -196,10 +199,21 @@ def validate(config):
             "value": ("algorithm", ("lightgbm", "mlp")),
             "ppo": ("algorithm", ("ppo",)),
             "search": ("algorithm", ("rollout", "mcts")),
+            "recipe": ("line", None),
         }
         key, allowed = required[c["family"]]
-        if params.get(key) not in allowed:
+        if (params.get(key) not in allowed) if allowed else not isinstance(
+            params.get(key), str
+        ):
             raise ValueError("combination algorithm/style does not match its family")
+        # Per-combination evaluation: recipe branches play more games per
+        # stage and on the host that trains them.
+        if "evaluation_games" in c and (
+            type(c["evaluation_games"]) is not int or c["evaluation_games"] % 4
+        ):
+            raise ValueError("combination evaluation_games must be a multiple of four")
+        if "evaluation_host" in c and c["evaluation_host"] not in config["hosts"]:
+            raise ValueError("combination evaluation_host must be a configured host")
         if type(c["branches"]) is not int or c["branches"] < 1:
             raise ValueError("positive branch count required")
         if len(c["models"]) != c["branches"]:

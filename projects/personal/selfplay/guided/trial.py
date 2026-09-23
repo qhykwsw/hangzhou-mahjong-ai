@@ -122,6 +122,16 @@ class Context:
         self.bundle = bundle["manifest_path"]
         self.teacher = bundle["teacher"]
         self.rules = [entry["id"] for entry in bundle["entries"]]
+        # Frozen evaluation opponents of this trial: rule versions run in
+        # their own runtimes, model versions are loaded here on the GPU.
+        specs = plan.get("opponents") or {}
+        self.opponents = list(specs)
+        self._rule_specs = {k: v for k, v in specs.items() if v.get("family") != "model"}
+        self._opponent_models = {
+            k: load_actor(v["path"], "cuda")[0].eval()
+            for k, v in specs.items()
+            if v.get("family") == "model"
+        }
         self.actor, meta = load_actor(plan["start_actor"], "cuda")
         self.actor_config = meta["config"]
         self.resources = (
@@ -155,7 +165,10 @@ class Context:
         """Play training games with ``actor`` in the learning seat.
 
         cfg holds recipe choices (workers, tables, history_probability,
-        critic_features, finish_game ...). Returns (rows, records, resources);
+        critic_features, finish_game, opponents ...). Opponent seats draw
+        uniformly from ``cfg["opponents"]`` (IDs from ctx.opponents or
+        ctx.rules), by default all of ctx.opponents, or the bundle's rules when
+        the trial has no frozen opponents. Returns (rows, records, resources);
         rows carry the fixed Actor inputs, action/logprob/value, per-hand reward on
         the last decision of each hand, ``hand``, teacher labels when requested,
         and whatever critic_features added.
@@ -163,6 +176,12 @@ class Context:
         from .collection import collect
         from .config import configuration
 
+        chosen = cfg.get("opponents")
+        chosen = list(self.opponents if chosen is None else chosen)
+        unknown = set(chosen) - set(self.opponents) - set(self.rules)
+        if unknown:
+            raise ValueError(f"unknown opponents: {sorted(unknown)}")
+        cfg = {k: v for k, v in cfg.items() if k != "opponents"}
         known = {k: v for k, v in cfg.items() if k in configuration()}
         extra = {k: v for k, v in cfg.items() if k not in known}
         run_cfg = configuration(**known) | extra
@@ -176,12 +195,21 @@ class Context:
             "bc_only": False,
             "deadline": self.deadline,
         }
+        pool = [
+            "model:opponent:" + k if k in self._opponent_models else k for k in chosen
+        ]
         command = {
             "kind": "collect",
             "iteration": int(iteration),
             "deadline": self.deadline,
             "labels": bool(labels),
+            # history_probability only draws the recipe's own snapshots.
             "history": list(history or {}),
+            "pool": pool,
+            "specs": {k: v for k, v in self._rule_specs.items() if k in chosen},
+        }
+        models = dict(history or {}) | {
+            "model:opponent:" + k: m for k, m in self._opponent_models.items()
         }
         return collect(
             actor,
@@ -190,7 +218,7 @@ class Context:
             self.bundle,
             self.bundle,
             command,
-            history or {},
+            models,
             hooks,
         )
 
