@@ -448,6 +448,13 @@ def main():
         raise ValueError("任务必须使用自己的冻结运行时")
     cancel = root / "cancel.flag"
     os.environ["MAHJONG_JOB_CANCEL"] = str(cancel)
+    if task["kind"] == "match":
+        # Evaluation games want throughput; latency-sensitive work on the same
+        # machine (platform play) goes first when the CPU is contended.
+        try:
+            os.nice(5)
+        except OSError:
+            pass
 
     def stop(signum, frame):
         cancel.touch()

@@ -23,6 +23,12 @@ import time
 from . import bootstrap  # noqa: F401
 
 MAX_BODY = 4 * 1024 * 1024
+# Inputs are padded to a few shapes: a new shape compiles a graph on Apple GPUs
+# (hundreds of ms), which must happen at load time, not inside an action window.
+# Padded rows and history positions are ignored, as within any mixed batch.
+EVENT_BUCKET = 32
+BATCH_BUCKETS = (1, 2, 4, 8, 16, 32, 64)
+WARM_EVENTS = (32, 64, 128, 192, 256, 320, 384, 448, 512)
 
 
 def pick_device(name="auto"):
@@ -100,6 +106,7 @@ class Service:
                 try:
                     actor, meta = self.models.get(model)
                     if pre_encoded == "warm":
+                        self.warm(actor)
                         parsed = None
                         encoded = [blank()]
                     elif pre_encoded:
@@ -114,7 +121,7 @@ class Service:
                     with torch.inference_mode(), torch.autocast("mps", torch.float16, enabled=autocast):
                         planes, scalars, events, mask = inputs(encoded, actor_device(actor))
                         logits = actor(planes, scalars, events)
-                        choice = masked_log_probs(logits.float(), mask).argmax(-1).tolist()
+                        choice = masked_log_probs(logits.float(), mask).argmax(-1).tolist()[: len(encoded)]
                     self.stats["prepare_seconds"] += prepared - started
                     self.stats["forward_seconds"] += time.perf_counter() - prepared
                     for i, ((payload, future, _), index) in enumerate(zip(rows, choice)):
@@ -136,6 +143,18 @@ class Service:
                 self.stats["requests"] += len(rows)
                 self.stats["batches"] += 1
                 self.stats["seconds"] += time.perf_counter() - started
+
+    def warm(self, actor):
+        """Run every padded input shape once so later batches reuse compiled graphs."""
+        import torch
+
+        autocast = self.models.device == "mps"
+        for size in BATCH_BUCKETS[:5]:
+            for length in WARM_EVENTS:
+                row = blank()
+                row["events"] = row["events"].repeat(length, axis=0)
+                with torch.inference_mode(), torch.autocast("mps", torch.float16, enabled=autocast):
+                    actor(*inputs([row] * size, actor_device(actor))[:3])
 
     def close(self):
         self.closed.set()
@@ -184,11 +203,15 @@ def inputs(rows, device):
     import numpy as np
     import torch
 
+    size = next((b for b in BATCH_BUCKETS if b >= len(rows)), len(rows))
+    rows = list(rows) + [rows[0]] * (size - len(rows))  # extra rows are discarded by the caller
     planes = np.stack([np.asarray(r["planes"], dtype=np.float16) for r in rows])
     scalars = np.stack([np.asarray(r["scalars"], dtype=np.float16) for r in rows])
     mask = np.stack([np.asarray(r["mask"], dtype=bool) for r in rows])
     history = [np.asarray(r["events"], dtype=np.int64).reshape(-1, 5) for r in rows]
-    events = np.zeros((len(rows), max(1, max(len(h) for h in history)), 5), dtype=np.int64)
+    width = max(1, max(len(h) for h in history))
+    width = -(-width // EVENT_BUCKET) * EVENT_BUCKET
+    events = np.zeros((len(rows), width, 5), dtype=np.int64)
     for i, h in enumerate(history):
         events[i, : len(h)] = h
     return tuple(torch.from_numpy(a).to(device) for a in (planes, scalars, events, mask))

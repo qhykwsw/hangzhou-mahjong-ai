@@ -11,6 +11,7 @@ import http.client
 import json
 import os
 import sys
+import threading
 import time
 from urllib.parse import urlparse
 
@@ -22,9 +23,15 @@ SERVER_ENV = "MAHJONG_MODEL_SERVER"
 # and inference (it was about half of the service's time).
 ENCODER_ENV = "MAHJONG_SELFPLAY"
 _ENCODER = []
+_ENCODER_LOCK = threading.Lock()
 
 
 def encoder():
+    with _ENCODER_LOCK:  # many tables start at once; import once, not in a race
+        return _encoder()
+
+
+def _encoder():
     if not _ENCODER:
         path = os.environ.get(ENCODER_ENV)
         found = None
@@ -53,6 +60,7 @@ class ModelPolicy:
         self.last_error = None
         self.latencies = []
         self.connection = None
+        encoder()  # import the encoder while building, not inside a first action window
 
     def _connect(self):
         url = os.environ.get(SERVER_ENV)
