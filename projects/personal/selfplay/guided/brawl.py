@@ -189,8 +189,15 @@ def run(root, smoke=False):
     state = {"stage": "loading", "source_id": code_id, "started": time.time()}
     atomic_json(output / "status.json", state)
     try:
-        bundle = read_bundle(plan["bundle"])
+        # An optional second bundle (e.g. an older roster) seats alongside the
+        # first; workers accept both only when their frozen runtimes match.
+        panel_path = plan.get("panel", plan["bundle"])
+        bundle, panel = read_bundle(plan["bundle"]), read_bundle(panel_path)
+        if panel["runtime_hash"] != bundle["runtime_hash"]:
+            raise ValueError("both rule rosters must share one frozen runtime")
         rules = [entry["id"] for entry in bundle["entries"]]
+        if panel_path != plan["bundle"]:
+            rules += [entry["id"] for entry in panel["entries"]]
         if rules != plan["rules"]:
             raise ValueError("frozen rule roster changed")
         torch.set_num_threads(2)
@@ -236,7 +243,7 @@ def run(root, smoke=False):
                 critic,
                 cfg,
                 plan["bundle"],
-                plan["bundle"],
+                panel_path,
                 {
                     "kind": "evaluate",
                     "iteration": first,
