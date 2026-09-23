@@ -1023,7 +1023,8 @@ class RecipeIteration:
             return
         with self.store.edit(experiment) as (s, db):
             if s["status"] == "running":
-                s.update(status="pausing", pause_reason="服务停止")
+                # Same as a restart: research wakes the recipe service again.
+                s.update(status="pausing", pause_reason=RESTARTED)
         end = time.monotonic() + 7
         while self.processes and time.monotonic() < end:
             self.tick()
