@@ -328,6 +328,13 @@ class CandidateProcess:
             pass
 
 
+def _flat(record):
+    # Action, Meld, PublicEvent and StageContext hold only scalars and tuples
+    # of ints, so a copy of the instance dict equals dataclasses.asdict at a
+    # fraction of its recursive cost (this runs for every decision).
+    return dict(record.__dict__)
+
+
 def observation_payload(observation, previous_events=None):
     """Serialize an observation and append only newly published public events."""
     events = observation.public_events
@@ -337,11 +344,11 @@ def observation_payload(observation, previous_events=None):
             continue
         value = getattr(observation, field.name)
         if field.name == "legal_actions":
-            data[field.name] = [asdict(action) for action in value]
+            data[field.name] = [_flat(action) for action in value]
         elif field.name == "melds":
-            data[field.name] = [[asdict(meld) for meld in row] for row in value]
+            data[field.name] = [[_flat(meld) for meld in row] for row in value]
         elif field.name == "stage":
-            data[field.name] = asdict(value)
+            data[field.name] = _flat(value)
         else:
             data[field.name] = value
     if (
@@ -350,9 +357,9 @@ def observation_payload(observation, previous_events=None):
         and events[: len(previous_events)] == previous_events
     ):
         data["events_from"] = len(previous_events)
-        data["events"] = [asdict(event) for event in events[len(previous_events) :]]
+        data["events"] = [_flat(event) for event in events[len(previous_events) :]]
     else:
-        data["public_events"] = [asdict(event) for event in events]
+        data["public_events"] = [_flat(event) for event in events]
     return data, events
 
 
