@@ -11,7 +11,7 @@
 - 引擎、规则、观察或假想模拟：先读[平台规则](docs/reference/platform.md)和[开发索引](docs/reference/development.md)，核对官方样本与回归。
 - 研究、训练、执行、候选或网页：先读[研究手册](docs/reference/strategy-agent.md)。候选接口修改同步 `research/contract.py` 的 CONTRACT 与 `interfaces/mcp.py` schema。
 - 平台适配、导出或比赛：先读[平台接入](docs/reference/platform.md)，外部对战与研究训练隔离。
-- 自我对弈训练器、编码或联赛池：先读 [projects/personal/selfplay/README.md](projects/personal/selfplay/README.md) 与 [ADR-0009](docs/adr/0009-independent-selfplay-trainer-for-personal-project.md)；规则教师指导路线 `guided/` 另读[训练手册](projects/personal/selfplay/guided/README.md)与 [ADR-0011](docs/adr/0011-rule-guided-policy-learning.md)；训练方案迭代（`recipes/`、`src/mahjong_ai/recipes/`）另读 [ADR-0012](docs/adr/0012-recipe-iteration-for-rl-training.md) 与[方案接口](projects/personal/selfplay/recipes/API.md)。`src/` 与发布包共享，不得引入 torch。
+- 自我对弈训练器、编码或联赛池：先读 [projects/personal/selfplay/README.md](projects/personal/selfplay/README.md) 与 [ADR-0009](docs/adr/0009-independent-selfplay-trainer-for-personal-project.md)；规则教师指导路线 `guided/` 另读[训练手册](projects/personal/selfplay/guided/README.md)与 [ADR-0011](docs/adr/0011-rule-guided-policy-learning.md)；训练方案迭代（`recipes/`、`src/mahjong_ai/recipes/`）另读 [ADR-0013](docs/adr/0013-unified-research-branches-and-common-brawl.md)、[ADR-0012](docs/adr/0012-recipe-iteration-for-rl-training.md) 与[方案接口](projects/personal/selfplay/recipes/API.md)。`src/` 与发布包共享，不得引入 torch。
 
 ## 开发约束
 

@@ -1,15 +1,15 @@
 # 训练方案接口
 
-训练方案迭代（见 [ADR-0012](../../../../docs/adr/0012-recipe-iteration-for-rl-training.md)）改进的对象是一个名为 `recipe` 的 Python 包。框架 `guided/trial.py` 在远端导入它，调用 `recipe.train(ctx)`，在时限内拿回训练后的 Actor，再做配对评估。[`baseline/recipe`](baseline/recipe) 是初始方案：多步小步策略梯度，每步用约 60 万个同策略决策算一次全量梯度，按 KL 0.03 定步长。设计理由写在 `loop.py` 和 `targets.py` 的文档字符串里，测量依据见 ADR-0012 的“基线方案与训练时长”。
+训练方案迭代改进的对象是一个名为 `recipe` 的 Python 包，它是自动研究里 RL 方案分支的候选（[ADR-0013](../../../../docs/adr/0013-unified-research-branches-and-common-brawl.md)，早期设计见 [ADR-0012](../../../../docs/adr/0012-recipe-iteration-for-rl-training.md)）。框架 `guided/trial.py` 在远端导入它，调用 `recipe.train(ctx)`，在时限内拿回训练后的 Actor，交给研究框架评估。[`baseline/recipe`](baseline/recipe) 是初始方案：多步小步策略梯度，每步用约 60 万个同策略决策算一次全量梯度，按 KL 0.03 定步长。设计理由写在 `loop.py` 和 `targets.py` 的文档字符串里，测量依据见 ADR-0012 的“基线方案与训练时长”。
 
 ## 固定不变
 
 - Actor 的网络结构和观察编码。`ctx.actor` 从本方案线的固定起点加载；返回的权重必须能严格载入同一结构，否则本次尝试记为崩溃。
 - 游戏环境、规则和奖励：每局结束时，学习座位得到该局桌面分（除以底分）。
-- 对手和教师：冻结的四个规则代表，教师是其中的规则冠军。
+- 教师：冻结规则包里的规则冠军。训练对手由方案通过 `cfg["opponents"]` 选择，默认是本次迭代冻结的评估对手（最近一次共同大乱斗前三名，可能包含 RL 模型）；没有评估对手时用规则包里的规则代表。
 - 时间预算：从 `train` 被调用开始计时，到 `ctx.deadline` 截止；超过宽限期，进程被强制结束。
 - 资源上限：显存按方案线配置的比例封顶，超出时在进程内抛出 CUDA out of memory，不会溢出到共享内存；训练进程组（含对局进程）的常驻内存超过上限时整组被强制结束。两种情况都记为训练失败并消耗额度，上限见 `ctx.resources`，训练回执里有实际峰值。
-- 评估和晋级：训练后的 Actor 和现役 Actor 在同样的牌墙、座位和对手上各打同样场数（默认 4096 场，实验创建时冻结），配对差的 95% 区间下界大于 0 才晋级。
+- 评估和晋级：由研究框架做分段配对评估。训练后的 Actor 和现役 Actor 面对同一组评估对手，在同样的牌墙和座位上对局，每边 4096 → 8192 → 16384 场，累计计数；前两段 99% 区间下界 > 0 提前晋级、上界 < 0 提前淘汰，最后一段 95% 区间下界 > 0 才晋级。晋级的模型参加下一次共同大乱斗。
 
 ## `train(ctx)`
 
@@ -23,7 +23,8 @@
 | `device`、`seed`、`deadline`、`time_left()` | 设备、随机种子、截止时刻、剩余秒数 |
 | `smoke` | 自检运行时为真，此时时限只有约 90 秒 |
 | `resources` | `cpu_capacity`、`cpu_count`、`gpu_total_bytes`、`gpu_limit_bytes`、`ram_limit_bytes`、建议的 `workers` 与 `tables` |
-| `teacher`、`rules`、`bundle` | 教师 ID、四个规则对手 ID、冻结包路径 |
+| `teacher`、`rules`、`bundle` | 教师 ID、规则包里的规则代表 ID、冻结包路径 |
+| `opponents` | 本次迭代冻结的评估对手 ID（规则版本按各自运行时运行，`model:` 开头的是模型） |
 | `new_actor()` | 同结构的新 Actor，例如用作自身历史快照对手 |
 | `collect(actor, cfg, samples=, iteration=, labels=False, history=None, hooks=None)` | 采集训练对局，见下文 |
 | `log(**metrics)` | 写一行训练诊断，评估报告和下一轮交接都会引用 |
@@ -42,7 +43,8 @@
 | 键 | 作用 |
 | --- | --- |
 | `workers`、`tables` | 对局进程数（不超过 CPU 核数）和每个进程同时打的桌数。达到 `samples` 后不再开新局，但在途的整场要打完，实际样本约多出 `workers × tables` 场 |
-| `history_probability` | 对手座位从 `history`（`{"model:名字": Actor}`）抽取的概率，其余抽规则代表 |
+| `opponents` | 对手座位均匀抽取的 ID 列表，取自 `ctx.opponents` 或 `ctx.rules`；缺省为全部 `ctx.opponents` |
+| `history_probability` | 对手座位从 `history`（`{"model:名字": Actor}`）抽取的概率，其余按 `opponents` 抽取 |
 | `critic_features` | `"模块:函数"`，在对局进程里对每个学习决策调用 `f(state, seat)`，返回的数组并入该行；`state` 是完整的 HandState，可读对手手牌和按摸牌顺序排列的牌墙 |
 | `finish_game` | `"模块:函数"`，每整场结束时在对局进程里调用 `f(rows, cfg)`，必须给每行写入 `adv` 和 `ret` |
 
@@ -59,3 +61,4 @@
 - 钩子模块在对局进程里加载时，引擎运行时已经绑定，模块顶层可以导入 `mahjong_ai`。
 - 方案可以导入 `guided` 里的构件（例如 `guided.networks.HistoryEncoder`、`PopArt`），但不能修改框架文件。
 - 只能使用训练环境已有的依赖：PyTorch、NumPy 和仓库代码。
+- 训练主机不可达时，远端训练照常进行，框架无限期等待。主机重启导致训练丢失时，记为主机故障：不消耗尝试次数，主机恢复后同一次训练从头重跑。

@@ -3,7 +3,7 @@
 人工维护的策略项目，有两条互不共享检查点的训练路线，都用 PyTorch 训练：
 
 - **规则教师指导**（[`guided/`](guided/)，新实验使用）：以规则研究的冻结冠军为教师，先纯模仿，再用真实桌面分做 PPO 并保留按师生差距调整的教师辅助损失；Actor 由独立 GPU 服务推理，正式内网比赛部署在 4070。用法见[训练手册](guided/README.md)，决定见 [ADR-0011](../../../docs/adr/0011-rule-guided-policy-learning.md)。
-- **训练方案迭代**（`recipes/` + `guided/trial.py`）：研究模型反复修改模仿之后的强化学习训练方案，每次从固定起点限时训练、与现役模型配对评估，在工作台的「训练方案迭代」页查看。决定见 [ADR-0012](../../../docs/adr/0012-recipe-iteration-for-rl-training.md)，接口见 [recipes/API.md](recipes/API.md)。
+- **训练方案迭代**（`recipes/` + `guided/trial.py`）：自动研究里的 RL 方案分支。研究模型反复修改模仿之后的强化学习训练方案，每次从固定起点限时训练，训练出的模型交给研究框架，和规则分支一样做分段配对评估、参加共同大乱斗；进度在工作台 RL 分支的卡片上查看。决定见 [ADR-0013](../../../docs/adr/0013-unified-research-branches-and-common-brawl.md)、[ADR-0012](../../../docs/adr/0012-recipe-iteration-for-rl-training.md)，接口见 [recipes/API.md](recipes/API.md)。
 - **自我对弈 PPO**（`train/`，下文）：联赛池自我对弈，ONNX Runtime 发布到平台。设计见 [ADR-0009](../../../docs/adr/0009-independent-selfplay-trainer-for-personal-project.md)。
 
 术语（联赛池、桌面分、阶段总分、教师策略）见 [CONTEXT.md](../../../CONTEXT.md)。
@@ -38,7 +38,7 @@ selfplay/
 
 ## 使用
 
-训练与离线评估需要带 CUDA 的 torch。仓库 `.venv` 只装了 onnxruntime；本机用系统 conda 的 Python 3.11（自带 torch），并已为它就地编译 `_fast`，命令前加 `PYTHONPATH=src`。发布、沙箱与平台对战仍用 `.venv/bin/mahjong-ai`。
+训练与离线评估需要带 CUDA 的 torch。仓库 `.venv` 在 Mac 上可装可选依赖 `.[model]` 的 torch，只用于研究的模型座位推理（MPS），不用于本路线训练；本机用系统 conda 的 Python 3.11（自带 torch），并已为它就地编译 `_fast`，命令前加 `PYTHONPATH=src`。发布、沙箱与平台对战仍用 `.venv/bin/mahjong-ai`。
 
 ```bash
 # 训练（配置见 train/configs/，主训练用 transformer-main.toml）

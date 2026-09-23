@@ -4,15 +4,15 @@
 
 本路线不读取、不迁移 `train/` 的检查点，也不产出平台 ONNX 发布包；旧路线见[项目 README](../README.md)。
 
-模仿之后的强化学习目前通过训练方案迭代改进：研究模型修改训练方案（`../recipes/`），本目录的 `trial.py` 按固定时限训练、配对评估并跑大乱斗，由工作台服务里的编排器调度。决定见 [ADR-0012](../../../../docs/adr/0012-recipe-iteration-for-rl-training.md)，方案接口见 [recipes/API.md](../recipes/API.md)。
+模仿阶段由 `imitate.py` 完成；之后的强化学习是自动研究里的 RL 方案分支：研究模型修改训练方案（`../recipes/`），本目录的 `trial.py` 从固定起点按时限训练，训练出的模型交回研究框架，做分段配对评估并参加共同大乱斗。决定见 [ADR-0013](../../../../docs/adr/0013-unified-research-branches-and-common-brawl.md)，方案接口见 [recipes/API.md](../recipes/API.md)。
 
 ## 机器分工
 
 | 角色 | 主机 | 用途 |
 | --- | --- | --- |
-| Mac | 本机 | 控制面：冻结源码与教师、写运行计划、启动远端任务、汇总报告；不跑 GPU 任务 |
-| 4090 | `gpu-4090-wsl` | 训练大模型（384/8/8），并承担规模试验、离线评估与大乱斗 |
-| 4070 | `gpu-4070-wsl` | 训练小模型（256/6/8）；正式内网比赛只在这里推理，部署两个模型中同条件表现最好的那个。不训练大模型，不跑显存压力探针 |
+| Mac | 本机 | 控制面：冻结源码与教师、写运行计划、启动远端任务、汇总报告；研究评估中的模型座位用 MPS 推理，不训练 |
+| 4090 | `gpu-4090-wsl` | 模仿阶段（大模型 384/8/8）、规模试验与共同大乱斗；大乱斗派到这里时，本机训练进程被暂停，结束后恢复 |
+| 4070 | `gpu-4070-wsl` | RL 方案分支的训练与评估（从 4090 模仿出的大模型起点出发）；正式内网比赛只在这里推理。不跑显存压力探针 |
 
 - 连接由 [`remote.py`](remote.py) 的 `HOSTS`、`ROOT`、`PYTHON` 定义：经 Windows 宿主 SSH，再以 `wsl.exe -d Ubuntu-20.04 -u user` 进入 WSL；命令按 argv 传递，不拼接 shell。长任务用 `remote.command(..., background_log=...)` 启动，进程脱离 wsl.exe 会话。
 - 两机项目路径都是 `~/code/leihuo_majiang`，解释器 `~/softwares/miniconda3/envs/py311_cu130/bin/python` 自带 CUDA torch，不要重装 CUDA 环境。统一版本的 numpy 放在 `.local/guided-deps/numpy-2.1.2`，`remote.command` 会自动加进 `PYTHONPATH`，不改共享 Conda 环境。
@@ -34,6 +34,7 @@
 
 | 模块 | 职责 |
 | --- | --- |
+| `imitate` | 纯模仿：BC（老师出牌）→ DAgger（学生出牌、老师标注）→ 学习率线性衰减。新鲜样本上的老师交叉熵在 `window_seconds` 内改善不足 `tolerance` 即换阶段，衰减时长为已训练时间的 `decay_fraction`；每 `snapshot_seconds` 存快照，另存各阶段结束点与 `final`。进程被暂停（让位大乱斗）的时间不计入训练时间；`--resume` 续跑时可以换 worker 与桌数 |
 | `run` | 单机训练入口：`--bc-seconds` 纯模仿阶段、联合训练、`--snapshot-seconds` 定时快照、`--deadline` 绝对截止、`--resume` |
 | `learning` / `networks` / `encoding` | PPO 与教师交叉熵、Actor 与带隐藏信息的 PopArt Critic、含本手完整公开历史的合法观察编码 |
 | `environment` / `collection` | CPU worker 驱动完整对局，父进程集中做 GPU 推理 |
@@ -42,7 +43,8 @@
 | `deployment` | Actor 导出、基准测试与独立 HTTP 推理服务 |
 | `resources` / `tune_evaluation` | 按 CPU 亲和性、cgroup 配额与可用显存给出初始并发，再在固定赛程上实测校准 |
 | `brawl` / `brawl_pipeline` | 5、8、10 或 11 个冻结策略的均衡大乱斗；流水线按校准、混合对局冒烟、计分比赛顺序执行，遇错停止 |
-| `trial` / `recipe_jobs` | 训练方案迭代：远端框架在固定时限和显存、内存上限内调用 `recipe.train(ctx)`，做配对评估与五方大乱斗；`snapshot_seconds` 与 `curve` 用于训练时长曲线。Mac 侧任务负责部署、上传方案、脱离运行与轮询 |
+| `trial` / `recipe_jobs` | 训练方案迭代：远端框架在固定时限和显存、内存上限内调用 `recipe.train(ctx)`，对手取研究冻结的评估对手（规则版本按各自运行时隔离运行）；训练出的 Actor 拉回 Mac 交给研究框架评估。Mac 侧任务负责部署、上传方案、脱离运行与轮询，主机不可达时无限期等待，主机重启时记为主机故障、从头重跑 |
+| `model_server` | 研究对局里模型座位的批量推理服务：每台主机一个，按权重 SHA-256 加载 `research/models/` 下的 Actor；对局进程在本地编码观察，服务只做攒批与推理（CUDA fp32 / MPS fp16） |
 | `overnight` | 同机启动方式对照（A 直接联合训练，B 先纯模仿再联合训练） |
 | `bc_curve` | 纯模仿时长曲线：定时快照逐个与规则冠军配对评估 |
 | `scale_probe` / `scale_batch` / `scale_study` / `scale_monitor` | 模型规模的资源探针、微批次测量、较长的监督学习对照与只读监控 |
@@ -56,6 +58,10 @@
 ```bash
 TRAIN_PY="$HOME/softwares/miniconda3/envs/py311_cu130/bin/python"
 export PYTHONPATH="$HOME/code/leihuo_majiang/.local/guided-deps/numpy-2.1.2:src:projects/personal/selfplay"
+
+# 纯模仿：BC → DAgger → 衰减，阶段按数据自动切换
+"$TRAIN_PY" -m guided.imitate --run <run-dir> --bundle <teachers/<id>/manifest.json> \
+  --config <config.json> --deadline <unix-epoch-seconds> [--schedule '{"snapshot_seconds": 600}'] [--resume]
 
 # 单机训练：先纯模仿 N 秒，再进入联合训练
 "$TRAIN_PY" -m guided.run --run <run-dir> \
@@ -78,7 +84,7 @@ export PYTHONPATH="$HOME/code/leihuo_majiang/.local/guided-deps/numpy-2.1.2:src:
 "$TRAIN_PY" -m guided.deployment benchmark <actor-dir> --device cuda --count 200
 "$TRAIN_PY" -m guided.deployment serve <actor-dir> --host 127.0.0.1 --port 8810
 
-# 测试；Mac 的 .venv 没有 torch，guided 测试在 WSL 运行
+# 测试；Mac 的 .venv 装了 .[model] 后也能跑 guided 测试（CPU/MPS），GPU 相关项在 WSL 运行
 "$TRAIN_PY" -m pytest -q projects/personal/selfplay/tests tests/test_guided_*.py
 ```
 
@@ -91,7 +97,7 @@ export PYTHONPATH="$HOME/code/leihuo_majiang/.local/guided-deps/numpy-2.1.2:src:
 - 联合训练中的指导强度 `w = clip((d + u) / D, 0, 1)`，`d` 为教师减学生的配对场均桌面分差，`u` 为 95% 区间半宽；首次评估前 `w = 1`。`--reference` 给定的固定 Actor 与学生、教师在同一批牌墙上评估，结果里的 `reference_minus_student` 衡量相对起点的进步；续跑沿用记录的参照。
 - 奖励是每局本人收支除以底分，整场之和等于桌面分，不做塑形和裁剪。Critic 读取三家手牌与牌墙构成，只在训练进程内使用，不随 Actor 发布。
 - 评估面板在一个实验内固定：同组牌墙四座轮换，按完整四座组计算配对均值差与区间。区间跨零只表示没分出高下，不等于持平或已到学习上限；多组比较未做多重校正。
-- 大乱斗每组内各策略的出场与座位次数一致：5 方覆盖全部 5 种四人阵容，8 方覆盖全部 70 种，10 方覆盖全部 210 种，11 方按循环移位的 30 个轨道排程。跨项目比赛的赛程、身份、回执和报告放仓库根 `.local/competition/runs/`，与规则自迭代的研究榜单分开。
+- 大乱斗每组内各策略的出场与座位次数一致：5 方覆盖全部 5 种四人阵容，8 方覆盖全部 70 种，10 方覆盖全部 210 种，11 方按循环移位的 30 个轨道排程。自动研究的共同大乱斗由研究框架执行；本模块的大乱斗用于研究框架之外的临时比赛，赛程、身份、回执和报告放仓库根 `.local/competition/runs/`。
 - `guided.deployment` 是独立 GPU 服务：`POST /act` 接收 `{"observation_payload": ...}` 完整公开观察并返回合法动作，`GET /health` 报告状态。它不是 ONNX 发布包，不改变平台 CPU/ONNX 发布契约，导出与测速也不会自动报名比赛。部署验收以 4070 实机的 10 桌并发为准，计时覆盖 HTTP、排队、编码、推理和回传。
 
 运行状态、完整配置和回执放本项目 `.local/`；各次实验的结论与待办汇总在本机 `.local/reports/guided-status.md`，具体成绩不写入本手册。
