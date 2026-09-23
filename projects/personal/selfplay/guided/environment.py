@@ -194,21 +194,28 @@ class Game:
 
 
 class External:
-    """Per-worker pool of sandboxed policies for versions outside the bundle.
+    """Per-worker pool of policies for frozen versions outside the bundle.
 
-    Each is a frozen package run in its own runtime (mahjong_ai's
-    RemotePolicy); a process is reused by later games in the same worker.
+    A version frozen with the worker's own runtime (same fingerprint, i.e.
+    directory name) loads in-process like a bundle rule; any other runs in
+    its own runtime in a sandboxed process (mahjong_ai's RemotePolicy),
+    reused by later games in the same worker.
     """
 
     def __init__(self, specs):
         self.specs, self.free = specs, {k: [] for k in specs}
 
     def acquire(self, spec):
+        from pathlib import Path
         from mahjong_ai.strategies.common import PolicySpec
+        from .artifacts import bound_runtime_name, load_package
 
         if self.free[spec]:
             return self.free[spec].pop()
-        policy = PolicySpec(**self.specs[spec]).build()
+        frozen = self.specs[spec]
+        if Path(frozen.get("runtime_path") or "").name == bound_runtime_name():
+            return load_package(frozen["package_path"])
+        policy = PolicySpec(**frozen).build()
         if hasattr(policy, "start"):
             policy.start()
         return policy

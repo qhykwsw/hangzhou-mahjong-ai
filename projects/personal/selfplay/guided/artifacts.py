@@ -379,7 +379,19 @@ def build_policy(bundle, candidate_id):
     entry = next((e for e in bundle["entries"] if e["id"] == candidate_id), None)
     if entry is None:
         raise ValueError("candidate is not in this teacher bundle")
-    package = Path(entry["path"])
+    return load_package(entry["path"])
+
+
+def bound_runtime_name():
+    """Directory name of the bound frozen runtime, i.e. its fingerprint."""
+    return Path(_BOUND_RUNTIME).name if _BOUND_RUNTIME else None
+
+
+def load_package(package):
+    """Build a rule policy from a frozen package under the already-bound SDK."""
+    if _BOUND_RUNTIME_HASH is None:
+        raise RuntimeError("bind_runtime must run before building a rule policy")
+    package = Path(package)
     name = "_guided_rule_" + uuid.uuid4().hex
     spec = importlib.util.spec_from_file_location(
         name,
