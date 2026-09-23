@@ -1418,7 +1418,8 @@ class Research:
 
     def initialize_ready(self, s):
         for b in s["branches"].values():
-            if b["status"] != "initializing":
+            # Recipe branches get version 0 from the recipe service instead.
+            if b["status"] != "initializing" or b["combination"] not in s["baselines"]:
                 continue
             base = s["candidates"][s["baselines"][b["combination"]]]
             if base["status"] != "ready":

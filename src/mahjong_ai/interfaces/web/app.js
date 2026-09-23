@@ -104,8 +104,10 @@ function cardProgress(branch) {
   const p = state.branch_progress?.[branch.id];
   if (!p) return "";
   const research = {waiting: "等待启动", running: "研究中", submitted: "已提交", failed: "未提交候选", not_selected: "不参与迭代"};
-  let html = progressRow("研究", research[p.research] || p.research);
-  for (const [index, training] of p.preparation.entries()) {
+  // A recipe branch shows its design and training in the card's training part.
+  const recipe = Boolean(recipeLineOf(branch));
+  let html = recipe ? "" : progressRow("研究", research[p.research] || p.research);
+  for (const [index, training] of (recipe ? [] : p.preparation).entries()) {
     const label = p.preparation.length > 1 ? `候选 ${index + 1} 训练` : "训练";
     if (training.status === "not_required") {
       html += progressRow(label, "无需训练 · 准备完成");
@@ -124,7 +126,7 @@ function cardProgress(branch) {
       condition);
     if (training.error) html += `<small class="progress-error">${esc(training.error === "iteration execution limit reached" ? "达到单次迭代时限" : training.error)}</small>`;
   }
-  if (!p.preparation.length && p.research !== "not_selected") html += progressRow("训练 / 准备", "等待候选提交");
+  if (!recipe && !p.preparation.length && p.research !== "not_selected") html += progressRow("训练 / 准备", "等待候选提交");
   for (const [index, evaluation] of p.evaluation.entries()) {
     const label = evaluation.role === "incumbent" ? "旧基线评测" : p.evaluation.length > 2 ? `候选 ${index} 评测` : "新候选评测";
     const live = evaluation.hand ? ` · 当前场 ${evaluation.hand.hands_completed}/${evaluation.hand.hands_total} 局` : "";
@@ -247,7 +249,14 @@ function branchCard(branch, evaluationVersion = null) {
   const head = `<div class="choice-main"><span><strong>${esc(combinationName(branch.combination))}</strong><span class="muted">${esc(branch.model)} · ${esc(shortVersion(branch.id))}${archived ? "" : " · " + esc(labels[branch.status] || branch.status)}</span></span></div>`;
   const footer = `<div class="choice-footer"><button type="button" data-detail="${esc(branch.id)}">累计 ${branch.completed} 次 · 提升 ${branch.improved} 次</button></div>`;
   const progress = archived ? "" : `<div class="choice-progress" id="progress-${esc(branch.id)}"></div>`;
-  return `<article class="choice branch-card ${archived ? "archived" : ""} ${mode === "iterating" ? "selected" : ""} ${evaluationVersion ? "in-pool" : ""}" title="${esc(branch.id)}">${head}<div class="badges">${badges}</div><dl class="branch-meta">${versions}</dl>${branchPlan(branch)}${progress}${footer}</article>`;
+  const line = recipeLineOf(branch);
+  const training = line && !archived && typeof recipeCardExtra === "function" ? recipeCardExtra(line) : "";
+  return `<article class="choice branch-card ${archived ? "archived" : ""} ${mode === "iterating" ? "selected" : ""} ${evaluationVersion ? "in-pool" : ""}" title="${esc(branch.id)}">${head}<div class="badges">${badges}</div><dl class="branch-meta">${versions}</dl>${line ? training : branchPlan(branch)}${progress}${footer}</article>`;
+}
+/* A recipe branch's candidates come from a line of the recipe service. */
+function recipeLineOf(branch) {
+  const combination = state.combinations.find((c) => c.id === branch.combination);
+  return combination?.family === "recipe" ? combination.parameters.line : null;
 }
 function renderBranches() {
   const byName = (a, b) => (a.combination + a.id).localeCompare(b.combination + b.id, "zh");
@@ -386,13 +395,6 @@ async function refresh() {
     refreshing = false;
   }
 }
-for (const name of ["work", "ranking", "recipe"])
-  $(name + "Tab").onclick = () => {
-    for (const key of ["work", "ranking", "recipe"]) {
-      $(key + "Tab").setAttribute("aria-selected", String(key === name));
-      $(key + "Panel").hidden = key !== name;
-    }
-  };
 $("rankingHistory").onchange = renderRanking;
 $("closeDetail").onclick = () => $("detailDialog").close();
 /* History grows with every round, so a branch's records load when its detail opens. */
@@ -452,6 +454,9 @@ async function showDetail(button) {
           `<details><summary>累计第 ${i.number} 次 · ${i.status === "completed" ? (i.improved ? "策略提升" : i.error ? "执行失败" : "保留原最好版本") : esc(labels[i.status] || i.status)}</summary><pre>${esc(JSON.stringify(i, null, 2))}</pre></details>`,
       )
       .join("") || "<p>尚无迭代记录。</p>");
+  const line = recipeLineOf(state.branches.find((b) => b.id === detailBranch) || {});
+  if (line && typeof recipeDetailExtra === "function")
+    $("detailContent").innerHTML += recipeDetailExtra(line);
   $("detailContent").innerHTML +=
     "<h3>候选历史</h3>" +
     detail.candidates

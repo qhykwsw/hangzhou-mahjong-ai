@@ -134,22 +134,6 @@ select:focus-visible {
 #summary {
   color: var(--muted);
 }
-nav {
-  display: flex;
-  border-bottom: 1px solid var(--line);
-  margin: 12px 0 24px;
-  gap: 26px;
-}
-nav button {
-  background: none;
-  border: 0;
-  border-radius: 0;
-  padding: 12px 0;
-}
-nav button[aria-selected="true"] {
-  border-bottom: 3px solid var(--teal);
-  font-weight: 600;
-}
 .sectionhead {
   display: flex;
   justify-content: space-between;
@@ -770,18 +754,6 @@ select:disabled {
     font-size: 12px;
   }
 }
-.recipe-lines {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
-  gap: 14px;
-  margin-bottom: 22px;
-}
-.recipe-line {
-  background: var(--white);
-  display: grid;
-  gap: 10px;
-  align-content: start;
-}
 .recipe-curve {
   width: 100%;
   height: auto;
@@ -880,4 +852,36 @@ select:disabled {
 }
 .host small {
   color: var(--blue);
+}
+.ranking-panel {
+  margin-bottom: 24px;
+}
+.trial-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+.trial-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+.trial-item.promoted span {
+  color: var(--teal);
+}
+.trial-item small {
+  overflow: hidden;
+  max-width: 100%;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

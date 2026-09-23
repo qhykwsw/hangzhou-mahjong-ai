@@ -37,59 +37,13 @@
         <span class="loop" aria-hidden="true">↻</span>
       </div>
       <p id="roundNote" class="muted"></p>
-      <nav role="tablist" aria-label="研究视图">
-        <button
-          id="workTab"
-          role="tab"
-          aria-selected="true"
-          aria-controls="workPanel"
-        >
-          实验与进度</button
-        ><button
-          id="rankingTab"
-          role="tab"
-          aria-selected="false"
-          aria-controls="rankingPanel"
-        >
-          全体排行榜</button
-        ><button
-          id="recipeTab"
-          role="tab"
-          aria-selected="false"
-          aria-controls="recipePanel"
-        >
-          RL 训练详情
-        </button>
-      </nav>
-      <section id="workPanel" role="tabpanel" aria-labelledby="workTab">
-        <section class="branch-panel">
-          <div class="sectionhead">
-            <h2>研究分支 <span id="branchCount" class="count"></span></h2>
-            <span class="muted">迭代中的分支持续产生候选；仅参赛的分支冻结现役代表，照常参加大乱斗</span>
-          </div>
-          <p class="muted" id="poolSummary"></p>
-          <div id="branchList" class="branch-grid"></div>
-        </section>
-        <details>
-          <summary>已归档分支 <span id="archivedCount" class="count"></span></summary>
-          <div id="archived" class="branch-grid"></div>
-        </details>
-      </section>
-      <section
-        id="rankingPanel"
-        role="tabpanel"
-        aria-labelledby="rankingTab"
-        hidden
-      >
+      <section id="rankingPanel" class="ranking-panel">
         <div class="sectionhead">
-          <h2 id="rankLabel">等待首次对比</h2>
+          <h2 id="rankLabel">等待首次共同大乱斗</h2>
           <select id="rankingHistory" aria-label="选择排名记录">
             <option value="">最新排名</option>
           </select>
         </div>
-        <p class="muted">
-          排名属于实际参赛版本；分支新版本需在对比阶段重新评测。已隐藏归档分支，历史名次保留原始结果。主口径是完整结算的场均桌面分，与线上非决赛第一排序键（总分）一致；同分时按场均名次分排序，名次分为 +3 / +1 / −1 / −3、同分取平均。名次效用（4−名次）与逐局读数只作对照，不参与排序。标准误差按四场轮换组聚类估计，反映本次均值的波动，不是名次的置信区间。
-        </p>
         <div class="tablewrap">
           <table>
             <thead>
@@ -108,48 +62,25 @@
           </table>
         </div>
         <details>
-          <summary>实验记录</summary>
+          <summary>排名口径与实验记录</summary>
+          <p class="muted">
+            排名属于实际参赛版本；分支的新版本要在下一次大乱斗里重新评测。主口径是完整结算的场均桌面分，与线上非决赛第一排序键（总分）一致；同分时按场均名次分排序，名次分为 +3 / +1 / −1 / −3、同分取平均。名次效用（4−名次）与逐局读数只作对照，不参与排序。标准误差按四场轮换组聚类估计，反映本次均值的波动，不是名次的置信区间。
+          </p>
           <div id="experimentHistory"></div>
         </details>
       </section>
-      <section
-        id="recipePanel"
-        role="tabpanel"
-        aria-labelledby="recipeTab"
-        hidden
-      >
+      <section class="branch-panel">
         <div class="sectionhead">
-          <h2>RL 方案分支的训练 <span id="recipeStatus" class="count"></span></h2>
+          <h2>研究分支 <span id="branchCount" class="count"></span></h2>
+          <span class="muted">迭代中的分支持续产生候选；仅参赛的分支冻结现役代表，照常参加大乱斗</span>
         </div>
-        <p id="recipeSummary" class="muted">加载中…</p>
-        <div id="recipeLines" class="recipe-lines"></div>
-        <div class="sectionhead">
-          <h2>方案尝试</h2>
-          <span class="muted"
-            >每次尝试从固定起点限时训练，与现役模型在同样的牌局上配对评估；点击一行查看计划、改动与训练诊断</span
-          >
-        </div>
-        <div class="tablewrap">
-          <table>
-            <thead>
-              <tr>
-                <th>方案线</th>
-                <th>尝试</th>
-                <th>结果</th>
-                <th>本次方向</th>
-                <th>配对差（场均桌面分）</th>
-                <th>训练</th>
-                <th>完成时间</th>
-              </tr>
-            </thead>
-            <tbody id="recipeTrials"></tbody>
-          </table>
-        </div>
-        <details>
-          <summary>事件记录</summary>
-          <div id="recipeEvents"></div>
-        </details>
+        <p class="muted" id="poolSummary"></p>
+        <div id="branchList" class="branch-grid"></div>
       </section>
+      <details>
+        <summary>已归档分支 <span id="archivedCount" class="count"></span></summary>
+        <div id="archived" class="branch-grid"></div>
+      </details>
       <dialog id="recipeDialog">
         <div class="sectionhead">
           <h2 id="recipeDialogTitle"></h2>

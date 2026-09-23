@@ -1806,3 +1806,17 @@ def test_restart_and_pause_leave_remote_work_running(research, monkeypatch):
     s = r.read(run)
     assert s["status"] == "paused" and s["jobs"][job["id"]]["status"] == "running"
     assert not remote.cancelled
+
+
+def test_rule_branches_do_not_wait_for_a_recipe_branch_version_zero(tmp_path):
+    config = small_config() | {
+        "hosts": {"gpu": GPU},
+        "combinations": small_config()["combinations"]
+        + [dict(id="rl-recipe", branches=1, models=["astra"], parameters={"line": "rl"},
+                evaluation_games=8, evaluation_host="gpu")],
+    }
+    r, run, controller = start_research(tmp_path, config)
+    with r.edit(run) as (s, db):
+        r.advance(s, db)
+        assert s["branches"]["rl-recipe--01"]["status"] == "initializing"
+        assert s["phase"] == "researching" and r.startable(s)
