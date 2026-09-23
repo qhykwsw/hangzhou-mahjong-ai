@@ -350,3 +350,17 @@ def test_agent_prompt_states_the_iteration_budget_and_submit_first_order():
     # 续跑调用沿用同一预算，也要带上剩余时间。
     assert "时间预算" in agent_prompt({**task, "continuation": 1})
     assert "时间预算" not in agent_prompt({k: v for k, v in task.items() if k != "deadline"})
+
+
+def test_an_epoch_with_different_evaluation_stages_keeps_distinct_conditions():
+    from mahjong_ai.research.agent_context import handoff_view
+    from mahjong_ai.research.service import distinct_conditions
+
+    def record(games):
+        return {"evidence": {"cycle": 91, "opponents": ["a"], "evaluation_games": games}}
+
+    records = distinct_conditions([record(1024), record(4096), record(1024)])
+    assert [r["evidence"]["cycle"] for r in records] == ["91", "91/4096", "91"] or \
+        [r["evidence"]["cycle"] for r in records] == [91, "91/4096", 91]
+    view = handoff_view({"research_conclusions": [record(1024), record(4096)]})
+    assert len(view["research_conditions"]) == 2

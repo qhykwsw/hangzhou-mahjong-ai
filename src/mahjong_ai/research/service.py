@@ -120,6 +120,29 @@ def paired_readout(reference, candidate, metric="score", confidence=0.95):
     )
 
 
+def distinct_conditions(records):
+    """Label each distinct evaluation condition within an epoch separately.
+
+    Iterations of one epoch can stop at different evaluation stages, so their
+    conditions differ in games per side; agent runtimes frozen before this
+    change group conditions by the epoch number alone and reject a mismatch.
+    """
+    from mahjong_ai.research.agent_context import CONDITION_FIELDS
+
+    seen = {}
+    for record in records:
+        evidence = record.get("evidence") or {}
+        if "cycle" not in evidence:
+            continue
+        context = {k: evidence.get(k) for k in CONDITION_FIELDS if k in evidence}
+        label = str(evidence["cycle"])
+        if seen.setdefault(label, context) != context:
+            label = f"{evidence['cycle']}/{evidence.get('evaluation_games')}"
+            seen.setdefault(label, context)
+            evidence["cycle"] = label
+    return records
+
+
 def strip_groups(result):
     if result:
         for key in [k for k in result if k.endswith("group_means") or k == "group_blocks"]:
@@ -2319,7 +2342,7 @@ class Research:
                 "candidate_id": b["representative"],
                 "hypothesis": (incumbent.get("hypothesis") or "")[:1200],
             },
-            "research_conclusions": ledger(s, branch),
+            "research_conclusions": distinct_conditions(ledger(s, branch)),
             "last_ranking": ranking,
         }
 

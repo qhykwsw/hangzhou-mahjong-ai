@@ -27,10 +27,13 @@ def handoff_view(handoff):
         context = {
             key: evidence.pop(key) for key in CONDITION_FIELDS if key in evidence
         }
-        key = str(context.get("cycle", len(conditions)))
-        if key in conditions and conditions[key] != context:
-            raise ValueError("同一轮的研究条件不一致")
-        conditions[key] = context
+        # One epoch can hold several conditions (evaluation stages differ).
+        key = next((k for k, v in conditions.items() if v == context), None)
+        if key is None:
+            key = str(context.get("cycle", len(conditions)))
+            if key in conditions:
+                key = f"{key}/{len(conditions)}"
+            conditions[key] = context
         evidence["condition_id"] = key
     result["research_conditions"] = conditions
     return result
