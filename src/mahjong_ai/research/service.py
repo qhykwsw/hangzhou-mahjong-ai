@@ -1519,6 +1519,7 @@ class Research:
                     rank=rank, rank_change=previous.get(row["branch"], rank) - rank
                 )
             cycle.update(status="completed", ranking=table, completed_at=time.time())
+            self.compact_jobs(s)
             s["last_ranking"] = table
             s["experiments"][-1]["completed_rounds"] += 1
             s["phase"] = "boundary"
@@ -1601,12 +1602,6 @@ class Research:
         b["failed"] += int(not success)
         b["status"] = "ready"
         it.pop("config", None)
-        for finished in s["jobs"].values():
-            if (
-                finished.get("iteration") == it["id"]
-                and finished["status"] == "completed"
-            ):
-                finished.pop("assignments", None)
         it.update(
             status="completed",
             representative=b["representative"],
@@ -1614,6 +1609,7 @@ class Research:
             improved=improved,
             completed_at=time.time(),
         )
+        self.compact_jobs(s)
         self.event(
             db,
             s,
@@ -1788,6 +1784,29 @@ class Research:
                     s["candidates"][cid]["last_result"] = merged
                 if all(j["status"] == "completed" for j in jobs):
                     self.complete_iteration(s, db, it)
+
+    @staticmethod
+    def compact_jobs(s):
+        """Drop per-job detail once its iteration or round has been settled.
+
+        The whole state is rewritten on every edit, and these fields grew it
+        to hundreds of megabytes over a long experiment. Their contents are
+        already folded into iteration results and round rankings, and every
+        job result stays in the immutable receipts table.
+        """
+        iterations = s.get("iterations", {})
+        # The latest round's competition detail still feeds the progress panel.
+        settled = {c["id"] for c in s.get("cycles", [])[:-1] if c["status"] == "completed"}
+        for job in s["jobs"].values():
+            if job["status"] != "completed":
+                continue
+            if job.get("scope") == "competition":
+                if job.get("cycle") in settled:
+                    job.pop("assignments", None)
+                    job.pop("summary", None)
+            elif iterations.get(job.get("iteration"), {}).get("status") == "completed":
+                for key in ("assignments", "summary", "focal"):
+                    job.pop(key, None)
 
     @staticmethod
     def merge_focal(parts):

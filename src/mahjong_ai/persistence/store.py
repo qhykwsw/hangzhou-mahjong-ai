@@ -23,8 +23,11 @@ class Store:
 
     @contextmanager
     def connect(self):
-        db = sqlite3.connect(self.path, timeout=30)
-        db.execute("PRAGMA busy_timeout=30000")
+        # Every edit rewrites the whole state blob, which takes seconds once a
+        # long experiment has accumulated its job records. Writers queue behind
+        # each other; a short wait turned that queue into a paused experiment.
+        db = sqlite3.connect(self.path, timeout=300)
+        db.execute("PRAGMA busy_timeout=300000")
         try:
             with db:
                 yield db

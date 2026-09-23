@@ -26,6 +26,8 @@ class Controller:
         for run in self.research.states():
             with self.research.edit(run["id"]) as (s, db):
                 self.consume(s, db)
+                # Also shrinks state that accumulated before compaction existed.
+                self.research.compact_jobs(s)
                 for j in s["jobs"].values():
                     if j["status"] in ("running", "admitted"):
                         self.stop(s, j, force=True)
