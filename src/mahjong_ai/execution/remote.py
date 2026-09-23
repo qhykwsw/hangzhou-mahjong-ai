@@ -26,6 +26,7 @@ class RemoteHost:
         self.project = Path(project).resolve()
         self.base = config["root"].rstrip("/") + "/.local/research-hosts/" + self.project.name
         self.synced = set()
+        self.built = set()
         self.service_code = None
 
     # -- transport ---------------------------------------------------------
@@ -95,6 +96,10 @@ class RemoteHost:
 
     def build_native(self, runtimes):
         """Compile the engine accelerator inside mirrored runtimes on this host."""
+        runtimes = [r for r in runtimes if str(r) not in self.built]
+        if not runtimes:
+            return []
+        self.built.update(str(r) for r in runtimes)
         script = (
             "import json,shutil,sysconfig,tempfile\nfrom pathlib import Path\n"
             "from setuptools import Extension,Distribution\nbuilt=[]\n"
@@ -166,19 +171,7 @@ print(json.dumps(ok()))
         return self.python(script, timeout=900)
 
     # -- jobs --------------------------------------------------------------
-    def launch(self, local_root, task, runtime, env):
-        """Start one job under a supervisor that owns it on the host."""
-        remote_root = self.remote_path(local_root)
-        task = dict(task, policies={
-            cid: self._interpreter(spec) for cid, spec in task.get("policies", {}).items()
-        })
-        payload = base64.b64encode(json.dumps(self._rewrite(task)).encode()).decode()
-        script = f"""import base64,json,os,pathlib,subprocess,sys,time
-root=pathlib.Path({remote_root!r}); root.mkdir(parents=True,exist_ok=True)
-for name in ('result.json','cancel.flag'):
-    (root/name).unlink(missing_ok=True)
-task=json.loads(base64.b64decode({payload!r}))
-supervisor='''import json,os,pathlib,subprocess,sys
+    SUPERVISOR = """import json,os,pathlib,subprocess,sys
 root=pathlib.Path(sys.argv[1]); task=json.loads((root/'task.json').read_text())
 env=dict(os.environ,**json.loads(sys.argv[2]))
 fingerprint=subprocess.run([sys.executable,'-c','from mahjong_ai.persistence.artifacts import runtime_fingerprint;print(runtime_fingerprint())'],env=env,capture_output=True,text=True,check=True).stdout.strip()
@@ -186,17 +179,40 @@ task.update(runtime=fingerprint,owner_pid=os.getpid()); (root/'task.json').write
 with (root/'worker.log').open('ab') as log:
     code=subprocess.call([sys.executable,'-B','-m','mahjong_ai.execution.jobs',str(root)],env=env,stdin=subprocess.DEVNULL,stdout=log,stderr=log,cwd=str(root))
 if not (root/'result.json').exists():
-    (root/'result.json').write_text(json.dumps({{'status':'failed','error':'remote job exited without a receipt: '+str(code)}}))
-'''
-(root/'supervisor.py').write_text(supervisor)
-(root/'task.json').write_text(json.dumps(task))
-environment=json.loads({json.dumps(env)!r}); environment['PYTHONPATH']={self.remote_path(runtime)!r}
-log=open(root/'supervisor.log','ab')
-p=subprocess.Popen([{self.config['python']!r},str(root/'supervisor.py'),str(root),json.dumps(environment)],stdin=subprocess.DEVNULL,stdout=log,stderr=log,start_new_session=True)
-time.sleep(3)
-print(json.dumps({{'pid':p.pid}}))
+    (root/'result.json').write_text(json.dumps({'status':'failed','error':'remote job exited without a receipt: '+str(code)}))
 """
-        return self.python(script, timeout=300)["pid"]
+
+    def launch_many(self, jobs):
+        """Start several jobs, each under its own supervisor, in one round trip.
+
+        ``jobs`` is a list of (local root, task, runtime, env). wsl.exe ends
+        the session when the script exits, so the script waits once for the
+        detached supervisors to leave it, however many were started.
+        """
+        entries = []
+        for local_root, task, runtime, env in jobs:
+            task = dict(task, policies={
+                cid: self._interpreter(spec) for cid, spec in task.get("policies", {}).items()
+            })
+            env = dict(env, PYTHONPATH=self.remote_path(runtime))
+            entries.append((self.remote_path(local_root), self._rewrite(task), env))
+        payload = base64.b64encode(json.dumps(entries).encode()).decode()
+        script = f"""import base64,json,pathlib,subprocess,time
+supervisor={self.SUPERVISOR!r}
+pids=[]
+for root,task,env in json.loads(base64.b64decode({payload!r})):
+    root=pathlib.Path(root); root.mkdir(parents=True,exist_ok=True)
+    for name in ('result.json','cancel.flag'):
+        (root/name).unlink(missing_ok=True)
+    (root/'supervisor.py').write_text(supervisor)
+    (root/'task.json').write_text(json.dumps(task))
+    log=open(root/'supervisor.log','ab')
+    p=subprocess.Popen([{self.config['python']!r},str(root/'supervisor.py'),str(root),json.dumps(env)],stdin=subprocess.DEVNULL,stdout=log,stderr=log,start_new_session=True)
+    pids.append(p.pid)
+time.sleep(3)
+print(json.dumps(pids))
+"""
+        return self.python(script, timeout=600)
 
     def _interpreter(self, spec):
         """Candidates run under the host's interpreter; locked venvs stay local."""
@@ -336,25 +352,36 @@ class Dispatcher:
 
         atomic_json(root / "result.json", result)
 
-    def _launch(self, job_id, root, task, runtime, env):
+    def _launch(self, batch):
+        """Sync the union of inputs once, then start every queued job together."""
+        from mahjong_ai.persistence.artifacts import atomic_json
+
         try:
-            inputs = job_inputs(task)
-            weights = model_weights(task)
+            inputs, weights = set(), set()
+            for _, _, task, _, _ in batch:
+                inputs |= job_inputs(task)
+                weights |= model_weights(task)
             self.host.sync(inputs | {self.models_root / w for w in weights})
             self.host.build_native(sorted({p for p in inputs if (Path(p) / "mahjong_ai").is_dir()}))
-            env = dict(env)
-            if weights:
-                env["MAHJONG_MODEL_SERVER"] = self.host.ensure_service(
-                    self.models_root, service_code_files()
-                )
-            pid = self.host.launch(root, task, runtime, env)
-            from mahjong_ai.persistence.artifacts import atomic_json
-
+            server = (
+                self.host.ensure_service(self.models_root, service_code_files())
+                if weights else None
+            )
+            jobs = []
+            for _, root, task, runtime, env in batch:
+                env = dict(env)
+                if model_weights(task):
+                    env["MAHJONG_MODEL_SERVER"] = server
+                jobs.append((root, task, runtime, env))
+            pids = self.host.launch_many(jobs)
+        except Exception as exc:
+            for _, root, _, _, _ in batch:
+                self._write(root, {"status": "failed", "error": f"远程启动失败：{exc}"[:4000]})
+            return
+        for (job_id, root, _, _, _), pid in zip(batch, pids):
             atomic_json(root / "remote.json", {"host": self.host.name, "pid": pid})
             with self.lock:
                 self.running[job_id] = (root, pid)
-        except Exception as exc:
-            self._write(root, {"status": "failed", "error": f"远程启动失败：{exc}"[:4000]})
 
     def _poll(self):
         with self.lock:
@@ -387,7 +414,18 @@ class Dispatcher:
             except queue.Empty:
                 request = None
             if request and request[0] == "launch":
-                self._launch(*request[1:])
+                batch = [request[1:]]
+                while True:  # Everything queued so far goes out in one round trip.
+                    try:
+                        more = self.requests.get_nowait()
+                    except queue.Empty:
+                        break
+                    if more[0] == "launch":
+                        batch.append(more[1:])
+                    else:
+                        self.requests.put(more)
+                        break
+                self._launch(batch)
             elif request and request[0] == "call":
                 try:
                     request[1](self.host)

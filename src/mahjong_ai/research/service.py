@@ -1387,14 +1387,19 @@ class Research:
         matches = (matches + 3) // 4 * 4
         key = read_json(Path(s["root"]) / "private/random.json")["key"]
         assignments = schedule(roster, matches, digest([key, "competition", cycle["id"]]))
+        host = cycle["config"].get("brawl_host")
         chunk = 4 * COMPETITION_BLOCKS_PER_JOB
+        if host:
+            # Remote launches cost SSH round trips: one job per host worker.
+            workers = s["config"]["hosts"][host]["workers"]
+            chunk = 4 * -(-len(assignments) // (4 * workers))
         for block in range(0, len(assignments), chunk):
             self.queue(
                 s,
                 "match",
                 scope="competition",
                 cycle=cycle["id"],
-                host=cycle["config"].get("brawl_host"),
+                host=host,
                 assignments=assignments[block : block + chunk],
             )
         self.event(
@@ -1616,10 +1621,12 @@ class Research:
         it.update(stage=stage, stage_games=last * 4)
         candidates = it["evaluated"]
         # 分片只改任务边界，不改 block 与种子，所以用实时的 match_workers。
+        host = cfg.get("evaluation_host")
+        workers = (
+            s["config"]["hosts"][host]["workers"] if host else s["config"]["match_workers"]
+        )
         shards = evaluation_shard_count(
-            dict(cfg, match_workers=s["config"]["match_workers"]),
-            last - first,
-            len(candidates),
+            dict(cfg, match_workers=workers), last - first, len(candidates)
         )
         for cid in candidates:
             blocks = []
@@ -1647,7 +1654,7 @@ class Research:
                     stage=stage,
                     shard=shard,
                     shards=shards,
-                    host=cfg.get("evaluation_host"),
+                    host=host,
                     assignments=part,
                 )
 
