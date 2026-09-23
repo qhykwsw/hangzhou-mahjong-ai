@@ -16,6 +16,8 @@ brawl_promotions = 4
 brawl_fallback_seconds = 43200
 brawl_host = "4090"
 overflow_hosts = ["4090"]
+anchors = ["imitation-start--20260923-large"]  # 参照锚点：RL 固定起点
+guests = []  # 首次大乱斗的临时嘉宾 rl-2h-a2 已在开场大乱斗后撤下
 training_games = 16
 initialization_seconds = 3600
 
