@@ -1820,3 +1820,23 @@ def test_rule_branches_do_not_wait_for_a_recipe_branch_version_zero(tmp_path):
         r.advance(s, db)
         assert s["branches"]["rl-recipe--01"]["status"] == "initializing"
         assert s["phase"] == "researching" and r.startable(s)
+
+
+def test_a_model_version_exports_its_weights_for_platform_play(tmp_path):
+    import hashlib
+    import json
+    from mahjong_ai.platform.export import export_candidate
+    from mahjong_ai.interfaces.cli import spec
+
+    r = Research(tmp_path)
+    r.register(small_config())
+    actor = tmp_path / "actor"
+    actor.mkdir()
+    (actor / "actor.pt").write_bytes(b"weights")
+    sha = hashlib.sha256(b"weights").hexdigest()
+    (actor / "meta.json").write_text(json.dumps({"weights_sha256": sha, "config": {}}))
+    r.register_model("imitation-start--test", actor)
+    out = export_candidate(tmp_path, "imitation-start--test", tmp_path / "entrant")
+    policy = spec(out["policy"])
+    assert policy.family == "model" and policy.parameters == {"weights": sha}
+    assert (tmp_path / "entrant/models" / sha / "actor.pt").read_bytes() == b"weights"

@@ -20,12 +20,13 @@ __all__ = ["ModelService", "SERVER_ENV"]
 
 
 class ModelService:
-    def __init__(self, research):
-        self.root = research.layout.research / "models"
+    def __init__(self, research=None, *, root=None, log=None):
+        """Serve research's models, or any directory of exported Actors (root)."""
+        self.root = Path(root) if root else research.layout.research / "models"
         # The control plane runs from the repository checkout, next to the
         # self-play project that provides the service.
         self.project = Path(__file__).resolve().parents[3] / "projects/personal/selfplay"
-        self.log = research.layout.research / "model-server.log"
+        self.log = Path(log) if log else research.layout.research / "model-server.log"
         self.process = None
         self.port = None
         self.warmed = set()

@@ -19,6 +19,20 @@ def export_candidate(project, candidate, output):
     if destination.exists() and any(destination.iterdir()):
         raise ValueError("export destination must be empty")
     destination.mkdir(parents=True, exist_ok=True)
+    if original.family == "model":
+        # An exported Actor: its weights directory, named by SHA-256, is what
+        # an inference service loads; the policy itself is only the address.
+        weights = original.parameters["weights"]
+        shutil.copytree(arena.layout.research / "models" / weights, destination / "models" / weights)
+        atomic_json(destination / "policy.json", original.as_dict())
+        atomic_json(destination / "manifest.json", {
+            "candidate": candidate,
+            "branch": row["branch"],
+            "family": "model",
+            "weights": weights,
+            "scope": "local competition result; external platform has separate records",
+        })
+        return {"policy": str(destination / "policy.json"), "candidate": candidate}
     shutil.copytree(original.package_path, destination / "candidate")
     shutil.copytree(original.runtime_path, destination / "runtime")
     value = original.as_dict() | {

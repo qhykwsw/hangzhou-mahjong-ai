@@ -11,6 +11,32 @@ import subprocess
 import sys
 
 
+def model_service(root, remaining, env):
+    """A model policy plays through a local inference service, loaded before the room.
+
+    The exported weights are copied into the run directory and served from
+    there; the service address and the encoder location go to the player.
+    """
+    if "--policy" not in remaining:
+        return None
+    policy = Path(remaining[remaining.index("--policy") + 1])
+    if not policy.is_file() or json.loads(policy.read_text()).get("family") != "model":
+        return None
+    weights = json.loads(policy.read_text())["parameters"]["weights"]
+    models = root / "models"
+    if not (models / weights).exists():
+        shutil.copytree(policy.parent / "models" / weights, models / weights)
+    repo = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(repo / "src"))
+    from mahjong_ai.execution.model_service import ModelService
+
+    service = ModelService(root=models, log=root / "model-server.log")
+    env["MAHJONG_MODEL_SERVER"] = service.url()
+    env["MAHJONG_SELFPLAY"] = str(service.project)
+    service.warm([weights])
+    return service
+
+
 def main():
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--output", required=True)
@@ -36,17 +62,22 @@ def main():
     else:
         marker.write_text(json.dumps(hashes, indent=2))
     env = dict(os.environ, PYTHONPATH=str(root / "runtime"))
-    code = subprocess.call(
-        [
-            sys.executable,
-            "-m",
-            "mahjong_ai.platform.free_play",
-            "--output",
-            str(root),
-            *remaining,
-        ],
-        env=env,
-    )
+    service = model_service(root, remaining, env)
+    try:
+        code = subprocess.call(
+            [
+                sys.executable,
+                "-m",
+                "mahjong_ai.platform.free_play",
+                "--output",
+                str(root),
+                *remaining,
+            ],
+            env=env,
+        )
+    finally:
+        if service:
+            service.close()
     if code or "--help" in remaining or "-h" in remaining:
         return code
     return subprocess.call(
