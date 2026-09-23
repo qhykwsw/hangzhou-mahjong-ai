@@ -99,12 +99,66 @@ def application(project, tailscale_url=None):
             }
         )
 
-    async def state(request):
-        return JSONResponse(
-            await asyncio.to_thread(
-                arena.snapshot, request.query_params.get("experiment")
+    # The workbench polls every 2 seconds, and a snapshot costs seconds to
+    # build (the whole research state is one JSON document). Polls share one
+    # summary: once one exists, a poll returns it at once and, if it is older
+    # than a few seconds, starts one background rebuild (stale while
+    # revalidating). Only the first poll, or one after a mutation, waits.
+    polling = {"key": None, "task": None, "at": 0.0, "value": None}
+
+    def rebuild(experiment):
+        task = polling["task"]
+        if task is None or task.done() or polling.get("task_key") != experiment:
+            task = asyncio.ensure_future(
+                asyncio.to_thread(arena.snapshot, experiment, None, 0, True)
             )
-        )
+
+            def landed(done):
+                if not done.cancelled() and done.exception() is None:
+                    polling.update(key=experiment, at=time.monotonic(), value=done.result())
+
+            task.add_done_callback(landed)
+            polling.update(task=task, task_key=experiment)
+        return task
+
+    async def summary(experiment):
+        fresh = polling["key"] == experiment and polling["at"] > 0
+        if fresh:
+            if time.monotonic() - polling["at"] > 3:
+                rebuild(experiment)
+            return polling["value"]
+        return await rebuild(experiment)
+
+    def slim(snapshot):
+        """A mutation's full snapshot, reduced to the polling summary's fields."""
+        current = {b.get("representative") for b in snapshot["branches"]}
+        long = ("last_result", "hypothesis", "checks", "preflight")
+        return snapshot | {
+            "iterations": [],
+            "research_conclusions": [],
+            "candidates": [
+                {
+                    k: v
+                    for k, v in c.items()
+                    if k not in long or (k != "last_result" and c["id"] in current)
+                }
+                for c in snapshot["candidates"]
+            ],
+        }
+
+    async def state(request):
+        experiment = request.query_params.get("experiment")
+        branch = request.query_params.get("branch")
+        try:
+            if branch:
+                value = await asyncio.to_thread(arena.snapshot, experiment, branch)
+            elif request.query_params.get("summary") == "1":
+                value = await summary(experiment)
+            else:
+                value = await asyncio.to_thread(arena.snapshot, experiment)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse(value)
 
     async def activity(request):
         try:
@@ -160,7 +214,8 @@ def application(project, tailscale_url=None):
                     value.get("rounds", 0),
                     value.get("options") or {},
                 )
-            return JSONResponse(result)
+            polling["at"] = 0.0  # the next poll must see this change
+            return JSONResponse(slim(result))
         except (ValueError, KeyError, TypeError) as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
 

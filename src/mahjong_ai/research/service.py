@@ -2091,7 +2091,13 @@ class Research:
             training=training,
         )
 
-    def snapshot(self, experiment=None, branch=None, after=0):
+    def snapshot(self, experiment=None, branch=None, after=0, summary=False):
+        """Research state for the MCP and the workbench.
+
+        summary=True is the workbench's polling view: iteration records,
+        research conclusions and candidates' last results grow with every
+        round and are served per branch (branch=...) when a detail opens.
+        """
         if self.store.read() is None:
             self.register()
         s = self.read(experiment)
@@ -2129,12 +2135,21 @@ class Research:
             }
             for b in s["branches"].values()
         ]
+        hidden = ("workspace", "spec", "training", "runtime_path")
+        current = {b.get("representative") for b in s["branches"].values()}
         candidates = [
             {
                 **{
                     k: v
                     for k, v in c.items()
-                    if k not in ("workspace", "spec", "training", "runtime_path")
+                    if k not in hidden
+                    and not (
+                        summary
+                        and (k == "last_result" or (
+                            k in ("hypothesis", "checks", "preflight")
+                            and c["id"] not in current
+                        ))
+                    )
                 },
                 "available": bool(c.get("spec")),
             }
@@ -2153,7 +2168,7 @@ class Research:
                 ),
             }
             for it in s["iterations"].values()
-            if not branch or it["branch"] == branch
+            if not summary and (not branch or it["branch"] == branch)
         ]
         ranking = (
             cycle["ranking"]
@@ -2200,7 +2215,7 @@ class Research:
 
         return dict(
             experiment=public_experiment,
-            research_conclusions=ledger(s, branch),
+            research_conclusions=[] if summary else ledger(s, branch),
             config=deepcopy(s["config"]),
             combinations=list(s["definitions"].values()),
             branches=branches,

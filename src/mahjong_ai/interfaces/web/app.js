@@ -545,12 +545,18 @@ function render() {
   )
     notice(experiment.pause_reason);
 }
+let refreshing = false;
+/* Polls the summary; a slow response is never overlapped by the next poll. */
 async function refresh() {
+  if (refreshing) return;
+  refreshing = true;
   try {
-    state = await api("/api/state");
+    state = await api("/api/state?summary=1");
     render();
   } catch (e) {
     notice(e.message);
+  } finally {
+    refreshing = false;
   }
 }
 $("selectionPanel").addEventListener("change", (e) => {
@@ -694,16 +700,28 @@ for (const name of ["work", "ranking", "recipe"])
   };
 $("rankingHistory").onchange = renderRanking;
 $("closeDetail").onclick = () => $("detailDialog").close();
-function showDetail(button) {
+/* History grows with every round, so a branch's records load when its detail opens. */
+async function showDetail(button) {
   detailBranch = button.dataset.detail;
   $("detailTitle").textContent = detailBranch;
   const row = state.branches.find((b) => b.id === detailBranch);
   $("archiveBranch").hidden = Boolean(row?.archived);
   $("archiveNote").hidden = Boolean(row?.archived);
   $("archiveBranch").disabled = Boolean(busy());
+  $("detailContent").innerHTML = "<p class='muted'>加载中…</p>";
+  if (!$("detailDialog").open) $("detailDialog").showModal();
+  const branch = detailBranch;
+  let detail;
+  try {
+    detail = await api("/api/state?branch=" + encodeURIComponent(branch));
+  } catch (e) {
+    $("detailContent").innerHTML = `<p class='muted'>${esc(e.message)}</p>`;
+    return;
+  }
+  if (branch !== detailBranch) return;
   $("detailContent").innerHTML =
     "<h3>累计研究结论</h3>" +
-    ((state.research_conclusions || [])
+    ((detail.research_conclusions || [])
       .filter((r) => r.branch === detailBranch)
       .map((r) => {
         const a = r.assessment;
@@ -718,7 +736,7 @@ function showDetail(button) {
         ].map(([label, text]) => `<div><dt>${label}</dt><dd>${esc(text)}</dd></div>`).join("")}</dl><details><summary>评估条件与执行证据 · ${r.revision_count} 次结论记录</summary><pre>${esc(JSON.stringify(r.evidence, null, 2))}</pre></details></details>`;
       }).join("") || "<p class='muted'>尚无已完成尝试的研究结论。</p>") +
     "<h3 id='detailPlan'>研究判断</h3>" +
-    (state.iterations
+    (detail.iterations
       .filter((i) => i.branch === detailBranch && i.plan)
       .slice()
       .reverse()
@@ -734,7 +752,7 @@ function showDetail(button) {
       )
       .join("") || "<p class='muted'>尚无研究判断记录。</p>") +
     "<h3>迭代记录</h3>" +
-    (state.iterations
+    (detail.iterations
       .filter((i) => i.branch === detailBranch)
       .slice()
       .reverse()
@@ -745,14 +763,13 @@ function showDetail(button) {
       .join("") || "<p>尚无迭代记录。</p>");
   $("detailContent").innerHTML +=
     "<h3>候选历史</h3>" +
-    state.candidates
+    detail.candidates
       .filter((c) => c.branch === detailBranch)
       .map(
         (c) =>
           `<details><summary>${esc(c.id.split("--").at(-1))} · ${esc(c.status)}</summary><p>${esc(c.hypothesis)}</p></details>`,
       )
       .join("");
-  $("detailDialog").showModal();
 }
 for (const id of ["branchList", "archived"])
   $(id).onclick = (event) => {
@@ -793,7 +810,7 @@ $("archived").onclick = async (e) => {
 (async () => {
   try {
     catalog = await api("/api/directions");
-    state = await api("/api/state");
+    state = await api("/api/state?summary=1");
     initializeForm();
     render();
     setInterval(refresh, 2000);
