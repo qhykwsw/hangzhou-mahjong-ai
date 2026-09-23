@@ -397,6 +397,14 @@ class Controller:
                         and not it.get("recipe_notified")
                     ):
                         it["recipe_notified"] = True
+                        host = s["config"].get("brawl_host")
+                        winner = s["candidates"].get(it.get("representative"))
+                        if it.get("improved") and host and winner:
+                            # A new RL version will enter the next brawl: move
+                            # its weights to the brawl host now, not when the
+                            # brawl starts (relayed uploads take minutes).
+                            model = self.research.layout.research / "models" / winner["spec"]["parameters"]["weights"]
+                            self.dispatcher(s, host).call(lambda remote, m=model: remote.sync([m]), None)
                         result = it["results"].get(it["candidates"][0]) or {}
                         concluded.append((it["recipe_trial"], bool(it.get("improved")),
                                           {k: result.get(k) for k in ("paired", "promotion",

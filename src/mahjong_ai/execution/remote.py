@@ -341,7 +341,7 @@ class Dispatcher:
 
     def call(self, function, root):
         """Run slow host work (syncs, then a hand-off) off the controller loop."""
-        self.requests.put(("call", function, Path(root)))
+        self.requests.put(("call", function, None if root is None else Path(root)))
 
     def busy(self):
         with self.lock:
@@ -430,7 +430,8 @@ class Dispatcher:
                 try:
                     request[1](self.host)
                 except Exception as exc:
-                    self._write(request[2], {"status": "failed", "error": f"远程准备失败：{exc}"[:4000]})
+                    if request[2] is not None:
+                        self._write(request[2], {"status": "failed", "error": f"远程准备失败：{exc}"[:4000]})
             elif request and request[0] == "cancel":
                 with self.lock:
                     entry = self.running.pop(request[1], None)
