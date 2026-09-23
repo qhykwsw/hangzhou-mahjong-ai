@@ -28,6 +28,20 @@ class ModelService:
         self.log = research.layout.research / "model-server.log"
         self.process = None
         self.port = None
+        self.warmed = set()
+
+    def warm(self, weights):
+        """Load models before play: a cold load must not fall inside an action window."""
+        url = self.url()
+        for sha in sorted(set(weights) - self.warmed):
+            request = urllib.request.Request(
+                url + "/load", json.dumps({"model": sha}).encode(),
+                {"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(request, timeout=600) as reply:
+                if not json.loads(reply.read()).get("ok"):
+                    raise RuntimeError("模型预热失败：" + sha)
+            self.warmed.add(sha)
 
     def _healthy(self):
         try:
@@ -40,6 +54,7 @@ class ModelService:
 
     def url(self):
         if self.process is None or self.process.poll() is not None:
+            self.warmed = set()
             self._start()
         return f"http://127.0.0.1:{self.port}"
 

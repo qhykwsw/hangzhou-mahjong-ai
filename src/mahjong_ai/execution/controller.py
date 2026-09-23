@@ -10,7 +10,7 @@ from mahjong_ai.persistence.artifacts import atomic_json, read_json, digest
 from mahjong_ai.domain.engine import derive_seed
 from mahjong_ai.execution.model_service import ModelService, SERVER_ENV
 from mahjong_ai.execution.model_seat import ENCODER_ENV
-from mahjong_ai.execution.remote import Dispatcher, RemoteHost, opponent_specs
+from mahjong_ai.execution.remote import Dispatcher, RemoteHost, model_weights, opponent_specs
 import json
 
 # 逐个放出 Agent，避免同一秒把整个并发上限压给模型网关触发限流。
@@ -433,6 +433,7 @@ class Controller:
         ):
             env[SERVER_ENV] = self.models.url()
             env[ENCODER_ENV] = str(self.models.project)
+            self.models.warm(model_weights(task))
         for key in (
             "OMP_NUM_THREADS",
             "OPENBLAS_NUM_THREADS",

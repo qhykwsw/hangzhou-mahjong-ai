@@ -92,14 +92,17 @@ class Service:
                     break
             groups = {}
             for model, payload, future, deadline in pending:
-                # Pre-encoded and observation requests run as separate batches.
-                key = (model, "encoded" in payload)
+                # Pre-encoded, observation and warm-up requests run as separate batches.
+                key = (model, "warm" if payload.get("warm") else "encoded" in payload)
                 groups.setdefault(key, []).append((payload, future, deadline))
             for (model, pre_encoded), rows in groups.items():
                 started = time.perf_counter()
                 try:
                     actor, meta = self.models.get(model)
-                    if pre_encoded:
+                    if pre_encoded == "warm":
+                        parsed = None
+                        encoded = [blank()]
+                    elif pre_encoded:
                         if any(p["lookahead"] != meta["config"]["lookahead"] for p, _, _ in rows):
                             raise ValueError("encoding does not match the model's lookahead")
                         parsed = None
@@ -115,6 +118,9 @@ class Service:
                     self.stats["prepare_seconds"] += prepared - started
                     self.stats["forward_seconds"] += time.perf_counter() - prepared
                     for i, ((payload, future, _), index) in enumerate(zip(rows, choice)):
+                        if pre_encoded == "warm":
+                            future.set_result({"ok": True})
+                            continue
                         if pre_encoded:
                             future.set_result({"index": int(index)})
                             continue
@@ -134,6 +140,18 @@ class Service:
     def close(self):
         self.closed.set()
         self.thread.join(timeout=5)
+
+
+def blank():
+    """A minimal valid Actor input, for loading a model and its kernels ahead of play."""
+    import numpy as np
+    from selfplay_core.actions import N_ACTIONS
+    from selfplay_core.encoding import N_PLANES, N_SCALARS
+
+    mask = np.zeros(N_ACTIONS, dtype=bool)
+    mask[0] = True
+    return {"planes": np.zeros((N_PLANES, 34), np.float16), "scalars": np.zeros(N_SCALARS, np.float16),
+            "events": np.zeros((1, 5), np.int16), "mask": mask}
 
 
 def decode(data):
@@ -193,18 +211,24 @@ def serve(service, port, host="127.0.0.1"):
 
         def do_GET(self):
             if self.path == "/health":
-                self._reply(200, {"ok": True, "device": service.models.device, **service.stats})
+                self._reply(200, {"ok": True, "device": service.models.device,
+                                  "code": str(Path(__file__).resolve().parents[4]), **service.stats})
             else:
                 self._reply(404, {"error": "not found"})
 
         def do_POST(self):
-            if self.path != "/act":
+            if self.path not in ("/act", "/load"):
                 return self._reply(404, {"error": "not found"})
             length = int(self.headers.get("Content-Length") or 0)
             if not 0 < length <= MAX_BODY:
                 return self._reply(413, {"error": "invalid body size"})
             try:
                 request = json.loads(self.rfile.read(length))
+                if self.path == "/load":
+                    # Load the model and run one batch now, so the first move
+                    # of a match does not pay for it inside its action window.
+                    future = service.submit(request["model"], {"warm": True})
+                    return self._reply(200, future.result(timeout=600))
                 future = service.submit(request["model"], request)
                 self._reply(200, future.result(timeout=service.timeout))
             except Exception as exc:

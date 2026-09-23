@@ -120,11 +120,19 @@ class RemoteHost:
         """Start (once) the host's inference service over the mirrored models."""
         if self.service_code is None:
             self.service_code = self._upload_code(code_files)
+        # A service left running from older code is replaced: requests and
+        # endpoints change with the code (health reports its code root).
         script = f"""import json,os,subprocess,time,urllib.request
 url='http://127.0.0.1:{SERVICE_PORT}/health'
-def ok():
-    try: return json.loads(urllib.request.urlopen(url,timeout=2).read()).get('ok') is True
-    except Exception: return False
+def health():
+    try: return json.loads(urllib.request.urlopen(url,timeout=2).read())
+    except Exception: return {{}}
+def ok(): return health().get('ok') is True and health().get('code') == {self.service_code!r}
+if health().get('ok') and not ok():
+    subprocess.run(['pkill','-f','guided.model_server .*--port {SERVICE_PORT}'])
+    for _ in range(40):
+        time.sleep(0.5)
+        if not health(): break
 if not ok():
     log=open({self.service_code + '/model-server.log'!r},'ab')
     env=dict(os.environ); [env.pop(k,None) for k in ('http_proxy','https_proxy','HTTP_PROXY','HTTPS_PROXY')]
@@ -138,6 +146,16 @@ print(json.dumps(ok()))
         if not self.python(script, timeout=300):
             raise RuntimeError(f"{self.name}: 模型推理服务未能启动")
         return f"http://127.0.0.1:{SERVICE_PORT}"
+
+    def warm(self, weights):
+        """Load models into the host's service before its matches start."""
+        script = f"""import json,urllib.request
+for sha in {sorted(weights)!r}:
+    r=urllib.request.Request('http://127.0.0.1:{SERVICE_PORT}/load',json.dumps({{'model':sha}}).encode(),{{'Content-Type':'application/json'}})
+    assert json.loads(urllib.request.urlopen(r,timeout=600).read()).get('ok'),sha
+print(json.dumps(True))
+"""
+        return self.python(script, timeout=900)
 
     def _upload_code(self, files):
         import hashlib
@@ -466,6 +484,8 @@ class Dispatcher:
                 self.host.ensure_service(self.models_root, service_code_files())
                 if weights else None
             )
+            if weights:
+                self.host.warm(weights)
             jobs = []
             for _, root, task, runtime, env in batch:
                 env = dict(env)
