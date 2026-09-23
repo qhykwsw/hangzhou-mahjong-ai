@@ -2373,7 +2373,8 @@ class Research:
         config = s["cycles"][iteration["cycle"] - 1]["config"]
         training = []
         for cid in iteration["candidates"]:
-            candidate = s["candidates"][cid]
+            # A recipe branch's candidate exists only once its model is handed back.
+            candidate = s["candidates"].get(cid) or {"status": "training"}
             record = candidate.get("training")
             training.append(
                 dict(

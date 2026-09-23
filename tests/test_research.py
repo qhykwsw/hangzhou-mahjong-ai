@@ -1840,3 +1840,19 @@ def test_a_model_version_exports_its_weights_for_platform_play(tmp_path):
     policy = spec(out["policy"])
     assert policy.family == "model" and policy.parameters == {"weights": sha}
     assert (tmp_path / "entrant/models" / sha / "actor.pt").read_bytes() == b"weights"
+
+
+def test_views_work_while_a_recipe_candidate_is_still_training(tmp_path):
+    config = small_config() | {
+        "hosts": {"gpu": GPU},
+        "combinations": small_config()["combinations"]
+        + [dict(id="rl-recipe", branches=1, models=["astra"], parameters={"line": "rl"},
+                evaluation_games=8, evaluation_host="gpu")],
+    }
+    r, run, controller = start_research(tmp_path, config)
+    with r.edit(run) as (s, db):
+        rl = s["branches"]["rl-recipe--01"]
+        rl.update(status="ready", representative=next(iter(s["branches"].values()))["representative"])
+        r.start_iteration(s, "rl-recipe--01")
+    assert r.snapshot(run)["branch_progress"]["rl-recipe--01"]["research"]
+    assert r.snapshot(run, "rl-recipe--01")["iterations"]
