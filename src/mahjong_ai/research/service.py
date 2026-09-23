@@ -735,7 +735,13 @@ class Research:
 
     @staticmethod
     def queue(s, kind, **fields):
-        jid = f"{kind}-{len(s['jobs']):07d}"
+        # A persistent sequence, never the job count: a removed job's number
+        # (and its directory, with a stale task.json) must never be reused.
+        number = s.get("job_sequence")
+        if number is None:
+            number = 1 + max((int(k.rsplit("-", 1)[1]) for k in s["jobs"]), default=-1)
+        s["job_sequence"] = number + 1
+        jid = f"{kind}-{number:07d}"
         job = dict(
             id=jid,
             kind=kind,

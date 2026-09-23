@@ -1856,3 +1856,14 @@ def test_views_work_while_a_recipe_candidate_is_still_training(tmp_path):
         r.start_iteration(s, "rl-recipe--01")
     assert r.snapshot(run)["branch_progress"]["rl-recipe--01"]["research"]
     assert r.snapshot(run, "rl-recipe--01")["iterations"]
+
+
+def test_job_numbers_are_never_reused_after_jobs_are_removed(research):
+    r, run, controller = research
+    with r.edit(run) as (s, db):
+        first = r.queue(s, "agent", branch="b")
+        second = r.queue(s, "agent", branch="b")
+        del s["jobs"][first["id"]], s["jobs"][second["id"]]
+        third = r.queue(s, "agent", branch="b")
+        assert third["id"] not in (first["id"], second["id"])
+        assert int(third["id"].rsplit("-", 1)[1]) > int(second["id"].rsplit("-", 1)[1])
