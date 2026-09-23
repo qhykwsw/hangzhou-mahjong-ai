@@ -61,7 +61,8 @@ class Service:
         self.models, self.max_batch = models, max_batch
         self.batch_wait, self.timeout = batch_wait, timeout
         self.queue, self.closed = queue.Queue(), threading.Event()
-        self.stats = dict(requests=0, batches=0, seconds=0.0)
+        self.stats = dict(requests=0, batches=0, seconds=0.0, prepare_seconds=0.0,
+                          forward_seconds=0.0)
         self.thread = threading.Thread(target=self._loop, name="inference", daemon=True)
         self.thread.start()
 
@@ -91,19 +92,33 @@ class Service:
                     break
             groups = {}
             for model, payload, future, deadline in pending:
-                groups.setdefault(model, []).append((payload, future, deadline))
-            for model, rows in groups.items():
+                # Pre-encoded and observation requests run as separate batches.
+                key = (model, "encoded" in payload)
+                groups.setdefault(key, []).append((payload, future, deadline))
+            for (model, pre_encoded), rows in groups.items():
                 started = time.perf_counter()
                 try:
                     actor, meta = self.models.get(model)
-                    parsed = [parse_observation(payload) for payload, _, _ in rows]
-                    encoded = [encode(obs, lookahead=meta["config"]["lookahead"]) for obs in parsed]
+                    if pre_encoded:
+                        if any(p["lookahead"] != meta["config"]["lookahead"] for p, _, _ in rows):
+                            raise ValueError("encoding does not match the model's lookahead")
+                        parsed = None
+                        encoded = [decode(p["encoded"]) for p, _, _ in rows]
+                    else:
+                        parsed = [parse_observation(p["observation"]) for p, _, _ in rows]
+                        encoded = [encode(obs, lookahead=meta["config"]["lookahead"]) for obs in parsed]
+                    prepared = time.perf_counter()
                     with torch.inference_mode(), torch.autocast("mps", torch.float16, enabled=autocast):
                         planes, scalars, events, mask = inputs(encoded, actor_device(actor))
                         logits = actor(planes, scalars, events)
                         choice = masked_log_probs(logits.float(), mask).argmax(-1).tolist()
-                    for (payload, future, _), obs, index in zip(rows, parsed, choice):
-                        legal = [action_index(a) for a in obs.legal_actions]
+                    self.stats["prepare_seconds"] += prepared - started
+                    self.stats["forward_seconds"] += time.perf_counter() - prepared
+                    for i, ((payload, future, _), index) in enumerate(zip(rows, choice)):
+                        if pre_encoded:
+                            future.set_result({"index": int(index)})
+                            continue
+                        legal = [action_index(a) for a in parsed[i].legal_actions]
                         if index not in legal:
                             future.set_exception(RuntimeError("Actor chose an illegal action"))
                         else:
@@ -119,6 +134,23 @@ class Service:
     def close(self):
         self.closed.set()
         self.thread.join(timeout=5)
+
+
+def decode(data):
+    """Actor input packed by a match worker (model_seat.pack)."""
+    import base64
+    import numpy as np
+    from selfplay_core.actions import N_ACTIONS
+    from selfplay_core.encoding import N_PLANES, N_SCALARS
+
+    raw = {k: base64.b64decode(v) for k, v in data.items()}
+    row = {
+        "planes": np.frombuffer(raw["planes"], dtype=np.float16).reshape(N_PLANES, 34),
+        "scalars": np.frombuffer(raw["scalars"], dtype=np.float16).reshape(N_SCALARS),
+        "events": np.frombuffer(raw["events"], dtype=np.int16).reshape(-1, 5),
+        "mask": np.frombuffer(raw["mask"], dtype=bool).reshape(N_ACTIONS),
+    }
+    return row
 
 
 def actor_device(actor):
@@ -173,7 +205,7 @@ def serve(service, port, host="127.0.0.1"):
                 return self._reply(413, {"error": "invalid body size"})
             try:
                 request = json.loads(self.rfile.read(length))
-                future = service.submit(request["model"], request["observation"])
+                future = service.submit(request["model"], request)
                 self._reply(200, future.result(timeout=service.timeout))
             except Exception as exc:
                 self._reply(400, {"error": str(exc)[:2000]})

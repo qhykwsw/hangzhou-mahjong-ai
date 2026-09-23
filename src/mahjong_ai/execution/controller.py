@@ -9,6 +9,7 @@ import time
 from mahjong_ai.persistence.artifacts import atomic_json, read_json, digest
 from mahjong_ai.domain.engine import derive_seed
 from mahjong_ai.execution.model_service import ModelService, SERVER_ENV
+from mahjong_ai.execution.model_seat import ENCODER_ENV
 from mahjong_ai.execution.remote import Dispatcher, RemoteHost, opponent_specs
 import json
 
@@ -348,6 +349,7 @@ class Controller:
             p.get("family") == "model" for p in task.get("policies", {}).values()
         ):
             env[SERVER_ENV] = self.models.url()
+            env[ENCODER_ENV] = str(self.models.project)
         for key in (
             "OMP_NUM_THREADS",
             "OPENBLAS_NUM_THREADS",

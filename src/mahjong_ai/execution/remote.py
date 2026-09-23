@@ -372,6 +372,7 @@ class Dispatcher:
                 env = dict(env)
                 if model_weights(task):
                     env["MAHJONG_MODEL_SERVER"] = server
+                    env["MAHJONG_SELFPLAY"] = self.host.service_code + "/projects/personal/selfplay"
                 jobs.append((root, task, runtime, env))
             pids = self.host.launch_many(jobs)
         except Exception as exc:

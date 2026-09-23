@@ -6,15 +6,43 @@ are addressed by the SHA-256 of their weights, which is also the artifact
 directory name below the service root on every host.
 """
 
+import base64
 import http.client
 import json
 import os
+import sys
 import time
 from urllib.parse import urlparse
 
 from mahjong_ai.execution.candidate_runtime import ActionUnavailable, observation_payload
 
 SERVER_ENV = "MAHJONG_MODEL_SERVER"
+# The self-play project, whose encoder turns an observation into Actor input.
+# Encoding here, in every match worker, keeps the shared service to batching
+# and inference (it was about half of the service's time).
+ENCODER_ENV = "MAHJONG_SELFPLAY"
+_ENCODER = []
+
+
+def encoder():
+    if not _ENCODER:
+        path = os.environ.get(ENCODER_ENV)
+        found = None
+        if path:
+            # Appended after the frozen runtime, which keeps providing mahjong_ai.
+            for entry in (path, os.path.join(path, "src")):
+                if entry not in sys.path:
+                    sys.path.append(entry)
+            from guided.encoding import encode
+            from selfplay_core.actions import action_index
+
+            found = (encode, action_index)
+        _ENCODER.append(found)
+    return _ENCODER[0]
+
+
+def pack(array):
+    return base64.b64encode(array.tobytes()).decode()
 
 
 class ModelPolicy:
@@ -46,14 +74,31 @@ class ModelPolicy:
         try:
             if self.connection is None:
                 self._connect()
-            data, _ = observation_payload(observation, None)
-            body = json.dumps({"model": self.weights, "observation": data})
-            self.connection.request("POST", "/act", body, {"Content-Type": "application/json"})
+            codec = encoder()
+            if codec:
+                encode, action_index = codec
+                row = encode(observation, lookahead=True)
+                request = {"model": self.weights, "lookahead": True, "encoded": {
+                    "planes": pack(row["planes"]), "scalars": pack(row["scalars"]),
+                    "events": pack(row["events"]), "mask": pack(row["mask"]),
+                }}
+            else:
+                data, _ = observation_payload(observation, None)
+                request = {"model": self.weights, "observation": data}
+            self.connection.request(
+                "POST", "/act", json.dumps(request), {"Content-Type": "application/json"}
+            )
             response = self.connection.getresponse()
             reply = json.loads(response.read())
             if response.status != 200:
                 raise RuntimeError(reply.get("error", f"HTTP {response.status}"))
-            index = reply["legal_index"]
+            if codec:
+                legal = [action_index(a) for a in observation.legal_actions]
+                if reply["index"] not in legal:
+                    raise ValueError("model chose an illegal action")
+                index = legal.index(reply["index"])
+            else:
+                index = reply["legal_index"]
             if type(index) is not int or not 0 <= index < len(observation.legal_actions):
                 raise ValueError("model returned an invalid action index")
             return observation.legal_actions[index]
