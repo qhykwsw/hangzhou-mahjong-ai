@@ -9,6 +9,8 @@ from pathlib import Path
 import re
 import ssl
 import tempfile
+import time
+import urllib.error
 import urllib.request
 
 from mahjong_ai.platform.calibration import calibrate
@@ -35,8 +37,15 @@ def main():
             else json.dumps(body, ensure_ascii=False).encode(),
             headers={"Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(request, context=context, timeout=30) as response:
-            return response.read(), response.status
+        # The per-IP limit is shared with any platform client on this machine.
+        for attempt in range(6):
+            try:
+                with urllib.request.urlopen(request, context=context, timeout=30) as response:
+                    return response.read(), response.status
+            except urllib.error.HTTPError as exc:
+                if exc.code != 429 or attempt == 5:
+                    raise
+                time.sleep(float(exc.headers.get("Retry-After") or 2 ** attempt))
 
     def get_json(path):
         return json.loads(fetch(path)[0])

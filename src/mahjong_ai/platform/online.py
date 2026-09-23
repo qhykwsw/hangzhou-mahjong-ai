@@ -194,6 +194,12 @@ class PlatformClient:
                     )
                 except (ValueError, TypeError, AttributeError):
                     code = ""
+                if exc.code == 404 and code == "TOURNAMENT_GONE" and attempt < self.retries:
+                    # Guide v35: the room exists but did not answer in time (busy at
+                    # start or settlement); the endpoints concerned are idempotent,
+                    # so retry. TOURNAMENT_NOT_FOUND (or no code) is permanent.
+                    time.sleep(min(10, 2**attempt))
+                    continue
                 raise ApiError(exc.code, code) from None
             except (urllib.error.URLError, TimeoutError, ConnectionError):
                 # A POST may have been accepted: caller must resync, never replay it blindly.

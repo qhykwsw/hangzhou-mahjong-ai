@@ -136,11 +136,13 @@ def fake_connection(answers, fail=0):
     """A stand-in HTTPSConnection: `answers` are statuses, `fail` first attempts raise."""
 
     class Response:
-        def __init__(self, status):
+        def __init__(self, answer):
+            # An answer is a status, or (status, JSON body) for error bodies.
+            status, self.body = answer if isinstance(answer, tuple) else (answer, b'{"ok":true}')
             self.status, self.reason, self.headers = status, "", {}
 
         def read(self):
-            return b'{"ok":true}'
+            return self.body
 
     class Connection:
         opened = 0
@@ -175,6 +177,23 @@ def test_http_retries_429_but_not_unknown_post_outcome(monkeypatch):
     client = PlatformClient("https://example.invalid", "test-not-a-real-token")
     with pytest.raises(ConnectionError, match="outcome may be unknown"):
         client.request("POST", "/action", {})
+
+
+def test_tournament_gone_is_retried_but_not_found_is_final(monkeypatch):
+    import mahjong_ai.platform.online as online
+
+    monkeypatch.setattr(online.time, "sleep", lambda _: None)
+    gone = (404, b'{"error":"TOURNAMENT_GONE"}')
+    monkeypatch.setattr(online.http.client, "HTTPSConnection", fake_connection([gone, gone, 200]))
+    client = PlatformClient("https://example.invalid", "test-not-a-real-token")
+    assert client.request("POST", "/api/tournaments/t1/ready") == {"ok": True}
+
+    missing = (404, b'{"error":"TOURNAMENT_NOT_FOUND"}')
+    monkeypatch.setattr(online.http.client, "HTTPSConnection", fake_connection([missing, 200]))
+    client = PlatformClient("https://example.invalid", "test-not-a-real-token")
+    with pytest.raises(ApiError) as error:
+        client.request("GET", "/api/tournaments/t1")
+    assert error.value.code == "TOURNAMENT_NOT_FOUND"
 
 
 def test_a_recycled_connection_is_reopened_for_the_next_poll(monkeypatch):

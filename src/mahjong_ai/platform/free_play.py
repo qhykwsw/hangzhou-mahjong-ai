@@ -28,6 +28,22 @@ from mahjong_ai.persistence.artifacts import (
 )
 
 
+def request_match(client, attempts=8):
+    """POST /api/match, retrying 409 MATCH_BUSY as the guide requires.
+
+    MATCH_BUSY also means a seat may already be placed without confirmation;
+    calling again returns that room idempotently, so a retry never opens a
+    second room (guide, 2026-09-23).
+    """
+    for attempt in range(attempts):
+        try:
+            return client.request("POST", "/api/match", {"M": 16})
+        except ApiError as exc:
+            if exc.status != 409 or exc.code != "MATCH_BUSY" or attempt == attempts - 1:
+                raise
+            time.sleep(min(30, 3 * (attempt + 1)))
+
+
 def run_match(
     credentials,
     policy,
@@ -97,7 +113,7 @@ def run_match(
             }
             atomic_json(state_path, state)
             try:
-                match = client.request("POST", "/api/match", {"M": 16})
+                match = request_match(client)
             except ApiError as exc:
                 # A definitive rejection is safe to retry explicitly. Never retry
                 # a lost response: a room may already be running by then.
@@ -157,9 +173,11 @@ def run_match(
             tournament = client.request("GET", f"/api/tournaments/{_id(tid)}")
             atomic_json(tournament_path, _redact(tournament))
         except ApiError as exc:
+            # A room that stays TOURNAMENT_GONE through the client's retries is
+            # recorded as unavailable like a removed one; its games are still read.
             if exc.status != 404:
                 raise
-            state["room_unavailable"] = True
+            state["room_unavailable"] = exc.code or "TOURNAMENT_NOT_FOUND"
         # Coordinator may observe finished before a worker captures its final snapshot.
         for gid in tournament.get("my_games", []):
             path = root / "player" / ("game-" + digest(gid)[:24] + ".json")

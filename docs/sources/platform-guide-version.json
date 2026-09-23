@@ -1,6 +1,13 @@
 {
   "changes": [
     {
+      "version": 35,
+      "date": "2026-09-23",
+      "type": "breaking",
+      "summary": "404 TOURNAMENT_GONE 具名：它与 TOURNAMENT_NOT_FOUND 共用 404 —— 前者是「房暂时不可达」（应重试），后者是「房不存在」（应放弃）；判型必须用 body 的 code",
+      "detail": "玩家 API + 门户面 breaking（**服务端 wire 零字节变化** —— 本条目是把既有事实写进契约，不是新增错误码）：\n① 根因：服务端用**同一个 HTTP 404** 承载两种语义相反的 condition ——\n   ・ TOURNAMENT_NOT_FOUND：注册表里没有这个 id（从未创建，或正常关停/终态后已被移除）⇒ **永久条件，放弃**；\n   ・ TOURNAMENT_GONE：注册表里**有**该 id，但没能在预算内（2s）等到该房 actor 的回执（房忙 / 库慢；开赛与结算瞬间最常见）⇒ **暂时条件，稍后重试即可**（register/ready 幂等，重试安全）。\n   此前正文错误表的 404 行只登记了前者，后者**从未具名** ⇒ 读者与实现一道把它读成「房不存在」。\n② 生产后果（2026-09-23）：某客户端只看 status==404 就判「房已被服务端删除」并放弃本房，连挂三次静默退出；房 t_069a55e84b26（20:00 开打）开赛后该方座位无人操作、被服务端按超时自动出牌。\n③ 本次改动：正文 404 段新增 **TOURNAMENT_GONE 具名行**（并列写明两义与各自处置）。**状态码、端点、字段集一律未动** —— 这是契约的**澄清**，但它让旧读法暴露为错误。\n④ bot 应对（**旧 bot 需要改**）：把「status==404 ⇒ 房已删 ⇒ 退出/放弃」的判据改为**按 code 判型**：body.code == \"TOURNAMENT_NOT_FOUND\"（或缺失）⇒ 放弃；body.code == \"TOURNAMENT_GONE\" ⇒ 稍后重试（退避后重调同一端点；register/ready 幂等，重复提交安全）。以详情/状态轮询为判据的循环同理。\n⑤ 涉及端点（两义都可能出现）：POST /api/tournaments/{id}/register、POST /api/tournaments/{id}/ready、POST /api/tournaments/me/ready、GET /api/tournaments/{id}、GET /api/tournaments/me/rules，以及门户面 register/token/qualify/detail/ranking 与 POST /portal/api/test-rooms/{id}/close。\n⑥ 不受影响：/api/match 的 409 MATCH_BUSY 与 404 NO_ROOM_AVAILABLE 一字未动；admin 面不涉（actor 不可用本就是 500）；/api/games/{id}/* 的 404 是 GAME_NOT_FOUND，与本案无关。"
+    },
+    {
       "version": 34,
       "date": "2026-09-14",
       "type": "added",
@@ -406,6 +413,6 @@
       "detail": "4 白板倍率条件明确为「手留 + 链内飘出的白板 = 4 张」（白板共 4 张不可能超过），普通打出/杠出的不算。"
     }
   ],
-  "updated_at": "2026-09-14",
-  "version": 34
+  "updated_at": "2026-09-23",
+  "version": 35
 }

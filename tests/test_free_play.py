@@ -147,3 +147,28 @@ def test_closed_room_with_missing_finals_is_incomplete(tmp_path):
     )
     assert result["status"] == "incomplete"
     assert result["valid_final_snapshots"] == 0
+
+
+def test_match_busy_is_retried_and_other_rejections_are_not(monkeypatch):
+    import mahjong_ai.platform.free_play as free_play
+    from mahjong_ai.platform.free_play import request_match
+    from mahjong_ai.platform.online import ApiError
+
+    monkeypatch.setattr(free_play.time, "sleep", lambda _: None)
+
+    class Busy:
+        def __init__(self, errors):
+            self.errors, self.calls = list(errors), 0
+
+        def request(self, method, path, body=None):
+            self.calls += 1
+            if self.errors:
+                raise self.errors.pop(0)
+            return {"room_id": "room"}
+
+    busy = Busy([ApiError(409, "MATCH_BUSY"), ApiError(409, "MATCH_BUSY")])
+    assert request_match(busy) == {"room_id": "room"} and busy.calls == 3
+    limit = Busy([ApiError(409, "MATCH_LIMIT_REACHED")])
+    with pytest.raises(ApiError):
+        request_match(limit)
+    assert limit.calls == 1

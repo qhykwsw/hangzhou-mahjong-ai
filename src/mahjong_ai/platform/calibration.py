@@ -6,6 +6,7 @@ import json
 import random
 import ssl
 import time
+import urllib.error
 import urllib.request
 
 from mahjong_ai.domain.rules import CODES, calculate_fan, payments, tile_id
@@ -28,8 +29,15 @@ def _request(base, path, body=None, insecure=False):
         headers={"Content-Type": "application/json"},
         method="POST" if body is not None else "GET",
     )
-    with urllib.request.urlopen(request, timeout=15, context=context) as response:
-        return json.load(response)
+    # The per-IP limit is shared with any platform client on this machine.
+    for attempt in range(6):
+        try:
+            with urllib.request.urlopen(request, timeout=15, context=context) as response:
+                return json.load(response)
+        except urllib.error.HTTPError as exc:
+            if exc.code != 429 or attempt == 5:
+                raise
+            time.sleep(float(exc.headers.get("Retry-After") or 2 ** attempt))
 
 
 def samples(count=32, seed=104):
