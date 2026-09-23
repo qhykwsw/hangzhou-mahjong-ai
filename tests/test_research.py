@@ -1600,3 +1600,37 @@ def test_recipe_branch_hands_trained_model_to_staged_evaluation(tmp_path):
         assert matches and all(j["host"] == "gpu" for j in matches)
         blocks = {a["block"] for j in matches for a in j["assignments"]}
         assert blocks == {0, 1}  # 8 games per side in the first stage
+
+
+def test_waiting_evaluations_overflow_to_an_idle_host(tmp_path, monkeypatch):
+    host = {"ssh": "h", "distro": "d", "user": "u", "python": "/p", "root": "/r", "workers": 2}
+    r, run, controller = start_research(
+        tmp_path, small_config() | {"hosts": {"gpu": host}, "overflow_hosts": ["gpu"]}
+    )
+
+    class Probe:
+        idle = False
+
+        def idle_for_overflow(self):
+            return self.idle
+
+    probe = Probe()
+    monkeypatch.setattr(controller, "dispatcher", lambda s, name: probe)
+    with r.edit(run) as (s, db):
+        cid = next(iter(s["branches"].values()))["representative"]
+        jobs = [
+            r.queue(s, "match", scope="paired", cycle=s["cycles"][-1]["id"], candidate=cid,
+                    assignments=[dict(index=0, block=b, focal=0, players=[cid] * 4)])
+            for b in range(5)
+        ]
+        controller.overflow(s, 2)
+        assert not any(j.get("host") for j in jobs)  # host still training
+        probe.idle = True
+        controller.overflow(s, 2)
+        # Two start locally; of the three left waiting, the host takes two.
+        assert [bool(j.get("host")) for j in jobs] == [False, False, True, True, False]
+        s["candidates"][cid]["requirements"] = ["lightgbm==4.6.0"]
+        for j in jobs:
+            j.pop("host", None)
+        controller.overflow(s, 2)
+        assert not any(j.get("host") for j in jobs)

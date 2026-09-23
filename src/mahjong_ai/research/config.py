@@ -81,6 +81,9 @@ DEFAULTS = {
     "guests": [],
     # Remote match hosts: {name: {ssh, distro, user, python, root, workers}}.
     "hosts": {},
+    # Hosts that take local paired evaluations waiting beyond local capacity,
+    # but only while no training runs on them.
+    "overflow_hosts": [],
     "training_games": 128,
     "initialization_seconds": 3600,
     "combinations": [
@@ -154,6 +157,10 @@ def validate(config):
         for h in config["hosts"].values()
     ):
         raise ValueError("hosts entries need ssh, distro, user, python, root and workers")
+    if not isinstance(config["overflow_hosts"], list) or any(
+        h not in config["hosts"] for h in config["overflow_hosts"]
+    ):
+        raise ValueError("overflow_hosts must name configured hosts")
     for key in ("anchors", "guests"):
         if not isinstance(config[key], list) or any(
             not isinstance(a, str) for a in config[key]

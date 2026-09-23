@@ -322,13 +322,17 @@ class Dispatcher:
     exactly as a local worker would have written them.
     """
 
-    def __init__(self, host, models_root, poll_seconds=30.0):
+    # Training on a host (imitation, recipe trials) means it is not idle.
+    TRAINING = r"guided\.(imitate|trial|run)\b"
+
+    def __init__(self, host, models_root, poll_seconds=30.0, probe_seconds=60.0):
         import queue
         import threading
 
         self.host, self.models_root, self.poll_seconds = host, Path(models_root), poll_seconds
         self.requests, self.running = queue.Queue(), {}
         self.errors = {}
+        self.probe_seconds, self.training = probe_seconds, None  # unknown = busy
         self.lock = threading.Lock()
         self.thread = threading.Thread(target=self._loop, name=f"remote-{host.name}", daemon=True)
         self.thread.start()
@@ -346,6 +350,20 @@ class Dispatcher:
     def busy(self):
         with self.lock:
             return len(self.running) + self.requests.qsize()
+
+    def idle_for_overflow(self):
+        """True once a probe saw no training process on the host."""
+        return self.training is False
+
+    def _probe(self):
+        try:
+            self.training = bool(self.host.python(
+                "import json,subprocess\nprint(json.dumps(subprocess.run(['pgrep','-f',"
+                + repr(self.TRAINING) + "],capture_output=True).returncode==0))\n",
+                timeout=120,
+            ))
+        except Exception:
+            self.training = None
 
     def _write(self, root, result):
         from mahjong_ai.persistence.artifacts import atomic_json
@@ -408,7 +426,7 @@ class Dispatcher:
         import queue
         import time
 
-        last = 0.0
+        last = probed = 0.0
         while True:
             try:
                 request = self.requests.get(timeout=1.0)
@@ -449,3 +467,6 @@ class Dispatcher:
             if time.monotonic() - last >= self.poll_seconds:
                 self._poll()
                 last = time.monotonic()
+            if time.monotonic() - probed >= self.probe_seconds:
+                self._probe()
+                probed = time.monotonic()

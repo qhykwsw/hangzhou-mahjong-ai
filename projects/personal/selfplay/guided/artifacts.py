@@ -207,6 +207,14 @@ def export_bundle(project_root, output_root) -> Path:
     current = Path(state.get("runtime_path") or "").name
     chosen = current if current in runtime_paths else entries[0]["original_runtime"]
     chosen_path, chosen_hash = runtime_paths[chosen]
+    override = state.get("candidate_runtime_path")
+    if override:
+        # The research experiment plays every frozen package on this runtime
+        # (behaviour verified equal); the teacher bundle follows it, so rule
+        # opponents and teacher share one runtime in training workers.
+        chosen_path = _source_tree(override)
+        chosen = _name(chosen_path.name)
+        chosen_hash = _digest(_inventory(chosen_path))
     runtime_relative = f"runtimes/{chosen}"
     for entry in entries:
         entry.update(runtime=runtime_relative, runtime_hash=chosen_hash)

@@ -274,6 +274,39 @@ class Controller:
             )
         return task
 
+    def overflow(self, s, local_limit):
+        """Move local paired evaluations that cannot start now to idle hosts."""
+        live = ("running", "admitted")
+        local_used = sum(
+            j["kind"] == "match" and not j.get("host") and j["status"] in live
+            for j in s["jobs"].values()
+        )
+        backlog = sorted(
+            (
+                j for j in s["jobs"].values()
+                if j["kind"] == "match" and not j.get("host")
+                and j.get("scope") == "paired" and j["status"] == "queued"
+                # Candidates with their own locked environment stay local.
+                and not any(
+                    s["candidates"].get(cid, {}).get("requirements")
+                    for a in j["assignments"] for cid in a["players"]
+                )
+            ),
+            key=lambda j: j["created_at"],
+        )[max(0, local_limit - local_used):]
+        for host in s["config"].get("overflow_hosts", []):
+            if not backlog or not self.dispatcher(s, host).idle_for_overflow():
+                continue
+            used = sum(
+                j["kind"] == "match" and j.get("host") == host
+                and j["status"] in live + ("queued",)
+                for j in s["jobs"].values()
+            )
+            room = max(0, s["config"]["hosts"][host]["workers"] - used)
+            for j in backlog[:room]:
+                j.update(host=host, overflow=True)
+            backlog = backlog[room:]
+
     def launch_trial(self, s, j, root):
         if self.recipes is None:
             raise RuntimeError("训练方案服务未启用，方案分支无法迭代")
@@ -284,7 +317,12 @@ class Controller:
             return
         it = s["iterations"][j["iteration"]]
         host = it["config"].get("evaluation_host")
-        candidates = {cid: s["candidates"][cid] for cid in it["opponents"]}
+        override = s.get("candidate_runtime_path")
+        candidates = {
+            cid: dict(c, spec=dict(c["spec"], runtime_path=override))
+            if override and c["spec"].get("package_path") else c
+            for cid, c in ((cid, s["candidates"][cid]) for cid in it["opponents"])
+        }
         timeouts, models = it["config"]["timeouts"], self.research.layout.research / "models"
         recipes, line, candidate, number = self.recipes, j["line"], j["candidate"], it["number"]
 
@@ -519,6 +557,7 @@ class Controller:
                     for b in ready[: max(0, limits["agent"] - active)]:
                         self.research.start_iteration(s, b["id"])
                 now = time.time()
+                self.overflow(s, limits["match"])
                 # Local work shares this machine's limits; each remote host
                 # has its own worker count.
                 lanes = [(kind, None, limit) for kind, limit in limits.items()]
