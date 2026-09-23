@@ -76,6 +76,8 @@ DEFAULTS = {
     # has no version yet) may become evaluation opponents.
     "anchors": [],
     "guests": [],
+    # Remote match hosts: {name: {ssh, distro, user, python, root, workers}}.
+    "hosts": {},
     "training_games": 128,
     "initialization_seconds": 3600,
     "combinations": [
@@ -141,6 +143,14 @@ def validate(config):
         raise ValueError("confidence levels must satisfy 0.5 < final <= early < 1")
     if config["brawl_host"] is not None and not isinstance(config["brawl_host"], str):
         raise ValueError("brawl_host must be a host name or null")
+    if not isinstance(config["hosts"], dict) or any(
+        not isinstance(h, dict)
+        or {"ssh", "distro", "user", "python", "root", "workers"} - set(h)
+        or type(h["workers"]) is not int
+        or h["workers"] < 1
+        for h in config["hosts"].values()
+    ):
+        raise ValueError("hosts entries need ssh, distro, user, python, root and workers")
     for key in ("anchors", "guests"):
         if not isinstance(config[key], list) or any(
             not isinstance(a, str) for a in config[key]

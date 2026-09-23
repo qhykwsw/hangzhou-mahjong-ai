@@ -9,6 +9,7 @@ import time
 from mahjong_ai.persistence.artifacts import atomic_json, read_json, digest
 from mahjong_ai.domain.engine import derive_seed
 from mahjong_ai.execution.model_service import ModelService, SERVER_ENV
+from mahjong_ai.execution.remote import Dispatcher, RemoteHost
 import json
 
 # 逐个放出 Agent，避免同一秒把整个并发上限压给模型网关触发限流。
@@ -22,7 +23,19 @@ class Controller:
         self.agent_launch_interval = AGENT_LAUNCH_INTERVAL
         self.agent_launch_at = 0.0
         self.models = ModelService(research)
+        self.dispatchers = {}
         self.recover()
+
+    def dispatcher(self, s, name):
+        if name not in self.dispatchers:
+            config = s["config"]["hosts"].get(name)
+            if config is None:
+                raise ValueError("未配置的远程主机：" + name)
+            self.dispatchers[name] = Dispatcher(
+                RemoteHost(name, config, self.research.project),
+                self.research.layout.research / "models",
+            )
+        return self.dispatchers[name]
 
     def recover(self):
         for run in self.research.states():
@@ -75,6 +88,8 @@ class Controller:
         root = Path(s["root"]) / "jobs" / job["id"]
         root.mkdir(parents=True, exist_ok=True)
         (root / "cancel.flag").touch()
+        if job.get("host") and "stop_requested" not in job:
+            self.dispatcher(s, job["host"]).cancel(job["id"], root)
         job.setdefault("stop_requested", time.time())
         for file in ("codex-process.json", "process.json"):
             p = root / file
@@ -298,7 +313,7 @@ class Controller:
             PYTHONPATH=j["runtime_path"],
             MAHJONG_MEMORY_MB=str(task["resources"]["memory_mb"]),
         )
-        if j["kind"] == "match" and any(
+        if not j.get("host") and j["kind"] == "match" and any(
             p.get("family") == "model" for p in task.get("policies", {}).values()
         ):
             env[SERVER_ENV] = self.models.url()
@@ -308,6 +323,19 @@ class Controller:
             "VECLIB_MAXIMUM_THREADS",
         ):
             env[key] = str(task["resources"]["threads"])
+        if j.get("host"):
+            # Remote workers get the same environment; the dispatcher adds the
+            # host's own inference service and runtime path.
+            remote_env = {
+                k: v for k, v in env.items()
+                if k.startswith(("MAHJONG_", "OMP_", "OPENBLAS_", "VECLIB_"))
+            }
+            self.dispatcher(s, j["host"]).submit(
+                j["id"], root, task, j["runtime_path"], remote_env
+            )
+            j.update(status="running", started_at=time.time())
+            j.pop("stop_requested", None)
+            return
         with (root / "worker.log").open("ab") as log:
             process = subprocess.Popen(
                 [sys.executable, "-B", "-m", module, str(root)],
@@ -388,6 +416,13 @@ class Controller:
                                         if (root / cid / "artifact.json").exists()
                                     }
                                 atomic_json(root / "result.json", result)
+                    if (
+                        j.get("host")
+                        and j["status"] == "running"
+                        and s["status"] != "running"
+                        and "stop_requested" not in j
+                    ):
+                        self.stop(s, j)
                     # 作业已离开运行态（被取消/暂停）或整台实验不再运行时，
                     # 都要真正收掉还在跑的进程，否则迭代删了进程还在算。
                     if (
@@ -431,16 +466,27 @@ class Controller:
                     for b in ready[: max(0, limits["agent"] - active)]:
                         self.research.start_iteration(s, b["id"])
                 now = time.time()
-                for kind, limit in limits.items():
+                # Local work shares this machine's limits; each remote host
+                # has its own worker count.
+                lanes = [(kind, None, limit) for kind, limit in limits.items()]
+                lanes += [
+                    ("match", host, cfg["workers"])
+                    for host, cfg in s["config"].get("hosts", {}).items()
+                ]
+                for kind, host, limit in lanes:
                     used = sum(
-                        j["kind"] == kind and j["status"] in ("running", "admitted")
+                        j["kind"] == kind
+                        and j.get("host") == host
+                        and j["status"] in ("running", "admitted")
                         for j in s["jobs"].values()
                     )
                     waiting = sorted(
                         (
                             j
                             for j in s["jobs"].values()
-                            if j["kind"] == kind and j["status"] == "queued"
+                            if j["kind"] == kind
+                            and j.get("host") == host
+                            and j["status"] == "queued"
                         ),
                         key=lambda j: j["created_at"],
                     )
