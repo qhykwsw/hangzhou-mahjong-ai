@@ -83,7 +83,9 @@ def branch_progress(state):
                 else "failed"
             )
         for cid in iteration["candidates"]:
-            candidate = state["candidates"][cid]
+            # A recipe branch's candidate is registered only when its trained
+            # model is handed back; until then it is still being designed or trained.
+            candidate = state["candidates"].get(cid) or {"status": "training"}
             job = next(
                 (
                     j
