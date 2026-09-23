@@ -69,7 +69,8 @@ def application(project, tailscale_url=None):
                             await asyncio.to_thread(recipes.control, "pause")
                         except Exception:
                             traceback.print_exc()
-                await asyncio.sleep(0.25)
+                # Jobs run for minutes; each pass rewrites a large state.
+                await asyncio.sleep(2.0)
 
         worker = asyncio.create_task(loop())
         try:

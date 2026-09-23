@@ -59,7 +59,10 @@ class Store:
             if experiment is not None and state["id"] != experiment:
                 raise ValueError("该实验已不是当前实验")
             yield state, db
-            db.execute("UPDATE registry SET state=? WHERE id=1", (json.dumps(state),))
+            text = json.dumps(state)
+            # Most controller passes change nothing; skip rewriting the blob.
+            if text != row[0]:
+                db.execute("UPDATE registry SET state=? WHERE id=1", (text,))
 
     def event(self, db, state, kind, payload):
         db.execute(

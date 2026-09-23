@@ -119,6 +119,12 @@ def paired_readout(reference, candidate, metric="score", confidence=0.95):
     )
 
 
+def strip_groups(result):
+    if result:
+        for key in [k for k in result if k.endswith("group_means") or k == "group_blocks"]:
+            result.pop(key)
+
+
 class Research:
     def __init__(self, project):
         self.project = Path(project).resolve()
@@ -1887,6 +1893,15 @@ class Research:
             elif iterations.get(job.get("iteration"), {}).get("status") == "completed":
                 for key in ("assignments", "summary", "focal"):
                     job.pop(key, None)
+        # Per-group arrays only serve the promotion decision; receipts keep them.
+        for it in iterations.values():
+            if it.get("status") != "completed" or it.get("compacted"):
+                continue
+            for result in it.get("results", {}).values():
+                strip_groups(result)
+            for cid in it.get("candidates", []) + [it.get("incumbent")]:
+                strip_groups((s["candidates"].get(cid) or {}).get("last_result"))
+            it["compacted"] = True
 
     @staticmethod
     def merge_focal(parts):
