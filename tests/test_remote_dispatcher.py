@@ -108,3 +108,14 @@ def test_adopted_job_is_polled_and_a_moved_job_is_ignored(tmp_path, monkeypatch)
     host.alive = False
     time.sleep(0.4)
     assert receipt(root) is None
+
+
+def test_a_long_sync_does_not_make_a_reachable_host_offline(tmp_path, monkeypatch):
+    host, d = dispatcher(tmp_path, monkeypatch)
+    d.OFFLINE_SECONDS = 0.5
+    host.sync = lambda paths: time.sleep(1.5)  # the dispatch loop is busy for 3x the limit
+    (tmp_path / "e").mkdir()
+    d.submit("e", tmp_path / "e", {"scope": "competition"}, None, {})
+    for _ in range(12):
+        time.sleep(0.1)
+        assert not d.offline()

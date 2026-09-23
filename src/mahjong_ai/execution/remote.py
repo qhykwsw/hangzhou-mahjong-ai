@@ -361,6 +361,9 @@ class Dispatcher:
         self.lock = threading.Lock()
         self.thread = threading.Thread(target=self._loop, name=f"remote-{host.name}", daemon=True)
         self.thread.start()
+        # Reachability is probed on its own thread: a sync of large inputs over
+        # a slow relay can occupy the dispatch loop longer than OFFLINE_SECONDS.
+        threading.Thread(target=self._watch, name=f"probe-{host.name}", daemon=True).start()
 
     def offline(self):
         return time.monotonic() - self.last_ok > self.OFFLINE_SECONDS
@@ -382,6 +385,11 @@ class Dispatcher:
             self.running.pop(job_id, None)
         self.launched.pop(job_id, None)
         self.brawls.discard(job_id)
+
+    def _watch(self):
+        while True:
+            self._probe()
+            time.sleep(self.probe_seconds)
 
     def _reachable(self):
         try:
@@ -547,7 +555,7 @@ class Dispatcher:
         import queue
         import time
 
-        last = probed = 0.0
+        last = 0.0
         while True:
             try:
                 request = self.requests.get(timeout=1.0)
@@ -595,6 +603,3 @@ class Dispatcher:
             if time.monotonic() - last >= self.poll_seconds:
                 self._poll()
                 last = time.monotonic()
-            if time.monotonic() - probed >= self.probe_seconds:
-                self._probe()
-                probed = time.monotonic()
