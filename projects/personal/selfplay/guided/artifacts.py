@@ -215,6 +215,7 @@ def export_bundle(project_root, output_root) -> Path:
         chosen_path = _source_tree(override)
         chosen = _name(chosen_path.name)
         chosen_hash = _digest(_inventory(chosen_path))
+        gameplay[chosen] = gameplay_inventory(_inventory(chosen_path))
     runtime_relative = f"runtimes/{chosen}"
     for entry in entries:
         entry.update(runtime=runtime_relative, runtime_hash=chosen_hash)
