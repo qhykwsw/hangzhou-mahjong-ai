@@ -42,6 +42,8 @@ def counts(hand):
     # 手牌在搜索里反复出现：元组直接走缓存，列表仍逐张校验。
     if type(hand) is tuple:
         return _counts(hand)
+    if _fast is not None and hasattr(_fast, "counts"):
+        return _fast.counts(hand)
     result = [0] * 34
     for t in hand:
         if not isinstance(t, int) or not 0 <= t < 34:
@@ -123,6 +125,8 @@ def can_hu(hand, open_melds=0) -> bool:
 def _baotou(c: tuple[int, ...], open_melds: int) -> bool:
     if sum(c) != 13 - 3 * open_melds or c[WHITE] == 0:
         return False
+    if _fast is not None and hasattr(_fast, "baotou") and max(c) <= 4:
+        return _fast.baotou(c, open_melds)
     # Test isolated honors early; most hands fail immediately.
     for t in (*range(27, 34), *range(27)):
         if c[t] >= 4:  # no physical fifth copy can be drawn

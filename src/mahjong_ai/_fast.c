@@ -525,7 +525,107 @@ static PyObject *py_improving(PyObject *self, PyObject *args) {
     return result;
 }
 
+/* The whole fast path of sdk.shape.analyze for a waiting-length hand: raw
+ * distance, improving draws, and the numeric fan of every winning draw
+ * (fan_value of the hand plus that draw, as the Python loop computes it). */
+static PyObject *py_analyze_counts(PyObject *self, PyObject *args) {
+    PyObject *counts_obj, *avail_obj;
+    int open_melds, chain_count, piao_count, you_cai_bi_kao;
+    if (!PyArg_ParseTuple(args, "OiOiii", &counts_obj, &open_melds, &avail_obj,
+                          &chain_count, &piao_count, &you_cai_bi_kao))
+        return NULL;
+    if (open_melds < 0 || open_melds > 4) {
+        PyErr_SetString(PyExc_ValueError, "open_melds must be 0..4");
+        return NULL;
+    }
+    int counts[NTILES], avail[NTILES], drawn[NTILES];
+    if (parse_counts(counts_obj, counts) < 0) return NULL;
+    if (parse_vector(avail_obj, avail, 1000000, "available") < 0) return NULL;
+    int distance = shanten_raw(counts, open_melds);
+    int improving[NTILES], wins[NTILES];
+    long fans[NTILES];
+    int n_improving = 0, n_wins = 0;
+    for (int t = 0; t < NTILES; t++) {
+        if (avail[t] <= 0 || counts[t] >= 4) continue;
+        memcpy(drawn, counts, sizeof(drawn));
+        drawn[t]++;
+        int d = shanten_raw(drawn, open_melds);
+        if (d < distance) improving[n_improving++] = t;
+        if (d < 0) {
+            long fan = fan_value(drawn, t, open_melds, chain_count, piao_count,
+                                 you_cai_bi_kao, 0);
+            if (fan) {
+                wins[n_wins] = t;
+                fans[n_wins++] = fan;
+            }
+        }
+    }
+    PyObject *imp = PyTuple_New(n_improving), *win = PyTuple_New(n_wins),
+             *fan = PyTuple_New(n_wins);
+    if (!imp || !win || !fan) goto fail;
+    for (int i = 0; i < n_improving; i++)
+        PyTuple_SET_ITEM(imp, i, PyLong_FromLong(improving[i]));
+    for (int i = 0; i < n_wins; i++) {
+        PyTuple_SET_ITEM(win, i, PyLong_FromLong(wins[i]));
+        PyTuple_SET_ITEM(fan, i, PyLong_FromLong(fans[i]));
+    }
+    return Py_BuildValue("(iNNN)", distance, imp, win, fan);
+fail:
+    Py_XDECREF(imp);
+    Py_XDECREF(win);
+    Py_XDECREF(fan);
+    return NULL;
+}
+
+static PyObject *py_baotou(PyObject *self, PyObject *args) {
+    PyObject *obj;
+    int open_melds;
+    int counts[NTILES];
+    if (!PyArg_ParseTuple(args, "Oi", &obj, &open_melds)) return NULL;
+    if (parse_counts(obj, counts) < 0) return NULL;
+    if (open_melds < 0 || open_melds > 4) Py_RETURN_FALSE;
+    return PyBool_FromLong(baotou_shape(counts, open_melds));
+}
+
+/* rules.counts for a list or tuple of tile ids, with the same validation:
+ * any int in 0..33 (bool included, as isinstance(t, int) accepts it). */
+static PyObject *py_counts(PyObject *self, PyObject *hand) {
+    PyObject *fast = PySequence_Fast(hand, "hand must be a sequence");
+    if (!fast) return NULL;
+    long counts[NTILES] = {0};
+    Py_ssize_t n = PySequence_Fast_GET_SIZE(fast);
+    for (Py_ssize_t i = 0; i < n; i++) {
+        PyObject *item = PySequence_Fast_GET_ITEM(fast, i);
+        long t = PyLong_Check(item) ? PyLong_AsLong(item) : -1;
+        if (t == -1 && PyErr_Occurred()) PyErr_Clear();
+        if (!PyLong_Check(item) || t < 0 || t >= NTILES) {
+            PyObject *text = PyObject_Str(item);
+            if (text) {
+                PyErr_Format(PyExc_ValueError, "invalid tile: %U", text);
+                Py_DECREF(text);
+            }
+            Py_DECREF(fast);
+            return NULL;
+        }
+        counts[t]++;
+    }
+    Py_DECREF(fast);
+    PyObject *result = PyTuple_New(NTILES);
+    if (!result) return NULL;
+    for (int i = 0; i < NTILES; i++) {
+        PyObject *v = PyLong_FromLong(counts[i]);
+        if (!v) { Py_DECREF(result); return NULL; }
+        PyTuple_SET_ITEM(result, i, v);
+    }
+    return result;
+}
+
 static PyMethodDef fast_methods[] = {
+    {"analyze_counts", py_analyze_counts, METH_VARARGS,
+     "Distance, improving draws, winning draws and their numeric fans."},
+    {"baotou", py_baotou, METH_VARARGS,
+     "Whether every drawable tile completes the 13-3*open waiting hand."},
+    {"counts", py_counts, METH_O, "Per-tile counts of a hand, validating ids."},
     {"shape_value", py_shape_value, METH_VARARGS,
      "concealed shape value 8 - 2*melds - min(partials, 4 - melds) - pair"},
     {"shanten_raw", py_shanten_raw, METH_VARARGS,

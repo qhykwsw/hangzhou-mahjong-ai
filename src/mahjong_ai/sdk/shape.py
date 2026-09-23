@@ -123,6 +123,25 @@ def analyze(hand, open_melds=0, remaining=None, chain=0, piao=0, you_cai_bi_kao=
     improving = []
     wins = []
     fans = {}
+    if len(hand) == 13 - 3 * open_melds and _fast is not None and hasattr(
+        _fast, "analyze_counts"
+    ):
+        # One C call replaces the draw loop below with identical output.
+        raw, fast_improving, fast_wins, fast_fans = _fast.analyze_counts(
+            hand_counts, open_melds, available, chain, piao, int(you_cai_bi_kao)
+        )
+        if raw >= 0:
+            wins = list(fast_wins)
+            fans = dict(zip(fast_wins, fast_fans))
+            return {
+                "shanten": raw,
+                "improving": list(fast_improving),
+                "ukeire": sum(available[t] for t in fast_improving),
+                "winning_tiles": wins,
+                "winning_copies": sum(available[t] for t in wins),
+                "fans": fans,
+                "fan_value": sum(available[t] * v for t, v in fans.items()),
+            }
     if len(hand) == 13 - 3 * open_melds:
         candidates = None
         if _fast is not None:
