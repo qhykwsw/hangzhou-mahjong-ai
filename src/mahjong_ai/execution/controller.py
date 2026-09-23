@@ -93,7 +93,9 @@ class Controller:
         root.mkdir(parents=True, exist_ok=True)
         (root / "cancel.flag").touch()
         if job.get("host") and "stop_requested" not in job:
-            self.dispatcher(s, job["host"]).cancel(job["id"], root)
+            self.dispatcher(s, job["host"]).cancel(
+                job["id"], root, brawl=job.get("scope") == "competition"
+            )
         if job["kind"] == "trial" and "stop_requested" not in job and self.recipes:
             self.recipes.cancel(job["line"])
             if not (root / "result.json").exists():

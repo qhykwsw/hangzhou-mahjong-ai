@@ -19,6 +19,7 @@ import json
 import os
 from pathlib import Path
 import random
+import threading
 import time
 
 from . import bootstrap
@@ -60,6 +61,30 @@ class Plateau:
             return False
         before, after = sum(early) / len(early), sum(late) / len(late)
         return (before - after) / max(abs(before), 1e-9) < self.tolerance
+
+
+class Paused:
+    """Wall-clock time the process spent stopped (SIGSTOP), seen by a ticking thread."""
+
+    def __init__(self, tick=5.0, threshold=60.0):
+        self.total, self.lock = 0.0, threading.Lock()
+
+        def watch():
+            last = time.time()
+            while True:
+                time.sleep(tick)
+                now = time.time()
+                if now - last > threshold:
+                    with self.lock:
+                        self.total += now - last - tick
+                last = now
+
+        threading.Thread(target=watch, name="paused", daemon=True).start()
+
+    def take(self):
+        with self.lock:
+            total, self.total = self.total, 0.0
+        return total
 
 
 def rate(schedule, phase, updates, now, decay_start, decay_end):
@@ -180,8 +205,20 @@ def train(run_dir, cfg, schedule, bundle_path, *, deadline, resume=False):
         snapshot("seconds-000000")
         s["next_snapshot"] = schedule["snapshot_seconds"]
     log("started", resume=resume, phase=s["phase"], teacher=bundle["teacher"])
+    paused = Paused()
     try:
         while time.time() < deadline:
+            # Time spent suspended (a common brawl has priority on this host)
+            # is not training time.
+            gap = paused.take()
+            if gap:
+                for key in ("started", "decay_start", "decay_end", "phase_began"):
+                    if s[key] is not None:
+                        s[key] += gap
+                plateau.began = s["phase_began"]
+                plateau.points = [(t + gap, v) for t, v in plateau.points]
+                deadline += gap
+                log("suspended", seconds=round(gap))
             now = time.time()
             if s["phase"] == "decay" and now >= s["decay_end"]:
                 break

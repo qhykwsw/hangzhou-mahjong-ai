@@ -333,6 +333,8 @@ class Dispatcher:
         self.requests, self.running = queue.Queue(), {}
         self.errors = {}
         self.probe_seconds, self.training = probe_seconds, None  # unknown = busy
+        # Training process groups suspended while a common brawl runs here.
+        self.suspended, self.brawls = [], set()
         self.lock = threading.Lock()
         self.thread = threading.Thread(target=self._loop, name=f"remote-{host.name}", daemon=True)
         self.thread.start()
@@ -340,8 +342,8 @@ class Dispatcher:
     def submit(self, job_id, root, task, runtime, env):
         self.requests.put(("launch", job_id, Path(root), task, runtime, env))
 
-    def cancel(self, job_id, root):
-        self.requests.put(("cancel", job_id, Path(root)))
+    def cancel(self, job_id, root, brawl=False):
+        self.requests.put(("cancel", job_id, Path(root), brawl))
 
     def call(self, function, root):
         """Run slow host work (syncs, then a hand-off) off the controller loop."""
@@ -370,11 +372,44 @@ class Dispatcher:
 
         atomic_json(root / "result.json", result)
 
+    def _signal_training(self, name):
+        """Send ``name`` to every training process group on the host."""
+        return self.host.python(
+            "import json,os,signal,subprocess\n"
+            "pids=[int(p) for p in subprocess.run(['pgrep','-f'," + repr(self.TRAINING)
+            + "],capture_output=True,text=True).stdout.split()]\n"
+            "groups=set()\n"
+            "for p in pids:\n"
+            " try: groups.add(os.getpgid(p))\n except OSError: pass\n"
+            "for g in groups:\n"
+            " try: os.killpg(g,signal." + name + ")\n except OSError: pass\n"
+            "print(json.dumps(sorted(groups)))\n",
+            timeout=120,
+        ) or []
+
+    def _suspend_training(self):
+        """A brawl has priority: freeze training (GPU memory kept) until it ends."""
+        if not self.suspended:
+            self.suspended = self._signal_training("SIGSTOP") or [None]
+
+    def _resume_training(self):
+        """Continue whatever training is stopped, including after a controller restart."""
+        if not self.brawls:
+            try:
+                self._signal_training("SIGCONT")
+                self.suspended = []
+            except Exception:
+                pass  # Retried after the next poll.
+
     def _launch(self, batch):
         """Sync the union of inputs once, then start every queued job together."""
         from mahjong_ai.persistence.artifacts import atomic_json
 
         try:
+            brawl = [job_id for job_id, _, task, _, _ in batch if task.get("scope") == "competition"]
+            if brawl:
+                self._suspend_training()
+                self.brawls.update(brawl)
             inputs, weights = set(), set()
             for _, _, task, _, _ in batch:
                 inputs |= job_inputs(task)
@@ -394,8 +429,11 @@ class Dispatcher:
                 jobs.append((root, task, runtime, env))
             pids = self.host.launch_many(jobs)
         except Exception as exc:
-            for _, root, _, _, _ in batch:
+            for job_id, root, _, _, _ in batch:
+                self.brawls.discard(job_id)
                 self._write(root, {"status": "failed", "error": f"远程启动失败：{exc}"[:4000]})
+            if self.suspended:
+                self._resume_training()
             return
         for (job_id, root, _, _, _), pid in zip(batch, pids):
             atomic_json(root / "remote.json", {"host": self.host.name, "pid": pid})
@@ -405,6 +443,8 @@ class Dispatcher:
     def _poll(self):
         with self.lock:
             jobs = dict(self.running)
+        if self.suspended:
+            self._resume_training()
         if not jobs:
             return
         try:
@@ -421,6 +461,9 @@ class Dispatcher:
                 continue
             with self.lock:
                 self.running.pop(job_id, None)
+            self.brawls.discard(job_id)
+        if self.suspended:
+            self._resume_training()
 
     def _loop(self):
         import queue
@@ -454,6 +497,7 @@ class Dispatcher:
             elif request and request[0] == "cancel":
                 with self.lock:
                     entry = self.running.pop(request[1], None)
+                self.brawls.discard(request[1])
                 marker = request[2] / "remote.json"
                 if entry is None and marker.exists():
                     # Launched before a controller restart.
@@ -464,6 +508,10 @@ class Dispatcher:
                     except Exception:
                         pass
                     self._write(entry[0], {"status": "paused", "reason": "operator interruption"})
+                if request[3]:
+                    # A cancelled brawl, possibly from before a restart.
+                    self.suspended = self.suspended or [None]
+                    self._resume_training()
             if time.monotonic() - last >= self.poll_seconds:
                 self._poll()
                 last = time.monotonic()
