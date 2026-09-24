@@ -17,7 +17,27 @@
       </div>
       <span class="readonly-note">只读 · 调整请通过对话</span>
     </header>
-    <main>
+    <nav class="tabs" role="tablist">
+      <button role="tab" id="tabResearch" aria-selected="true">研究框架</button>
+      <button role="tab" id="tabLines" aria-selected="false">迭代线</button>
+    </nav>
+    <section id="linesView" class="lines-view" hidden>
+      <div class="sectionhead">
+        <h2>迭代线 <span id="linesPool" class="count"></span></h2>
+        <span class="muted">每个点是一次尝试；纵轴是对固定对手池的场均桌面分</span>
+      </div>
+      <div id="linesLegend" class="lines-legend"></div>
+      <div id="linesChart" class="lines-chart"></div>
+      <div class="tablewrap">
+        <table>
+          <thead>
+            <tr><th>尝试</th><th>结果</th><th>改动</th><th>得分</th><th>配对差</th><th>确认集</th><th>场数</th><th>完成时间</th></tr>
+          </thead>
+          <tbody id="linesTable"></tbody>
+        </table>
+      </div>
+    </section>
+    <main id="researchView">
       <div id="notice" role="status" hidden></div>
       <div class="statusbar">
         <div>
@@ -88,5 +108,6 @@
     </main>
     <script src="/assets/app.js"></script>
     <script src="/assets/recipes.js"></script>
+    <script src="/assets/lines.js"></script>
   </body>
 </html>

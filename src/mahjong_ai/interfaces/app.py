@@ -104,6 +104,32 @@ def application(project, tailscale_url=None):
             Path(__file__).parent / "web/index.html", headers=NO_STORE
         )
 
+    lines_root = ProjectDescriptor.load(project).workspace / "projects/personal/firstprinciples/.local"
+
+    def iteration_lines():
+        """Read-only view of the maintainer's iteration lines (ADR-0016)."""
+        pool_path, log_path = lines_root / "pool.json", lines_root / "attempts.jsonl"
+        if not pool_path.exists():
+            return {"enabled": False}
+        pool = json.loads(pool_path.read_text())
+        rows = []
+        if log_path.exists():
+            for line in log_path.read_text().splitlines():
+                if not line.strip():
+                    continue
+                r = json.loads(line)
+                if r.get("pool") != pool["id"]:
+                    continue
+                rows.append({k: r.get(k) for k in (
+                    "id", "line", "status", "description", "started_at", "finished_at",
+                    "games", "score", "se", "best_before", "diff", "confirm", "stats",
+                    "design_seconds")})
+        return {"enabled": True, "pool": {"id": pool["id"], "members": sorted(pool["members"])},
+                "attempts": rows}
+
+    async def lines(request):
+        return JSONResponse(await asyncio.to_thread(iteration_lines))
+
     async def health(request):
         return JSONResponse(
             {
@@ -238,6 +264,7 @@ def application(project, tailscale_url=None):
             Route("/api/recipes/state", recipe_state),
             Route("/api/recipes/trial", recipe_trial),
             Route("/api/health", health),
+            Route("/api/lines", lines),
             Route("/api/state", state),
             Route("/api/activity", activity),
             Route("/api/experiments", mutate, methods=["POST"]),

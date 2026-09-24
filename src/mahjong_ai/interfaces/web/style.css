@@ -885,3 +885,101 @@ select:disabled {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Tabs and the iteration-lines view (ADR-0016). */
+.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 24px;
+  background: var(--white);
+  border-bottom: 1px solid var(--line);
+}
+.tabs button {
+  border: 0;
+  border-bottom: 3px solid transparent;
+  background: none;
+  color: var(--muted);
+  padding: 10px 14px;
+  font: inherit;
+  cursor: pointer;
+}
+.tabs button[aria-selected="true"] {
+  color: var(--teal);
+  border-bottom-color: var(--teal);
+  font-weight: 600;
+}
+.lines-view {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 20px 24px 40px;
+}
+.lines-chart {
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+  margin: 8px 0 16px;
+}
+.lines-chart svg {
+  max-width: 100%;
+  display: block;
+}
+.lines-view .tablewrap {
+  overflow-x: auto;
+}
+.lines-view table {
+  min-width: 760px;
+}
+.lines-chart .grid {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+.lines-chart .axis {
+  fill: var(--muted);
+  font-size: 11px;
+}
+.lines-chart .reference {
+  stroke-width: 1.5;
+  stroke-dasharray: 6 4;
+}
+.lines-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.lines-legend i {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 5px;
+  vertical-align: -1px;
+}
+.lines-legend i.hollow {
+  border: 2px solid #c9822b;
+  width: 8px;
+  height: 8px;
+}
+.lines-legend i.small {
+  background: #b8c4c9;
+  width: 6px;
+  height: 6px;
+}
+.lines-legend i.dash {
+  width: 18px;
+  height: 0;
+  border-radius: 0;
+  border-top: 2px dashed var(--red);
+}
+#linesTable tr.kept td:first-child {
+  border-left: 3px solid var(--teal);
+}
+@media (max-width: 640px) {
+  .tabs,
+  .lines-view {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+}
