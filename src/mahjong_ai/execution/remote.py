@@ -171,8 +171,15 @@ print(json.dumps(True))
                 info.size = len(data)
                 archive.addfile(info, io.BytesIO(data))
         target = self.base + "/service-code/" + digest.hexdigest()[:16]
-        self._extract(target, buffer.getvalue())
-        self.build_native_at(target + "/src")
+        # A snapshot appears only complete, with its compiled extension: a
+        # service started on a half-made one would fail every request, and
+        # health would still report the right code root.
+        if not self.python(f"import json,pathlib;print(json.dumps(pathlib.Path({target!r}).is_dir()))"):
+            staging = target + ".tmp"
+            self.python(f"import json,shutil;shutil.rmtree({staging!r},ignore_errors=True);print(json.dumps(True))")
+            self._extract(staging, buffer.getvalue())
+            self.build_native_at(staging + "/src")
+            self.python(f"import json,os;os.replace({staging!r},{target!r});print(json.dumps(True))")
         return target
 
     def build_native_at(self, source_root):
