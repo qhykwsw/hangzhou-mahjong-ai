@@ -14,10 +14,10 @@ nothing.)
 
 Rows are written straight into pinned host buffers of a few padded shapes and
 copied to the device at once; on CUDA the whole decision of each shape is a
-captured graph replayed in place. On Apple GPUs inference runs eagerly under
-fp16 autocast (about twice fp32 throughput); near-tie argmax can differ from
-CUDA fp32, which does not affect paired comparisons because both sides face
-the same seat.
+captured graph replayed in place, on Apple GPUs it runs eagerly. Both compute
+the linear layers in fp16 (autocast; about twice fp32 throughput on either),
+so a near-tie argmax can differ between devices and from fp32, which does not
+affect paired comparisons because both sides face the same seat.
 
     python -m guided.model_server --root DIR --port 8830 [--device auto]
 """
@@ -73,8 +73,30 @@ class Models:
             raise ValueError(f"unknown model artifact: {name}")
         with self.lock:
             if name not in self.loaded:
-                self.loaded[name] = load_actor(path, self.device)
+                actor, meta = load_actor(path, self.device)
+                self.loaded[name] = (prepare(actor, self.device), meta)
             return self.loaded[name]
+
+
+def prepare(actor, device):
+    """Hold the linear weights in the dtype the device computes them in.
+
+    Under fp16 autocast every linear casts its fp32 weight and bias again each
+    forward (the cast cache needs grad-requiring leaves and is cleared when the
+    context exits): ~150 small copies per forward of the large Actor, most of
+    the host time of a small batch on Apple GPUs. A weight that is already fp16
+    passes through the cast untouched, so the computation and its outputs are
+    the same; everything else (embeddings, layer norms, the token parameters)
+    stays fp32 exactly as autocast runs it. CUDA replays captured graphs, where
+    the casts cost nothing.
+    """
+    import torch.nn as nn
+
+    if device == "mps":
+        for module in actor.modules():
+            if isinstance(module, (nn.Linear, nn.MultiheadAttention)):
+                module.half()
+    return actor
 
 
 def decide(actor, planes, scalars, events, mask):
@@ -86,7 +108,9 @@ def decide(actor, planes, scalars, events, mask):
     import torch
     import torch.nn.functional as F
 
-    logits = actor(planes, scalars, events).float()
+    device = planes.device.type
+    with torch.autocast(device, torch.float16, enabled=device != "cpu", cache_enabled=False):
+        logits = actor(planes, scalars, events).float()
     choice = F.log_softmax(logits.masked_fill(~mask, -1e9), dim=-1).argmax(-1)
     valid = mask.any(-1).all() & torch.isfinite(logits).all()
     return choice, valid
@@ -221,8 +245,7 @@ class Runner:
     def launch(self, name, actor, slot):
         import torch
 
-        autocast = self.device.type == "mps"
-        with torch.inference_mode(), torch.autocast("mps", torch.float16, enabled=autocast):
+        with torch.inference_mode():
             if self.graphs is not None:
                 choice, valid = self.graphs.replay(name, actor, slot.inputs)
             else:
@@ -513,8 +536,14 @@ def serve(service, port, host="127.0.0.1", code=""):
                         connection)
 
     polling = service.runner.polls
+    reported = time.monotonic()
     while True:
         ready = selector.select(0 if polling and service.inflight else None)
+        if time.monotonic() - reported > 60:
+            # Device load of the run: forward seconds against wall seconds.
+            reported = time.monotonic()
+            print(json.dumps({k: round(v, 2) if isinstance(v, float) else v for k, v in service.stats.items()}),
+                  flush=True)
         for key, events in ready:
             if key.fileobj == service.runner.wake:
                 service.runner.drain()

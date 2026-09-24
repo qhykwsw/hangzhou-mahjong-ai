@@ -40,9 +40,13 @@ class ModelService:
                 url + "/load", json.dumps({"model": sha}).encode(),
                 {"Content-Type": "application/json"},
             )
-            with urllib.request.urlopen(request, timeout=600) as reply:
-                if not json.loads(reply.read()).get("ok"):
-                    raise RuntimeError("模型预热失败：" + sha)
+            try:
+                with urllib.request.urlopen(request, timeout=600) as reply:
+                    if not json.loads(reply.read()).get("ok"):
+                        raise RuntimeError("模型预热失败：" + sha)
+            except urllib.error.HTTPError as exc:
+                # The service answers a failed load with its reason in the body.
+                raise RuntimeError(f"模型预热失败：{sha}（{exc.code}：{exc.read()[:500].decode(errors='replace')}）") from exc
             self.warmed.add(sha)
 
     def _healthy(self):
