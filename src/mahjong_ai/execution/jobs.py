@@ -482,8 +482,12 @@ def main():
             if task["kind"] == "prepare"
             else play(task, root)
         )
-    except JobCancelled:
-        if time.time() >= task["deadline"]:
+    except Exception as exc:
+        # Teardown after an interruption can raise something else (a sandbox
+        # already gone, EPERM); the cancel flag says the job was interrupted.
+        if not isinstance(exc, JobCancelled) and not cancel.exists():
+            value = {"status": "failed", "error": f"{type(exc).__name__}: {exc}"[:4000]}
+        elif time.time() >= task["deadline"]:
             value = {"status": "failed", "error": "iteration execution limit reached"}
             if task["kind"] == "prepare":
                 value["candidates"] = {
@@ -493,8 +497,6 @@ def main():
                 }
         else:
             value = {"status": "paused", "reason": "operator interruption"}
-    except Exception as exc:
-        value = {"status": "failed", "error": f"{type(exc).__name__}: {exc}"[:4000]}
     after = resource.getrusage(resource.RUSAGE_CHILDREN)
     value["usage"] = dict(
         wall_seconds=time.monotonic() - started,
