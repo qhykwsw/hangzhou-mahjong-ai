@@ -24,7 +24,7 @@
 
 - `source/source-manifest.json`：冻结源码的文件清单与 SHA-256，清单摘要即 `source_id`。源码上传到远端 `.local/guided-code/<source_id>/`，入口用 `bootstrap.verify_source()` 核对，与 `plan.json` 不符即拒绝运行。
 - 训练对局默认绑定教师包自带的运行时副本；方案线任务带 `runtime` 时（第一性原理迭代线传对手池的运行时）改绑那份，worker 里的对手包按 `isolation = "none"` 直接进程内加载。
-- 引擎缺少编译的 `_fast` 扩展时会静默退回纯 Python，向听计算和观察编码慢一个数量级。训练与评估的 worker 绑定教师包运行时，其 `_fast` 由 `guided.sync` 在目标机编译；推理服务、测试和其他不绑定教师包的进程用快照自己的 `src/mahjong_ai/`，上传后要在目标机用快照里的 `_fast.c` 编译（setuptools `build_ext`）。`guided.encoding` 导入时检查扩展，缺失即报错。
+- 引擎缺少编译的 `_fast` 扩展时会静默退回纯 Python，向听计算和观察编码慢一个数量级。训练与评估的 worker 绑定的运行时（教师包自带的那份，或任务指定的对手池运行时），其 `_fast` 由 `guided.sync` 在目标机编译；推理服务、测试和其他不绑定教师包的进程用快照自己的 `src/mahjong_ai/`，上传后要在目标机用快照里的 `_fast.c` 编译（setuptools `build_ext`）。`guided.encoding` 导入时检查扩展，缺失即报错。
 - `plan.json`：该实验的主机、模型规模、教师包、初始权重、时长、评估场数和牌墙种子。`overnight`、`brawl`、`brawl_pipeline`、`bc_curve`、`tune_evaluation` 都以 `--root <实验目录>` 读取它。
 - 准备、部署、启动与监控用的操作脚本（`prepare.py`、`deploy.py`、`start.py`、`monitor.py` 等）随实验目录冻结，报告写在同目录 `REPORT.md`。新实验复制上一份脚本后修改，不回写旧实验。
 - 教师包由 Mac 从已完成的共同评测回执导出到 `.local/teachers/<id>/`，远端位于 `.local/guided-teachers/<id>/`。接收、运行校验与启用分开记录；未完整收到或不能运行的包不替换现役教师。
