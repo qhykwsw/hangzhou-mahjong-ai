@@ -27,7 +27,7 @@ distro = "Ubuntu-20.04"
 user = "user"
 python = "/home/user/miniconda3/envs/py311_cu130/bin/python"
 root = "/home/user/code/leihuo_majiang"
-workers = 16  # 20 线程的 80%
+workers = 8  # 20 线程里另外 12 个留给 RL 方案训练（recipes/iteration.toml）
 
 [hosts.4070]
 ssh = "user@gpu-4070"
@@ -72,11 +72,22 @@ models = ["deepseek"]
 parameters = { style = "unrestricted" }
 
 [[combinations]]
-id = "rl-recipe"  # 方案分支：训练在 4070，评估改在 4090（4070 是办公机，满载会卡桌面），每段每边 4096 → 8192 → 16384 场
+id = "rl-recipe"  # 旧方案分支：在 4070 训练，已停止迭代，现役起点版本继续参加大乱斗
 branches = 1
 branch_ids = ["01"]
 models = ["astra-high"]
 parameters = { line = "rl" }
+evaluation_games = 4096
+evaluation_host = "4090"
+
+[[combinations]]
+id = "rl-recipe-4090"  # 方案分支：训练与评估都在 4090，每段每边 4096 → 8192 → 16384 场
+family = "recipe"
+name = "强化学习训练方案（4090）"
+branches = 1
+branch_ids = ["01"]
+models = ["astra-high"]
+parameters = { line = "rl-4090" }
 evaluation_games = 4096
 evaluation_host = "4090"
 
@@ -94,3 +105,6 @@ response = 1.0
 memory_mb = 4096
 threads = 1
 device = "cpu"
+
+[modes]
+"rl-recipe--01" = "competing"  # 2026-09-24 4070 办公机被 RL 训练卡住，停止在 4070 发起新训练

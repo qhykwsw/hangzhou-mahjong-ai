@@ -18,12 +18,15 @@ limit = 100000  # 尝试由研究框架按需发起，不在这里限额
 retries = 2  # 基础设施失败（SSH、远端进程丢失）的重试次数，用完暂停
 
 [[lines]]
-id = "rl"
-name = "4070 大模型"
-host = "4070"
-# 固定起点：4090 模仿阶段的甜点快照（大模型），拷到 4070 仓库根下的这个相对路径
+id = "rl-4090"
+name = "4090 大模型"
+host = "4090"
+# 固定起点：4090 模仿阶段的甜点快照（大模型），在 4090 仓库根下的这个相对路径。
+# 2026-09-24 从 4070 迁来：4070 是用户的办公机，训练占满显卡会让桌面卡顿。
 start_checkpoint = ".local/guided-starts/20260923-material-dose-large/actor"
-execution = { workers = 22, tables = 16, inference_batch_limit = 64 }
+# 4090 共 20 线程：训练 12 个 worker，研究评估在 4090 上的并发为 8，两边合计不超卖，
+# 让每次尝试在 4 小时里拿到的算力稳定、可比。
+execution = { workers = 12, tables = 16, inference_batch_limit = 64 }
 # 训练进程的硬上限：显存按分配器比例封顶（超了是 CUDA OOM，不会溢出到共享内存），
 # 进程组常驻内存超过 WSL 总内存的比例就整组结束。超限记为训练失败。
-limits = { gpu_memory_fraction = 0.75, ram_fraction = 0.75 }  # 4070 同时承担桌面显示，留出余量
+limits = { gpu_memory_fraction = 0.75, ram_fraction = 0.75 }  # 同机还有评估用的推理服务

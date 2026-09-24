@@ -379,6 +379,8 @@ class RecipeIteration:
 
     def cancel(self, line_id):
         with self.store.edit() as (s, db):
+            if line_id not in s["lines"]:
+                return  # a line of a closed experiment; its trials ended with it
             s["lines"][line_id]["request"] = None
             trial = s["trials"].get(s["lines"][line_id]["trial"])
             if trial:
