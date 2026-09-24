@@ -85,8 +85,10 @@ class ActorGraphs:
     BATCH_BUCKETS = (1, 2, 4, 8, 16, 32, 64, 128)
     EVENT_BUCKET, MAX_WIDTH = 32, 256
 
+    IN_FLIGHT = 2  # launches of one model and shape that may be unread at a time
+
     def __init__(self):
-        self.graphs, self.hosts, self.pool = {}, {}, None
+        self.graphs, self.hosts, self.turn, self.pool = {}, {}, {}, None
 
     @staticmethod
     def shape(rows):
@@ -94,41 +96,59 @@ class ActorGraphs:
         width = -(-max(1, max(len(np.asarray(r["events"]).reshape(-1, 5)) for r in rows)) // ActorGraphs.EVENT_BUCKET) * ActorGraphs.EVENT_BUCKET
         return (size, width) if size is not None and width <= ActorGraphs.MAX_WIDTH else None
 
-    def _host(self, size, width):
-        host = self.hosts.get((size, width))
-        if host is None:
-            tensors = (
-                torch.zeros((size, N_PLANES, 34), dtype=torch.float16).pin_memory(),
-                torch.zeros((size, N_SCALARS), dtype=torch.float16).pin_memory(),
-                torch.zeros((size, width, 5), dtype=torch.int64).pin_memory(),
-                torch.zeros((size, N_ACTIONS), dtype=torch.bool).pin_memory(),
-            )
-            views = [t.numpy() for t in tensors]
-            views[3][:, 0] = True  # padding rows stay valid; they never reach a caller
-            host = self.hosts[(size, width)] = (tensors, views)
-        return host
+    def _host(self, key, size, width):
+        # A ring of IN_FLIGHT buffer sets per model and shape: a buffer is not
+        # refilled while its earlier copy may still be on the way, and other
+        # models' batches or the next round may be launched in between.
+        ring = self.hosts.get((key, size, width))
+        if ring is None:
+            ring = self.hosts[(key, size, width)] = []
+            for _ in range(self.IN_FLIGHT):
+                tensors = (
+                    torch.zeros((size, N_PLANES, 34), dtype=torch.float16).pin_memory(),
+                    torch.zeros((size, N_SCALARS), dtype=torch.float16).pin_memory(),
+                    torch.zeros((size, width, 5), dtype=torch.int64).pin_memory(),
+                    torch.zeros((size, N_ACTIONS), dtype=torch.bool).pin_memory(),
+                )
+                views = [t.numpy() for t in tensors]
+                views[3][:, 0] = True  # padding rows stay valid; they never reach a caller
+                answers = torch.zeros((size, 2), dtype=torch.float32).pin_memory()
+                ring.append((tensors, views, answers, torch.cuda.Event()))
+        turn = self.turn.get((key, size, width), 0)
+        self.turn[(key, size, width)] = (turn + 1) % self.IN_FLIGHT
+        return ring[turn]
 
     @staticmethod
     def _decide(model, planes, scalars, events, mask, sample):
-        logits = model(planes, scalars, events).float()
+        # fp16 tensor cores: the large pool Actor answers about twice as fast
+        # (measured 1.8-2.6x on a 4070), the small one 1.3-2x. Collection only
+        # samples from these policies, so the last-bit logit differences from
+        # fp32 change nothing that the training measures; evaluation is the
+        # research model service, not this class.
+        with torch.autocast("cuda", torch.float16, cache_enabled=False):
+            logits = model(planes, scalars, events).float()
         logp = logits.masked_fill(~mask, -1e9).log_softmax(-1)
         actions = torch.multinomial(logp.exp(), 1).squeeze(1) if sample else logp.argmax(-1)
         chosen = logp.gather(1, actions[:, None]).squeeze(1)
         return torch.stack((actions.float(), chosen), -1)
 
     def decide(self, key, model, rows, sample):
-        """(action, log-probability) per row on the device: sampled from the policy, or its argmax.
+        """Launch (action, log-probability) per row: sampled from the policy, or its argmax.
 
-        The caller reads the result to the host before the next call, which is
-        what lets the host buffers be refilled behind non-blocking copies.
+        Returns a Decided whose result() waits for the device. The answers are
+        copied straight out of the graph into a pinned buffer on the same
+        stream: graphs share one memory pool, so a later replay of any other
+        graph may overwrite this one's device output. Up to IN_FLIGHT calls
+        for one model and shape may be unread (their host buffers rotate), so
+        the device runs one batch while the host fills the next.
         """
         shape = self.shape(rows)
         device = next(model.parameters()).device
         if shape is None:
             batch = policy_batch(rows, device)
-            return self._decide(model, batch["planes"], batch["scalars"], batch["events"], batch["mask"], sample)
+            return Decided(self._decide(model, batch["planes"], batch["scalars"], batch["events"], batch["mask"], sample))
         size, width = shape
-        tensors, (planes, scalars, events, mask) = self._host(size, width)
+        tensors, (planes, scalars, events, mask), answers, done = self._host(key, size, width)
         for i, row in enumerate(rows):
             planes[i] = row["planes"]
             scalars[i] = row["scalars"]
@@ -154,4 +174,19 @@ class ActorGraphs:
         for target, source in zip(static, tensors):
             target.copy_(source, non_blocking=True)
         graph.replay()
-        return out[: len(rows)]
+        answers.copy_(out, non_blocking=True)
+        done.record()
+        return Decided(answers.numpy()[: len(rows)], done)
+
+
+class Decided:
+    """A launched decision; result() gives its rows as a numpy array once the device is done."""
+
+    def __init__(self, rows, event=None):
+        self.rows, self.event = rows, event
+
+    def result(self):
+        if self.event is not None:
+            self.event.synchronize()
+            return self.rows
+        return self.rows.cpu().numpy() if hasattr(self.rows, "cpu") else self.rows

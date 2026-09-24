@@ -45,6 +45,7 @@
 | 键 | 作用 |
 | --- | --- |
 | `workers`、`tables` | 对局进程数（不超过 CPU 核数）和每个进程同时打的桌数。达到 `samples` 后不再开新局，但在途的整场要打完，实际样本约多出 `workers × tables` 场 |
+| `gather_seconds` | 父进程有一轮推理在设备上时，再等这么久收齐其他 worker 的请求合成一批（默认 0，只收已到达的） |
 | `opponents` | 对手座位均匀抽取的 ID 列表，取自 `ctx.opponents` 或 `ctx.rules`；缺省为全部 `ctx.opponents` |
 | `history_probability` | 对手座位从 `history`（`{"model:名字": Actor}`）抽取的概率，其余按 `opponents` 抽取 |
 | `critic_features` | `"模块:函数"`，在对局进程里对每个学习决策调用 `f(state, seat)`，返回的数组并入该行；`state` 是完整的 HandState，可读对手手牌和按摸牌顺序排列的牌墙 |

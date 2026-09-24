@@ -7,5 +7,6 @@
   "critic_batch": 256,
   "critic_learning_rate": 0.0003,
   "worker_fraction": 0.8,
-  "tables": 8
+  "tables": 8,
+  "gather_seconds": 0.002
 }

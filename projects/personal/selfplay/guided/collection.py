@@ -1,5 +1,6 @@
-"""Synchronous GPU inference over independent CPU game workers."""
+"""Batched GPU inference over independent CPU game workers, two rounds in flight."""
 
+from collections import deque
 import multiprocessing as mp
 from multiprocessing.connection import wait
 import time
@@ -19,7 +20,7 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
     """
     import torch
     from .learning import make_batch
-    from .inference import ActorGraphs, evaluate_requests
+    from .inference import ActorGraphs, Decided, evaluate_requests
 
     history = history or {}
     hooks = hooks or {}
@@ -59,12 +60,41 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
             child.close()
             procs.append(proc)
             remaining.add(parent)
-        while remaining:
+        gather = float(cfg.get("gather_seconds", 0.0))
+        inflight = deque()  # rounds launched on the device, oldest first
+
+        def finish(groups, replies):
+            for group, rows_, learning, decided, complete in groups:
+                mark = time.perf_counter()
+                output = decided.result()
+                if not complete:
+                    values = np.zeros(len(group), dtype=np.float32)
+                    if learning and "values" in hooks:
+                        values = np.asarray(hooks["values"](rows_), dtype=np.float32).reshape(-1)
+                    output = np.concatenate((output, values[:, None]), axis=1)
+                timers["forward"] += time.perf_counter() - mark
+                mark = time.perf_counter()
+                for (conn, ident, _), (action, prob, value) in zip(group, output):
+                    replies[conn].append((ident, (int(action), float(prob), float(value))))
+                timers["reply"] += time.perf_counter() - mark
             mark = time.perf_counter()
-            ready = wait(list(remaining), timeout=1)
+            for conn, response in replies.items():
+                conn.send(response)
+            timers["reply"] += time.perf_counter() - mark
+
+        while remaining or inflight:
+            mark = time.perf_counter()
+            # With a round on the device, gather the requests that arrive
+            # while it runs (gather_seconds; the device is busy anyway, and
+            # one larger batch replays fewer graphs than several small ones);
+            # otherwise wait for the next ones.
+            ready = wait(list(remaining), timeout=gather if inflight else 1) if remaining else []
             timers["wait"] += time.perf_counter() - mark
             mark = time.perf_counter()
             if not ready:
+                if inflight:
+                    finish(*inflight.popleft())
+                    continue
                 for proc, (parent, _) in zip(procs, pairs):
                     if parent in remaining and not proc.is_alive():
                         raise RuntimeError(f"worker died: {proc.exitcode}")
@@ -102,6 +132,7 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
                 for conn, response in replies.items():
                     conn.send(response)
                 continue
+            groups = []
             for slot in sorted({item[2]["slot"] for item in pending}):
                 group = [item for item in pending if item[2]["slot"] == slot]
                 batch_sizes.append(len(group))
@@ -112,67 +143,59 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
                     and command["kind"] != "evaluate"
                     and not cfg["bc_only"]
                 )
+                rows_ = [item[2]["row"] for item in group]
                 with torch.no_grad():
                     if graphs is not None:
-                        rows_ = [item[2]["row"] for item in group]
+                        # Launch only: every model's batch of this round goes
+                        # to the device before any answer is read, and the
+                        # round is read after the next one has been launched.
                         decided = graphs.decide(slot, model, rows_, sample=command["kind"] != "evaluate")
+                        groups.append((group, rows_, learning, decided, False))
                         timers["batch"] += time.perf_counter() - mark
-                        mark = time.perf_counter()
-                        values = np.zeros(len(group), dtype=np.float32)
-                        if learning and "values" in hooks:
-                            values = np.asarray(hooks["values"](rows_), dtype=np.float32).reshape(-1)
-                        output = np.concatenate((decided.cpu().numpy(), values[:, None]), axis=1)
-                        timers["forward"] += time.perf_counter() - mark
+                        continue
+                    batch = make_batch(rows_, device)
+                    logits = model(
+                        batch["planes"], batch["scalars"], batch["events"]
+                    ).float()
+                    timers["batch"] += time.perf_counter() - mark
+                    mark = time.perf_counter()
+                    logp = logits.masked_fill(~batch["mask"], -1e9).log_softmax(-1)
+                    selected = None
+                    if command["kind"] == "evaluate":
+                        actions = logp.argmax(-1)
+                    elif cfg["bc_only"] and slot == "model:current":
+                        actions = batch["teacher"]
+                    elif learning and "sample" in hooks:
+                        actions, selected = hooks["sample"](logits, batch["mask"])
                     else:
-                        batch = make_batch([item[2]["row"] for item in group], device)
-                        logits = model(
-                            batch["planes"], batch["scalars"], batch["events"]
-                        ).float()
-                        timers["batch"] += time.perf_counter() - mark
-                        mark = time.perf_counter()
-                        logp = logits.masked_fill(~batch["mask"], -1e9).log_softmax(-1)
-                        selected = None
-                        if command["kind"] == "evaluate":
-                            actions = logp.argmax(-1)
-                        elif cfg["bc_only"] and slot == "model:current":
-                            actions = batch["teacher"]
-                        elif learning and "sample" in hooks:
-                            actions, selected = hooks["sample"](logits, batch["mask"])
-                        else:
-                            actions = torch.multinomial(logp.exp(), 1).squeeze(1)
-                        values = torch.zeros(len(group), device=device)
-                        if learning and "values" in hooks:
-                            values = torch.as_tensor(
-                                hooks["values"]([item[2]["row"] for item in group]),
-                                dtype=torch.float32,
-                                device=device,
-                            ).reshape(-1)
-                        elif learning:
-                            values = critic(
-                                batch["planes"],
-                                batch["scalars"],
-                                batch["events"],
-                                batch["oracle_planes"],
-                                batch["oracle_scalars"],
-                            )
-                        if selected is None:
-                            selected = logp.gather(1, actions[:, None]).squeeze(1)
-                        output = (
-                            torch.stack((actions.float(), selected, values), -1)
-                            .cpu()
-                            .numpy()
+                        actions = torch.multinomial(logp.exp(), 1).squeeze(1)
+                    values = torch.zeros(len(group), device=device)
+                    if learning and "values" in hooks:
+                        values = torch.as_tensor(
+                            hooks["values"](rows_),
+                            dtype=torch.float32,
+                            device=device,
+                        ).reshape(-1)
+                    elif learning:
+                        values = critic(
+                            batch["planes"],
+                            batch["scalars"],
+                            batch["events"],
+                            batch["oracle_planes"],
+                            batch["oracle_scalars"],
                         )
-                        timers["forward"] += time.perf_counter() - mark
-                mark = time.perf_counter()
-                for (conn, ident, _), (action, prob, value) in zip(group, output):
-                    replies[conn].append(
-                        (ident, (int(action), float(prob), float(value)))
+                    if selected is None:
+                        selected = logp.gather(1, actions[:, None]).squeeze(1)
+                    output = (
+                        torch.stack((actions.float(), selected, values), -1)
+                        .cpu()
+                        .numpy()
                     )
-                timers["reply"] += time.perf_counter() - mark
-            mark = time.perf_counter()
-            for conn, response in replies.items():
-                conn.send(response)
-            timers["reply"] += time.perf_counter() - mark
+                    timers["forward"] += time.perf_counter() - mark
+                    groups.append((group, rows_, learning, Decided(output), True))
+            inflight.append((groups, replies))
+            if graphs is None or len(inflight) > 1:
+                finish(*inflight.popleft())
         return (
             all_rows,
             records,
