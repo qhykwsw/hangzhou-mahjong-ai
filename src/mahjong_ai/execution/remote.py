@@ -174,7 +174,8 @@ print(json.dumps(True))
         # A snapshot appears only complete, with its compiled extension: a
         # service started on a half-made one would fail every request, and
         # health would still report the right code root.
-        if not self.python(f"import json,pathlib;print(json.dumps(pathlib.Path({target!r}).is_dir()))"):
+        complete = (f"import json,pathlib;print(json.dumps(any(pathlib.Path({target!r}).glob('src/mahjong_ai/_fast*.so'))))")
+        if not self.python(complete):
             staging = target + ".tmp"
             self.python(f"import json,shutil;shutil.rmtree({staging!r},ignore_errors=True);print(json.dumps(True))")
             self._extract(staging, buffer.getvalue())
