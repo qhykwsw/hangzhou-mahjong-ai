@@ -593,9 +593,7 @@ class Controller:
                     s["status"] = "paused"
                 if s["status"] != "running":
                     continue
-                waking = waking or any(
-                    j["kind"] == "trial" and j["status"] == "running" for j in s["jobs"].values()
-                )
+                waking = True
                 self.research.advance(s, db)
                 if s["status"] != "running":
                     continue
@@ -675,7 +673,8 @@ class Controller:
             if self.recipes is not None:
                 self.recipes.conclude(trial, promoted, evaluation)
         if self.recipes is not None and waking:
-            # Trials handed over before a restart continue once research runs.
+            # A recipe paused by a restart continues once research runs, whether
+            # its trial is still training or already handed over for evaluation.
             self.recipes.wake()
         for key, p in list(self.processes.items()):
             if p.poll() is None:
