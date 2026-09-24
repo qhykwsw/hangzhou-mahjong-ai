@@ -1,0 +1,11 @@
+{
+  "rows": 600000,
+  "smoke_rows": 3000,
+  "step_kl": 0.03,
+  "kl_rows": 20000,
+  "microbatch": 256,
+  "critic_batch": 256,
+  "critic_learning_rate": 0.0003,
+  "worker_fraction": 0.8,
+  "tables": 4
+}

@@ -167,7 +167,20 @@ def dispatcher():
 
 
 def play(pool, attempt_id, spec, blocks, seed, label):
-    """Play the blocks on the evaluation host; returns ({block: table score}, stats)."""
+    """Play the blocks on the evaluation host; returns ({block: table score}, stats).
+
+    One evaluation at a time: two lines sharing the host would oversubscribe it,
+    and the resulting decision timeouts would lower both scores.
+    """
+    import fcntl
+
+    LOCAL.mkdir(parents=True, exist_ok=True)
+    with (LOCAL / "evaluation.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _play(pool, attempt_id, spec, blocks, seed, label)
+
+
+def _play(pool, attempt_id, spec, blocks, seed, label):
     host = research_state()["config"]["hosts"][HOST]
     workers = host["workers"]
     blocks = list(blocks)
