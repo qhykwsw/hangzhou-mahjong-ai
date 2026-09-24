@@ -1596,6 +1596,23 @@ class Research:
             ready.append(b)
         return ready
 
+    @staticmethod
+    def next_iteration_number(s, branch):
+        """Never reuse an iteration number, even after an iteration is removed:
+        its jobs still name it and a new iteration would inherit them."""
+        b = s["branches"][branch]
+        if "iteration_sequence" not in b:
+            prefix = f"{branch}--iteration-"
+            used = [it["number"] for it in s["iterations"].values() if it["branch"] == branch]
+            used += [
+                int(j["iteration"][len(prefix):])
+                for j in s["jobs"].values()
+                if isinstance(j.get("iteration"), str) and j["iteration"].startswith(prefix)
+            ]
+            b["iteration_sequence"] = max([b["completed"], *used])
+        b["iteration_sequence"] += 1
+        return b["iteration_sequence"]
+
     def start_iteration(self, s, branch):
         b = s["branches"][branch]
         cycle = self.current_cycle(s)
@@ -1607,7 +1624,7 @@ class Research:
         for key in ("evaluation_games", "evaluation_host"):
             if key in combination:
                 cfg[key] = combination[key]
-        number = b["completed"] + 1
+        number = self.next_iteration_number(s, branch)
         iid = f"{branch}--iteration-{number:05d}"
         s["iterations"][iid] = dict(
             id=iid,

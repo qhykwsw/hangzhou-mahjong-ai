@@ -1873,6 +1873,21 @@ def test_views_work_while_a_recipe_candidate_is_still_training(tmp_path):
     assert r.snapshot(run)["branch_progress"]["rl-recipe--01"]
 
 
+def test_iteration_numbers_are_never_reused_after_an_iteration_is_removed(research):
+    r, run, controller = research
+    branch = next(iter(r.read(run)["branches"]))
+    with r.edit(run) as (s, db):
+        job = r.start_iteration(s, branch)
+        first = job["iteration"]
+        r.accept(s, db, job, dict(status="failed", error="boom", usage={"wall_seconds": 1}))
+        # Removing a failed iteration leaves its jobs behind and rolls the count back.
+        del s["iterations"][first]
+        s["branches"][branch]["completed"] -= 1
+        second = r.start_iteration(s, branch)["iteration"]
+        assert second > first
+        assert s["jobs"][job["id"]]["iteration"] == first
+
+
 def test_job_numbers_are_never_reused_after_jobs_are_removed(research):
     r, run, controller = research
     with r.edit(run) as (s, db):
