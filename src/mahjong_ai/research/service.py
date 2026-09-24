@@ -2381,17 +2381,18 @@ class Research:
         for cid in iteration["candidates"]:
             # A recipe branch's candidate exists only once its model is handed back.
             candidate = s["candidates"].get(cid) or {"status": "training"}
-            record = candidate.get("training")
+            # Rule candidates record episodes; recipe trainings record a state,
+            # seconds and updates (guided.recipe_jobs).
+            record = candidate.get("training") or {}
             training.append(
                 dict(
                     candidate_id=cid,
-                    status=record["status"] if record else candidate["status"],
-                    completed_games=len(record["episodes"]) if record else None,
-                    updates=record.get("reported_metrics", {}).get("updates")
-                    if record
-                    else None,
-                    interrupted=record.get("interrupted") if record else None,
-                    error=candidate.get("error"),
+                    status=record.get("status") or record.get("state") or candidate["status"],
+                    completed_games=len(record["episodes"]) if "episodes" in record else None,
+                    updates=record.get("reported_metrics", {}).get("updates", record.get("updates")),
+                    interrupted=record.get("interrupted"),
+                    training_seconds=record.get("seconds"),
+                    error=candidate.get("error") or record.get("error"),
                 )
             )
         return dict(

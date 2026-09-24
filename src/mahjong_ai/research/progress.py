@@ -101,7 +101,7 @@ def branch_progress(state):
                 if candidate["status"] == "failed"
                 else ("completed" if ready else job["status"] if job else "waiting")
             )
-            completed = len(record["episodes"]) if record else None
+            completed = len(record["episodes"]) if record and "episodes" in record else None
             source = (
                 "partial"
                 if record and record.get("interrupted")

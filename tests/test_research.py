@@ -1856,6 +1856,21 @@ def test_views_work_while_a_recipe_candidate_is_still_training(tmp_path):
         r.start_iteration(s, "rl-recipe--01")
     assert r.snapshot(run)["branch_progress"]["rl-recipe--01"]["research"]
     assert r.snapshot(run, "rl-recipe--01")["iterations"]
+    # Handed back: the candidate carries a recipe training record (state/seconds/updates).
+    import hashlib
+    import json
+    actor = tmp_path / "trained"
+    actor.mkdir()
+    (actor / "actor.pt").write_bytes(b"w")
+    (actor / "meta.json").write_text(json.dumps({"weights_sha256": hashlib.sha256(b"w").hexdigest(), "config": {}}))
+    with r.edit(run) as (s, db):
+        it = s["iterations"][s["branches"]["rl-recipe--01"]["iteration"]]
+        r.model_candidate(s, db, it["candidates"][0], actor, branch="rl-recipe--01",
+                          combination="rl-recipe", status="ready")
+        s["candidates"][it["candidates"][0]]["training"] = {"state": "complete", "seconds": 60.0, "updates": 3}
+    feedback = r.snapshot(run, "rl-recipe--01")["iterations"][-1]["execution_feedback"]["training"][0]
+    assert feedback["status"] == "complete" and feedback["updates"] == 3
+    assert r.snapshot(run)["branch_progress"]["rl-recipe--01"]
 
 
 def test_job_numbers_are_never_reused_after_jobs_are_removed(research):
