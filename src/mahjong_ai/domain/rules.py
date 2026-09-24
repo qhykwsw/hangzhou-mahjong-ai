@@ -139,6 +139,12 @@ def _baotou(c: tuple[int, ...], open_melds: int) -> bool:
 
 
 def is_baotou(waiting_hand, open_melds=0) -> bool:
+    if _fast is not None and hasattr(_fast, "is_baotou") and type(open_melds) is int:
+        # Counting, the cheap rejections and a memo in one call: policies ask
+        # this for hundreds of waiting hands per decision.
+        value = _fast.is_baotou(waiting_hand, open_melds)
+        if value is not None:
+            return value
     return _baotou(counts(waiting_hand), open_melds)
 
 

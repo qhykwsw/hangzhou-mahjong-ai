@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from mahjong_ai.execution.candidate_runtime import (
     CandidateProcess,
+    InlinePolicy,
     JobCancelled,
     begin_finalize,
     check_cancelled,
@@ -116,7 +117,13 @@ def _attach_group_readouts(summary, assignments, receipts):
 
 
 def _build_started_policy(task, key):
-    policy = PolicySpec(**task["policies"][key[0]]).build()
+    spec = PolicySpec(**task["policies"][key[0]])
+    if spec.family == "code" and task.get("resources", {}).get("isolation") == "none":
+        # The task owner vouches for its code packages: run them in this process.
+        policy = InlinePolicy(spec.package_path, spec.package_hash, spec.action_seconds,
+                              spec.version, spec.response_seconds)
+    else:
+        policy = spec.build()
     # Built-in rule/RL policies run in the host and have no sandbox startup.
     if hasattr(policy, "start"):
         policy.start()
@@ -283,6 +290,91 @@ def prepare(task, root, deadline):
     return {"status": "completed", "candidates": rows}
 
 
+_PROGRESS_WRITTEN = [0.0]
+
+
+def _report_progress(root, completed, total, hand):
+    """At most one progress file every two seconds: each write is an fsync."""
+    now = time.monotonic()
+    if now - _PROGRESS_WRITTEN[0] < 2.0:
+        return
+    _PROGRESS_WRITTEN[0] = now
+    atomic_json(
+        root / "progress.json",
+        dict(completed_matches=completed, total_matches=total, hand=hand),
+    )
+
+
+def _play_one(task, root, assignment, pool, engine, progress):
+    """Play one assignment with this table's policy pool; returns its receipt."""
+    path = root / "matches" / f"{assignment['index']:06d}.json"
+    if path.exists():
+        return read_json(path)
+    keys, occurrences = [], {}
+    for cid in assignment["players"]:
+        slot = occurrences.get(cid, 0)
+        occurrences[cid] = slot + 1
+        keys.append((cid, slot))
+    missing = [key for key in keys if key not in pool]
+    if missing:
+        # 首次上场要付 sandbox 启动与解释器导入成本，四个进程并行建。
+        with ThreadPoolExecutor(max_workers=len(missing)) as executor:
+            futures = {
+                executor.submit(_build_started_policy, task, key): key
+                for key in missing
+            }
+            built = {}
+            try:
+                for future in as_completed(futures):
+                    built[futures[future]] = future.result()
+            except BaseException:
+                # A failed parallel startup must not strand the other
+                # already-started sandboxes before the task fails.
+                for future in futures:
+                    if future.done() and not future.cancelled():
+                        try:
+                            policy = future.result()
+                        except BaseException:
+                            continue
+                        policy.close()
+                raise
+        pool.update(built)
+    players = [pool[key] for key in keys]
+    engine.progress = progress
+    before = [_stats_snapshot(p) for p in players]
+    seed = derive_seed(task["seed"], "wall", assignment["block"])
+    seeds = [
+        derive_seed(task["seed"], "policy", assignment["block"], seat)
+        for seat in range(4)
+    ]
+    result = engine.run_round(
+        players, RoundConfig(**task["config"]), seed, policy_seeds=seeds
+    )
+    if not result.completed:
+        raise ValueError("评估结算不完整")
+    receipt = dict(
+        players=assignment["players"],
+        ranks=result.rank_by_seat,
+        scores=result.total_score_by_seat,
+        hands=result.rounds_played,
+        # 逐局增量分按座位保存：场排名只用了 8 局的总分，逐局读数
+        # 让每一局都参与评估，不再把 7/8 的对局信息丢掉。
+        hand_deltas=[
+            list(hand["delta"]) for hand in result.metadata.get("hands", [])
+        ],
+        execution=[
+            _stats_delta(p, snapshot) for p, snapshot in zip(players, before)
+        ],
+        diagnostics=[
+            dict(candidate_id=cid, error=p.last_error)
+            for cid, p in zip(assignment["players"], players)
+            if p.last_error
+        ],
+    )
+    atomic_json(path, receipt)
+    return receipt
+
+
 def play(task, root):
     from mahjong_ai.evaluation.schedule import (
         group_uncertainty,
@@ -293,89 +385,51 @@ def play(task, root):
     # 同一策略在同一任务里反复上场：进程按“策略 + 场上第几次出现”复用，
     # 只在任务结束时收掉。每场重新 build 会按场付出 sandbox 启动与解释器
     # 导入成本（每场约 0.2s×4），对快策略是主要开销。
-    pool = {}
-    receipts = []
-    engine = MahjongEngine(record_events=False)
-    try:
-        for assignment in task["assignments"]:
-            check_cancelled()
-            path = root / "matches" / f"{assignment['index']:06d}.json"
-            if path.exists():
-                receipts.append(read_json(path))
-                continue
-            keys, occurrences = [], {}
-            for cid in assignment["players"]:
-                slot = occurrences.get(cid, 0)
-                occurrences[cid] = slot + 1
-                keys.append((cid, slot))
-            missing = [key for key in keys if key not in pool]
-            if missing:
-                # 首次上场要付 sandbox 启动与解释器导入成本，四个进程并行建。
-                with ThreadPoolExecutor(max_workers=len(missing)) as executor:
-                    futures = {
-                        executor.submit(_build_started_policy, task, key): key
-                        for key in missing
-                    }
-                    built = {}
-                    try:
-                        for future in as_completed(futures):
-                            built[futures[future]] = future.result()
-                    except BaseException:
-                        # A failed parallel startup must not strand the other
-                        # already-started sandboxes before the task fails.
-                        for future in futures:
-                            if future.done() and not future.cancelled():
-                                try:
-                                    policy = future.result()
-                                except BaseException:
-                                    continue
-                                policy.close()
-                        raise
-                pool.update(built)
-            players = [pool[key] for key in keys]
-            engine.progress = lambda progress: atomic_json(
-                root / "progress.json",
-                dict(
-                    completed_matches=len(receipts),
-                    total_matches=len(task["assignments"]),
-                    hand=progress,
-                ),
-            )
-            before = [_stats_snapshot(p) for p in players]
-            seed = derive_seed(task["seed"], "wall", assignment["block"])
-            seeds = [
-                derive_seed(task["seed"], "policy", assignment["block"], seat)
-                for seat in range(4)
-            ]
-            result = engine.run_round(
-                players, RoundConfig(**task["config"]), seed, policy_seeds=seeds
-            )
-            if not result.completed:
-                raise ValueError("评估结算不完整")
-            receipt = dict(
-                players=assignment["players"],
-                ranks=result.rank_by_seat,
-                scores=result.total_score_by_seat,
-                hands=result.rounds_played,
-                # 逐局增量分按座位保存：场排名只用了 8 局的总分，逐局读数
-                # 让每一局都参与评估，不再把 7/8 的对局信息丢掉。
-                hand_deltas=[
-                    list(hand["delta"]) for hand in result.metadata.get("hands", [])
-                ],
-                execution=[
-                    _stats_delta(p, snapshot) for p, snapshot in zip(players, before)
-                ],
-                diagnostics=[
-                    dict(candidate_id=cid, error=p.last_error)
-                    for cid, p in zip(assignment["players"], players)
-                    if p.last_error
-                ],
-            )
-            atomic_json(path, receipt)
-            receipts.append(receipt)
-    finally:
-        with ThreadPoolExecutor(max_workers=max(1, len(pool))) as executor:
-            list(executor.map(lambda policy: policy.close(), pool.values()))
+    #
+    # A process plays ``resources.tables`` games at once, one thread each: a
+    # model seat's decision is a round trip to the inference service, during
+    # which the other tables keep the core busy, and the service sees several
+    # requests at a time instead of one.
+    assignments = task["assignments"]
+    tables = max(1, int(task.get("resources", {}).get("tables") or 1))
+    if tables > 1:
+        # A table whose model reply has arrived waits for the running table to
+        # release the interpreter; the default 5 ms interval would add most of
+        # that to every model decision.
+        sys.setswitchinterval(0.001)
+    receipts = [None] * len(assignments)
+    queue = list(range(len(assignments)))
+    lock, failures, done = threading.Lock(), [], [0]
+
+    def progress(hand):
+        _report_progress(root, done[0], len(assignments), hand)
+
+    def table():
+        pool, engine = {}, MahjongEngine(record_events=False)
+        try:
+            while True:
+                with lock:
+                    if failures or not queue:
+                        return
+                    index = queue.pop(0)
+                check_cancelled()
+                receipts[index] = _play_one(task, root, assignments[index], pool, engine, progress)
+                with lock:
+                    done[0] += 1
+        except BaseException as exc:
+            with lock:
+                failures.append(exc)
+        finally:
+            with ThreadPoolExecutor(max_workers=max(1, len(pool))) as executor:
+                list(executor.map(lambda policy: policy.close(), pool.values()))
+
+    threads = [threading.Thread(target=table, name=f"table-{i}") for i in range(tables)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    if failures:
+        raise failures[0]
     roster = list(task["policies"])
     summary = standings(roster, receipts)
     _attach_group_readouts(summary, task["assignments"], receipts)

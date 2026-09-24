@@ -352,6 +352,35 @@ static int baotou_shape(const int *waiting, int open_melds) {
     return 1;
 }
 
+/* Direct-mapped memo for the baotou test: the 34 counts plus open melds. A
+ * policy pricing waits asks it for the same waiting hands over and over. */
+#define BAOTOU_CACHE_BITS 16
+#define BAOTOU_CACHE_SIZE (1 << BAOTOU_CACHE_BITS)
+
+typedef struct {
+    uint8_t key[35];
+    uint8_t value;
+    uint8_t used;
+} baotou_slot;
+
+static baotou_slot baotou_cache[BAOTOU_CACHE_SIZE];
+
+static int baotou_cached(const int *counts, int open_melds) {
+    uint8_t key[35];
+    for (int i = 0; i < NTILES; i++) key[i] = (uint8_t)counts[i];
+    key[34] = (uint8_t)open_melds;
+    uint32_t index = byte_hash(key, 35) & (BAOTOU_CACHE_SIZE - 1);
+    baotou_slot *slot = &baotou_cache[index];
+    if (slot->used && memcmp(slot->key, key, 35) == 0) {
+        return slot->value;
+    }
+    int value = baotou_shape(counts, open_melds);
+    memcpy(slot->key, key, 35);
+    slot->value = (uint8_t)value;
+    slot->used = 1;
+    return value;
+}
+
 static long fan_value(const int *counts, int drawn_tile, int open_melds,
                       int chain_count, int piao_count, int you_cai_bi_kao,
                       int kong_draw) {
@@ -560,6 +589,14 @@ static PyObject *py_analyze_counts(PyObject *self, PyObject *args) {
             }
         }
     }
+    /* The availability-weighted sums sdk.shape.analyze reports, so the
+     * Python side builds its result without iterating the tuples again. */
+    long ukeire = 0, copies = 0, value = 0;
+    for (int i = 0; i < n_improving; i++) ukeire += avail[improving[i]];
+    for (int i = 0; i < n_wins; i++) {
+        copies += avail[wins[i]];
+        value += avail[wins[i]] * fans[i];
+    }
     PyObject *imp = PyTuple_New(n_improving), *win = PyTuple_New(n_wins),
              *fan = PyTuple_New(n_wins);
     if (!imp || !win || !fan) goto fail;
@@ -569,7 +606,7 @@ static PyObject *py_analyze_counts(PyObject *self, PyObject *args) {
         PyTuple_SET_ITEM(win, i, PyLong_FromLong(wins[i]));
         PyTuple_SET_ITEM(fan, i, PyLong_FromLong(fans[i]));
     }
-    return Py_BuildValue("(iNNN)", distance, imp, win, fan);
+    return Py_BuildValue("(iNNNlll)", distance, imp, win, fan, ukeire, copies, value);
 fail:
     Py_XDECREF(imp);
     Py_XDECREF(win);
@@ -585,6 +622,41 @@ static PyObject *py_baotou(PyObject *self, PyObject *args) {
     if (parse_counts(obj, counts) < 0) return NULL;
     if (open_melds < 0 || open_melds > 4) Py_RETURN_FALSE;
     return PyBool_FromLong(baotou_shape(counts, open_melds));
+}
+
+/* rules.is_baotou for a hand of tile ids: the counts, the cheap rejections of
+ * rules._baotou (wrong length, no white), then the memoized shape test. None
+ * hands back to the Python path where it would iterate itself (a count above
+ * four, which never occurs in play). */
+static PyObject *py_is_baotou(PyObject *self, PyObject *args) {
+    PyObject *hand;
+    int open_melds;
+    if (!PyArg_ParseTuple(args, "Oi", &hand, &open_melds)) return NULL;
+    PyObject *fast = PySequence_Fast(hand, "hand must be a sequence");
+    if (!fast) return NULL;
+    int counts[NTILES] = {0};
+    Py_ssize_t n = PySequence_Fast_GET_SIZE(fast);
+    for (Py_ssize_t i = 0; i < n; i++) {
+        PyObject *item = PySequence_Fast_GET_ITEM(fast, i);
+        long t = PyLong_Check(item) ? PyLong_AsLong(item) : -1;
+        if (t == -1 && PyErr_Occurred()) PyErr_Clear();
+        if (!PyLong_Check(item) || t < 0 || t >= NTILES) {
+            PyObject *text = PyObject_Str(item);
+            if (text) {
+                PyErr_Format(PyExc_ValueError, "invalid tile: %U", text);
+                Py_DECREF(text);
+            }
+            Py_DECREF(fast);
+            return NULL;
+        }
+        counts[t]++;
+    }
+    Py_DECREF(fast);
+    if (n != 13 - 3 * (Py_ssize_t)open_melds || counts[WHITE] == 0) Py_RETURN_FALSE;
+    for (int i = 0; i < NTILES; i++)
+        if (counts[i] > 4) Py_RETURN_NONE;
+    if (open_melds < 0 || open_melds > 4) Py_RETURN_FALSE;
+    return PyBool_FromLong(baotou_cached(counts, open_melds));
 }
 
 /* rules.counts for a list or tuple of tile ids, with the same validation:
@@ -625,6 +697,8 @@ static PyMethodDef fast_methods[] = {
      "Distance, improving draws, winning draws and their numeric fans."},
     {"baotou", py_baotou, METH_VARARGS,
      "Whether every drawable tile completes the 13-3*open waiting hand."},
+    {"is_baotou", py_is_baotou, METH_VARARGS,
+     "rules.is_baotou for a hand of tile ids; None when Python must decide."},
     {"counts", py_counts, METH_O, "Per-tile counts of a hand, validating ids."},
     {"shape_value", py_shape_value, METH_VARARGS,
      "concealed shape value 8 - 2*melds - min(partials, 4 - melds) - pair"},

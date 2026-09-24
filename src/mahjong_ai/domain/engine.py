@@ -240,7 +240,8 @@ class HandState:
         self._sync_views()
         return self._views
 
-    def observation(self):
+    def observation(self, legal=None):
+        """The policy's view; ``legal`` passes legal_actions() already computed this step."""
         seat = self.turn
         self._sync_views()
         melds = tuple(
@@ -262,7 +263,7 @@ class HandState:
             ),
             tuple(sorted(self.hands[seat])),
             tuple(self._views[seat]),
-            self.legal_actions(),
+            self.legal_actions() if legal is None else legal,
             melds,
             tuple(tuple(x) for x in self.discards),
             tuple(len(h) for h in self.hands),
@@ -278,9 +279,10 @@ class HandState:
             base_score=self.config.base_score,
         )
 
-    def timeout_action(self):
+    def timeout_action(self, legal=None):
         """Official fallback uses insertion order, not the sorted public hand."""
-        legal = self.legal_actions()
+        if legal is None:
+            legal = self.legal_actions()
         if self.phase.startswith("response_"):
             return next(a for a in legal if a.action == "pass")
         hu = next((a for a in legal if a.action == "hu"), None)
@@ -294,8 +296,10 @@ class HandState:
                 return action
         raise IllegalAction("no official timeout action")
 
-    def step(self, action):
-        legal = self.legal_actions()
+    def step(self, action, legal=None):
+        """Apply ``action``; ``legal`` is this step's legal_actions() when the caller has it."""
+        if legal is None:
+            legal = self.legal_actions()
         if action not in legal:
             raise IllegalAction(f"{action} not legal in {self.phase}, seat {self.turn}")
         self.steps += 1
@@ -305,11 +309,12 @@ class HandState:
             self.fan = self.current_fan()
             self._finish(s)
         elif action.action == "discard":
+            # Only this hand's events can hold the caller's last move.
             piao = action.tile == WHITE and can_discard_piao(
                 h,
                 self.drawn,
                 len(self.melds[s]),
-                [e for e, _ in self.events],
+                [e for e, _ in self.events[self.hand_start :]],
                 s,
                 self.hand_no,
                 catch_exempt=self.catch_owner == s,

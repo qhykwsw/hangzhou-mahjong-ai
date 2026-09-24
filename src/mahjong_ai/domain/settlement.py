@@ -107,7 +107,7 @@ def run_settlement(engine, policies, config, seed, *, policy_seeds=None):
                 if len(legal) == 1:
                     action = legal[0]
                 else:
-                    obs = hand.observation()
+                    obs = hand.observation(legal)
                     obs = replace(
                         obs,
                         stage=replace(
@@ -122,8 +122,8 @@ def run_settlement(engine, policies, config, seed, *, policy_seeds=None):
                     try:
                         action = policies[seat_players[hand.turn]].act(obs)
                     except ActionUnavailable:
-                        action = hand.timeout_action()
-                hand.step(action)
+                        action = hand.timeout_action(legal)
+                hand.step(action, legal)
                 if engine.check_invariants:
                     hand.assert_conservation()
             steps += hand.steps

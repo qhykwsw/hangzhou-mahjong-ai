@@ -48,12 +48,26 @@ def is_finalizing():
     return _FINALIZING
 
 
+_CANCEL_CLEAR = {}  # flag path -> monotonic time it was last seen absent
+
+
 def check_cancelled():
+    """Raise once the job's cancel flag exists.
+
+    The engine asks before every step; a flag seen absent is trusted for 0.2 s,
+    which saved about a tenth of a match job's CPU in file-system calls.
+    """
     if _FINALIZING:
         return
     cancel = os.environ.get("MAHJONG_JOB_CANCEL")
-    if cancel and Path(cancel).exists():
+    if not cancel:
+        return
+    now = time.monotonic()
+    if now - _CANCEL_CLEAR.get(cancel, -1.0) < 0.2:
+        return
+    if Path(cancel).exists():
         raise JobCancelled("任务已取消")
+    _CANCEL_CLEAR[cancel] = now
 
 
 _MEMORY_LOCK = threading.Lock()
@@ -278,9 +292,7 @@ class CandidateProcess:
     def receive(self, seconds):
         end = time.monotonic() + max(0.001, seconds)
         while b"\n" not in self.pending:
-            cancel = os.environ.get("MAHJONG_JOB_CANCEL")
-            if cancel and Path(cancel).exists() and not _FINALIZING:
-                raise JobCancelled("任务已取消")
+            check_cancelled()
             if not self.selector.select(min(0.25, max(0, end - time.monotonic()))):
                 if time.monotonic() >= end:
                     raise TimeoutError("候选进程响应超时")
@@ -550,6 +562,126 @@ class RemotePolicy:
             self.close()
         except Exception:
             pass
+
+
+_INLINE_MODULES, _INLINE_LOCK = {}, threading.Lock()
+
+
+def _inline_module(package, package_hash):
+    """The package's strategy module, loaded once per process and shared by its seats."""
+    import importlib.util
+
+    with _INLINE_LOCK:
+        module = _INLINE_MODULES.get(package_hash)
+        if module is None:
+            spec = importlib.util.spec_from_file_location(
+                "candidate_" + package_hash[:16], Path(package) / "strategy.py"
+            )
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            _INLINE_MODULES[package_hash] = module
+        return module
+
+
+class InlinePolicy:
+    """A frozen code package run inside the match process: no sandbox, no serialization.
+
+    For opponents whose code the maintainer owns (an evaluation's fixed pool),
+    where isolation buys nothing and the round trip through a worker costs a
+    quarter of a millisecond per decision plus a copy of every observation.
+    The policy sees the engine's own observation objects. Time limits are
+    judged after the fact: a late answer still costs the seat its fallback
+    action, it just is not interrupted. Packages must be self-contained (one
+    strategy module and its data), since nothing is added to sys.path.
+    """
+
+    name = "code-policy"
+
+    def __init__(
+        self,
+        package,
+        package_hash,
+        action_seconds=3.0,
+        version="code",
+        response_seconds=1.0,
+    ):
+        if tree_hash(package) != package_hash:
+            raise ValueError("冻结的候选发生变化")
+        self.package, self.package_hash = Path(package), package_hash
+        self.action_seconds, self.response_seconds = action_seconds, response_seconds
+        self.version, self.policy = version, None
+        self.stats = {"actions": 0, "timeouts": 0, "errors": 0, "elapsed_seconds": 0.0}
+        self.stats.update(compute_seconds=0.0, ipc_seconds=0.0, fallback_actions=0)
+        self.last_error = None
+        self.latencies = []
+
+    def start(self):
+        if self.policy is not None:
+            return
+        self.policy = _inline_module(self.package, self.package_hash).build(self.package / "model")
+
+    def reset(self, seed):
+        try:
+            self.start()
+            self.policy.reset(seed)
+        except Exception as exc:
+            self._error(exc)
+            self.stats["errors"] += 1
+            raise RuntimeError(f"候选启动或 reset 失败：{exc}") from exc
+
+    def act(self, observation):
+        started = time.monotonic()
+        limit = (
+            self.response_seconds
+            if observation.phase.startswith("response_")
+            else self.action_seconds
+        )
+        self.stats["actions"] += 1
+        try:
+            if self.policy is None:
+                raise ActionUnavailable("候选未启动")
+            action = self.policy.act(observation)
+            compute = time.monotonic() - started
+            self.stats["compute_seconds"] += compute
+            if compute > limit:
+                raise TimeoutError("候选未在时限内给出动作")
+            index = observation.legal_actions.index(action)
+            return observation.legal_actions[index]
+        except JobCancelled:
+            raise
+        except ActionUnavailable:
+            pass
+        except TimeoutError as exc:
+            self._error(exc)
+            self.stats["timeouts"] += 1
+        except Exception as exc:
+            self._error(exc)
+            self.stats["errors"] += 1
+        finally:
+            elapsed = time.monotonic() - started
+            self.stats["elapsed_seconds"] += elapsed
+            self.latencies.append(elapsed)
+            if len(self.latencies) > 4096:
+                del self.latencies[:2048]
+        self.stats["fallback_actions"] += 1
+        raise ActionUnavailable("候选未在时限内给出合法动作")
+
+    def finish_round(self, result, seat):
+        if self.policy is None:
+            return
+        try:
+            self.policy.finish_round(public_result(result), seat)
+        except JobCancelled:
+            raise
+        except Exception as exc:
+            self._error(exc)
+            self.stats["errors"] += 1
+
+    def close(self):
+        self.policy = None
+
+    def _error(self, exc):
+        self.last_error = {"message": str(exc)[:4000], "type": type(exc).__name__}
 
 
 def train_package(

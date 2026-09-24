@@ -14,7 +14,7 @@
 | `platform/` | 导出、官方协议与牌谱审计 |
 | `interfaces/` | CLI、研究 MCP、HTTP 与网页 |
 
-操作系统适配集中在 `interfaces/service_host.py`（launchd/systemd 与浏览器）、`execution/candidate_runtime.py` 的沙箱入口、`execution/linux_sandbox.py`（Bubblewrap/seccomp）和 `execution/process_usage.py`（RSS）。规则、研究状态机与评估口径不因操作系统改变。Linux/WSL2 的候选限制与 macOS 相同，不提供无沙箱降级。
+操作系统适配集中在 `interfaces/service_host.py`（launchd/systemd 与浏览器）、`execution/candidate_runtime.py` 的沙箱入口、`execution/linux_sandbox.py`（Bubblewrap/seccomp）和 `execution/process_usage.py`（RSS）。规则、研究状态机与评估口径不因操作系统改变。Linux/WSL2 的候选限制与 macOS 相同，不提供无沙箱降级。隔离只有一种显式例外：对局任务的 `resources.isolation = "none"` 让任务拥有者信任的代码包（例如维护者自己冻结的固定对手池）直接在对局进程里运行（`candidate_runtime.InlinePolicy`），省去每次决策的序列化与进程往返；时限改为事后判定，超时仍按代打计。这不是沙箱不可用时的回退，研究执行器不设置这个字段。同一任务的 `resources.tables` 让一个对局进程同时打几桌（一桌一个线程），模型座位等推理服务时其他桌继续。
 
 研究入口为 `mahjong`，独立引擎、训练、吞吐测试、导出与平台命令为 `mahjong-ai`。以 `--help` 为准。
 

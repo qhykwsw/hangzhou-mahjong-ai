@@ -114,34 +114,38 @@ def remaining_tiles(obs):
 
 
 def analyze(hand, open_melds=0, remaining=None, chain=0, piao=0, you_cai_bi_kao=False):
-    hand = tuple(sorted(hand))
     hand_counts = counts(hand)
-    distance = shanten(hand, open_melds)
     available = (
         remaining if remaining is not None else tuple(4 - n for n in hand_counts)
     )
-    improving = []
-    wins = []
-    fans = {}
     if len(hand) == 13 - 3 * open_melds and _fast is not None and hasattr(
         _fast, "analyze_counts"
     ):
-        # One C call replaces the draw loop below with identical output.
-        raw, fast_improving, fast_wins, fast_fans = _fast.analyze_counts(
-            hand_counts, open_melds, available, chain, piao, int(you_cai_bi_kao)
+        if max(hand_counts) > 4:
+            raise ValueError("more than four copies")
+        # One C call replaces the draw loop below with identical output; a
+        # policy pricing waits calls this for every candidate discard, so the
+        # sorted hand and cached distance are only built on the fallback path.
+        raw, fast_improving, fast_wins, fast_fans, ukeire, copies, value = (
+            _fast.analyze_counts(
+                hand_counts, open_melds, available, chain, piao, int(you_cai_bi_kao)
+            )
         )
         if raw >= 0:
-            wins = list(fast_wins)
-            fans = dict(zip(fast_wins, fast_fans))
             return {
                 "shanten": raw,
                 "improving": list(fast_improving),
-                "ukeire": sum(available[t] for t in fast_improving),
-                "winning_tiles": wins,
-                "winning_copies": sum(available[t] for t in wins),
-                "fans": fans,
-                "fan_value": sum(available[t] * v for t, v in fans.items()),
+                "ukeire": ukeire,
+                "winning_tiles": list(fast_wins),
+                "winning_copies": copies,
+                "fans": dict(zip(fast_wins, fast_fans)),
+                "fan_value": value,
             }
+    hand = tuple(sorted(hand))
+    distance = shanten(hand, open_melds)
+    improving = []
+    wins = []
+    fans = {}
     if len(hand) == 13 - 3 * open_melds:
         candidates = None
         if _fast is not None:
