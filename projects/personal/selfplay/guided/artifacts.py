@@ -129,11 +129,16 @@ def _atomic_json(path, value):
             os.unlink(name)
 
 
-def export_bundle(project_root, output_root) -> Path:
+def export_bundle(project_root, output_root, candidates=None) -> Path:
     """Publish the latest completed four-branch roster without writing research state.
 
     output_root is normally projects/personal/selfplay/.local/teachers. An
     existing current.json is replaced only after a complete verified export.
+
+    ``candidates`` names the roster explicitly instead, teacher first, one
+    version per rule branch (a user-chosen teacher, e.g. one that did better on
+    the platform than the latest champion). Such a bundle is exported beside the
+    others and does not replace current.json.
     """
     project = Path(project_root).resolve()
     database = project / ".local/service/research.sqlite"
@@ -147,6 +152,12 @@ def export_bundle(project_root, output_root) -> Path:
         raise ValueError("no completed research competition")
     cycle = completed[-1]
     ranked = [r for r in cycle.get("ranking", []) if r.get("branch") in BRANCHES]
+    if candidates is not None:
+        cycle = dict(id=None, experiment=state.get("id"))
+        ranked = [
+            dict(candidate_id=cid, branch=(state.get("candidates", {}).get(cid) or {}).get("branch"))
+            for cid in candidates
+        ]
     if len(ranked) != 4 or {r["branch"] for r in ranked} != set(BRANCHES):
         raise ValueError(
             "latest completed competition must contain all four rule branches"
@@ -260,6 +271,8 @@ def export_bundle(project_root, output_root) -> Path:
                 raise ValueError("existing teacher artifact has a conflicting identity")
         else:
             os.rename(staging, destination)
+        if candidates is not None:
+            return destination / "manifest.json"
         _atomic_json(
             output / "current.json",
             {

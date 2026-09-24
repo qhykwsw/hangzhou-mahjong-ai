@@ -107,6 +107,17 @@ def test_completed_roster_wins_over_temporary_and_live_rankings(research):
     assert database.read_bytes() == before
 
 
+def test_an_explicit_roster_names_the_teacher_without_replacing_current(research):
+    root, output, _, _, _ = research
+    current = artifacts.read_bundle(artifacts.export_bundle(root, output))["id"]
+    roster = ["candidate-2", "candidate-0", "candidate-1", "candidate-3"]
+    result = artifacts.read_bundle(artifacts.export_bundle(root, output, roster))
+    assert result["teacher"] == "candidate-2"
+    assert [e["id"] for e in result["entries"]] == roster
+    assert result["id"] != current
+    assert artifacts.read_bundle(output / "current.json")["id"] == current
+
+
 def test_latest_completed_must_contain_all_four_branches(research):
     root, output, state, save, _ = research
     path = artifacts.export_bundle(root, output)

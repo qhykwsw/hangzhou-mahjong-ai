@@ -33,8 +33,11 @@ def export_candidate(project, candidate, output):
             "scope": "local competition result; external platform has separate records",
         })
         return {"policy": str(destination / "policy.json"), "candidate": candidate}
+    # An experiment that plays every frozen package on one candidate runtime
+    # evaluated this entrant there; the platform entrant plays the same way.
+    runtime = state.get("candidate_runtime_path") or original.runtime_path
     shutil.copytree(original.package_path, destination / "candidate")
-    shutil.copytree(original.runtime_path, destination / "runtime")
+    shutil.copytree(runtime, destination / "runtime")
     value = original.as_dict() | {
         "package_path": "candidate",
         "python_path": None,
@@ -47,7 +50,8 @@ def export_candidate(project, candidate, output):
             "candidate": candidate,
             "branch": row["branch"],
             "experiment": row.get("experiment"),
-            "runtime": Path(original.runtime_path).name,
+            "runtime": Path(runtime).name,
+            "original_runtime": Path(original.runtime_path).name,
             "requirements": row.get("requirements", []),
             "scope": "local competition result; external platform has separate records",
         },
