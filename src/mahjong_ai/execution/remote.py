@@ -402,10 +402,14 @@ class Dispatcher:
         return True
 
     def _rebooted_since(self, launched):
-        """True when the host booted after ``launched`` (its work was lost)."""
+        """True when the host's Linux started after ``launched`` (its work was lost).
+
+        WSL can stop a distribution without restarting its VM, so the start of
+        the distribution's init counts, not the VM uptime.
+        """
         try:
             boot = self.host.python(
-                "import json,time\nprint(json.dumps(time.time()-float(open('/proc/uptime').read().split()[0])))\n",
+                "import os\nbtime=[float(l.split()[1]) for l in open('/proc/stat') if l.startswith('btime')][0]\nticks=int(open('/proc/1/stat').read().rsplit(')',1)[1].split()[19])\nprint(btime+ticks/os.sysconf('SC_CLK_TCK'))\n",
                 timeout=60,
             )
         except Exception:

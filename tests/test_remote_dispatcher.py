@@ -19,7 +19,7 @@ class Host:
         if "SIGSTOP" in script or "SIGCONT" in script:
             self.signals.append("SIGSTOP" if "SIGSTOP" in script else "SIGCONT")
             return [1]
-        if "/proc/uptime" in script:
+        if "/proc/1/stat" in script:
             return self.boot
         return True
 
