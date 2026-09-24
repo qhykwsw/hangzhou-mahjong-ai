@@ -104,6 +104,37 @@ static suit_res suit_rec(const int *c, int n, int i, int a, int b, int d, int al
     return cur;
 }
 
+/* Memo of one suit's table by its counts: a hand's suits recur across the
+ * hands a strategy analyses far more than whole hands do, so a distance that
+ * misses the hand memo usually costs four probes here instead of four
+ * searches. Key: 3 bits per count, honours flagged above them. */
+#define SUIT_CACHE_BITS 16
+#define SUIT_CACHE_SIZE (1 << SUIT_CACHE_BITS)
+
+typedef struct {
+    uint32_t key; /* 0 is never a used key: the honours flag or a count is set */
+    suit_res value;
+} suit_slot;
+
+static suit_slot suit_cache[SUIT_CACHE_SIZE];
+
+static suit_res suit_table(const int *row, int n, int allow_seq) {
+    uint32_t key = allow_seq ? 0 : 1u << 27;
+    for (int i = 0; i < n; i++) key |= (uint32_t)row[i] << (3 * i);
+    if (key == 0) key = 1u << 28; /* the empty numbered suit */
+    suit_slot *slot = &suit_cache[(key * 2654435761u) >> (32 - SUIT_CACHE_BITS)];
+    if (slot->key == key) return slot->value;
+    ctx.stamp++;
+    if (ctx.stamp == 0) {
+        memset(ctx.gen, 0, sizeof(ctx.gen));
+        ctx.stamp = 1;
+    }
+    suit_res r = suit_rec(row, n, 0, row[0], n > 1 ? row[1] : 0, n > 2 ? row[2] : 0, allow_seq);
+    slot->key = key;
+    slot->value = r;
+    return r;
+}
+
 /* Best 8 - 2*melds - min(partials, 4 - melds) - pair over the four groups. */
 static int shape_value(const int *c, int open_melds) {
     int g[5][2];
@@ -112,15 +143,9 @@ static int shape_value(const int *c, int open_melds) {
         for (int p = 0; p < 2; p++) g[m][p] = -1;
     g[open_melds][0] = 0;
     for (int s = 0; s < 4; s++) {
-        ctx.stamp++;
-        if (ctx.stamp == 0) {
-            memset(ctx.gen, 0, sizeof(ctx.gen));
-            ctx.stamp = 1;
-        }
         int n = s < 3 ? 9 : 7;
         const int *row = c + (s < 3 ? s * 9 : 27);
-        suit_res r = suit_rec(row, n, 0, row[0], n > 1 ? row[1] : 0, n > 2 ? row[2] : 0,
-                              s < 3);
+        suit_res r = suit_table(row, n, s < 3);
         for (int m = 0; m < 5; m++)
             for (int p = 0; p < 2; p++) next[m][p] = -1;
         for (int m = 0; m < 5; m++) {
@@ -163,13 +188,21 @@ static int shanten_uncached(const int *counts, int open_melds);
 #define SHANTEN_CACHE_BITS 18
 #define SHANTEN_CACHE_SIZE (1 << SHANTEN_CACHE_BITS)
 
+/* Direct-mapped memo of raw distances, 16 bytes per slot (4 MB: the table
+ * stays in cache, where the 37-byte slots it replaced spilled to memory and
+ * an analyze_counts call, which probes it for every draw, spent most of its
+ * time waiting on those misses). Key: 3 bits per tile count, tiles 0..20 in
+ * k0, 21..33 in k1 with open_melds above them; k1 also holds a used bit and
+ * the value, so an empty slot never matches. */
 typedef struct {
-    uint8_t key[35];
-    int8_t value;
-    uint8_t used;
+    uint64_t k0, k1;
 } shanten_slot;
 
 static shanten_slot shanten_cache[SHANTEN_CACHE_SIZE];
+
+#define KEY1_BITS ((1ULL << 42) - 1)
+#define KEY_USED (1ULL << 42)
+#define VALUE_SHIFT 43
 
 static uint32_t byte_hash(const uint8_t *key, int n) {
     uint32_t h = 2166136261u;
@@ -180,20 +213,79 @@ static uint32_t byte_hash(const uint8_t *key, int n) {
     return h;
 }
 
-static int shanten_raw(const int *counts, int open_melds) {
-    uint8_t key[35];
-    for (int i = 0; i < 34; i++) key[i] = (uint8_t)counts[i];
-    key[34] = (uint8_t)open_melds;
-    uint32_t index = byte_hash(key, 35) & (SHANTEN_CACHE_SIZE - 1);
-    shanten_slot *slot = &shanten_cache[index];
-    if (slot->used && memcmp(slot->key, key, 35) == 0) {
-        return slot->value;
+static void shanten_key(const int *counts, int open_melds, uint64_t *k0, uint64_t *k1) {
+    uint64_t a = 0, b = 0;
+    for (int i = 0; i < 21; i++) a |= (uint64_t)counts[i] << (3 * i);
+    for (int i = 21; i < NTILES; i++) b |= (uint64_t)counts[i] << (3 * (i - 21));
+    *k0 = a;
+    *k1 = b | ((uint64_t)open_melds << 39);
+}
+
+/* The key of counts with one more copy of tile t (its count below four). */
+static void shanten_key_draw(uint64_t k0, uint64_t k1, int t, uint64_t *d0, uint64_t *d1) {
+    *d0 = t < 21 ? k0 + (1ULL << (3 * t)) : k0;
+    *d1 = t < 21 ? k1 : k1 + (1ULL << (3 * (t - 21)));
+}
+
+static int shanten_keyed(uint64_t k0, uint64_t k1, const int *counts, int open_melds) {
+    uint64_t h = (k0 * 0x9E3779B97F4A7C15ULL) ^ (k1 * 0xC2B2AE3D27D4EB4FULL);
+    h ^= h >> 29;
+    shanten_slot *slot = &shanten_cache[h >> (64 - SHANTEN_CACHE_BITS)];
+    if (slot->k0 == k0 && (slot->k1 & (KEY1_BITS | KEY_USED)) == (k1 | KEY_USED)) {
+        return (int)((slot->k1 >> VALUE_SHIFT) & 63) - 16;
     }
     int value = shanten_uncached(counts, open_melds);
-    memcpy(slot->key, key, 35);
-    slot->value = (int8_t)value;
-    slot->used = 1;
+    slot->k0 = k0;
+    slot->k1 = k1 | KEY_USED | ((uint64_t)(value + 16) << VALUE_SHIFT);
     return value;
+}
+
+static int shanten_raw(const int *counts, int open_melds) {
+    uint64_t k0, k1;
+    shanten_key(counts, open_melds, &k0, &k1);
+    return shanten_keyed(k0, k1, counts, open_melds);
+}
+
+/* The distances a draw analysis needs, memoised per hand: the hand's own and
+ * that of every tile drawn (NO_DRAW where four copies are held already). A
+ * strategy analyses the same hand under several availability vectors and
+ * the same draws from neighbouring hands, so one probe here replaces up to
+ * 35 of the memo above; the values are what that memo would give. */
+#define DRAW_CACHE_BITS 16
+#define DRAW_CACHE_SIZE (1 << DRAW_CACHE_BITS)
+#define NO_DRAW 127
+
+typedef struct {
+    uint64_t k0, k1; /* k1 as in shanten_slot, without the value */
+    int8_t distance;
+    int8_t draw[NTILES];
+} draw_slot;
+
+static draw_slot draw_cache[DRAW_CACHE_SIZE];
+
+static const draw_slot *draw_distances(const int *counts, int open_melds) {
+    uint64_t k0, k1;
+    shanten_key(counts, open_melds, &k0, &k1);
+    uint64_t h = (k0 * 0xD6E8FEB86659FD93ULL) ^ (k1 * 0x9E3779B97F4A7C15ULL);
+    h ^= h >> 31;
+    draw_slot *slot = &draw_cache[h >> (64 - DRAW_CACHE_BITS)];
+    if (slot->k0 == k0 && slot->k1 == (k1 | KEY_USED)) return slot;
+    int drawn[NTILES];
+    slot->k0 = k0;
+    slot->k1 = k1 | KEY_USED;
+    slot->distance = (int8_t)shanten_keyed(k0, k1, counts, open_melds);
+    for (int t = 0; t < NTILES; t++) {
+        if (counts[t] >= 4) {
+            slot->draw[t] = NO_DRAW;
+            continue;
+        }
+        uint64_t d0, d1;
+        memcpy(drawn, counts, sizeof(drawn));
+        drawn[t]++;
+        shanten_key_draw(k0, k1, t, &d0, &d1);
+        slot->draw[t] = (int8_t)shanten_keyed(d0, d1, drawn, open_melds);
+    }
+    return slot;
 }
 
 static int shanten_uncached(const int *counts, int open_melds) {
@@ -509,14 +601,12 @@ static PyObject *py_improving(PyObject *self, PyObject *args) {
     int avail[NTILES];
     if (parse_counts(counts_obj, counts) < 0) return NULL;
     if (parse_vector(avail_obj, avail, 1000000, "available") < 0) return NULL;
-    int distance = shanten_raw(counts, open_melds);
-    int drawn[NTILES];
+    const draw_slot *table = draw_distances(counts, open_melds);
+    int distance = table->distance;
     uint64_t improving = 0, negatives = 0;
     for (int t = 0; t < 34; t++) {
         if (avail[t] <= 0 || counts[t] >= 4) continue;
-        memcpy(drawn, counts, sizeof(drawn));
-        drawn[t]++;
-        int d = shanten_raw(drawn, open_melds);
+        int d = table->draw[t];
         if (d < distance) improving |= (uint64_t)1 << t;
         if (d < 0) negatives |= (uint64_t)1 << t;
     }
@@ -570,17 +660,18 @@ static PyObject *py_analyze_counts(PyObject *self, PyObject *args) {
     int counts[NTILES], avail[NTILES], drawn[NTILES];
     if (parse_counts(counts_obj, counts) < 0) return NULL;
     if (parse_vector(avail_obj, avail, 1000000, "available") < 0) return NULL;
-    int distance = shanten_raw(counts, open_melds);
+    const draw_slot *table = draw_distances(counts, open_melds);
+    int distance = table->distance;
     int improving[NTILES], wins[NTILES];
     long fans[NTILES];
     int n_improving = 0, n_wins = 0;
     for (int t = 0; t < NTILES; t++) {
         if (avail[t] <= 0 || counts[t] >= 4) continue;
-        memcpy(drawn, counts, sizeof(drawn));
-        drawn[t]++;
-        int d = shanten_raw(drawn, open_melds);
+        int d = table->draw[t];
         if (d < distance) improving[n_improving++] = t;
         if (d < 0) {
+            memcpy(drawn, counts, sizeof(drawn));
+            drawn[t]++;
             long fan = fan_value(drawn, t, open_melds, chain_count, piao_count,
                                  you_cai_bi_kao, 0);
             if (fan) {
