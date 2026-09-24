@@ -44,6 +44,7 @@
 | `resources` / `tune_evaluation` | 按 CPU 亲和性、cgroup 配额与可用显存给出初始并发，再在固定赛程上实测校准 |
 | `brawl` / `brawl_pipeline` | 5、8、10 或 11 个冻结策略的均衡大乱斗；流水线按校准、混合对局冒烟、计分比赛顺序执行，遇错停止 |
 | `trial` / `recipe_jobs` | 训练方案迭代：远端框架在固定时限和显存、内存上限内调用 `recipe.train(ctx)`，对手取研究冻结的评估对手（规则版本按各自运行时隔离运行）；训练出的 Actor 拉回 Mac 交给研究框架评估。Mac 侧任务负责部署、上传方案、脱离运行与轮询，主机不可达时无限期等待，主机重启时记为主机故障、从头重跑 |
+| `platform_replays` / `platform_dataset` | 平台牌谱转成模仿数据（[ADR-0015](../../../../docs/adr/0015-platform-replays-as-training-data.md)）：每手按牌谱的起手牌与摸牌顺序在本地引擎里重放，每个多选决策点取决策方的合法观察，标签是该玩家在平台上的实际动作；摸牌、合法性、每手结算与总分任一处与平台不一致，这一场整场丢弃。`scan` 增量入库并刷新外部玩家实力表 `players.json`，`freeze` 按文件哈希冻结训练清单，`rows` 在训练时现场还原并编码，默认去掉平台代打的超时和我方座位 |
 | `model_server` | 研究对局里模型座位的批量推理服务：每台主机一个，按权重 SHA-256 加载 `research/models/` 下的 Actor；对局进程在本地编码观察，服务只做攒批与推理（CUDA fp32 / MPS fp16） |
 | `overnight` | 同机启动方式对照（A 直接联合训练，B 先纯模仿再联合训练） |
 | `bc_curve` | 纯模仿时长曲线：定时快照逐个与规则冠军配对评估 |
@@ -86,6 +87,14 @@ export PYTHONPATH="$HOME/code/leihuo_majiang/.local/guided-deps/numpy-2.1.2:src:
 
 # 测试；Mac 的 .venv 装了 .[model] 后也能跑 guided 测试（CPU/MPS），GPU 相关项在 WSL 运行
 "$TRAIN_PY" -m pytest -q projects/personal/selfplay/tests tests/test_guided_*.py
+```
+
+平台牌谱入库与实力表（Mac 上用仓库 `.venv`，数据在本项目 `.local/platform-data/`）：
+
+```bash
+cd projects/personal/selfplay
+PYTHONPATH=../../../src:src:. ../../../.venv/bin/python -m guided.platform_dataset scan
+PYTHONPATH=../../../src:src:. ../../../.venv/bin/python -m guided.platform_dataset freeze --users <user_id ...> --output <manifest.json>
 ```
 
 `--config` 覆盖 [`config.py`](config.py) 的 `DEFAULTS`，未知键直接报错；模型规模用 `dim`/`layers`/`heads`。

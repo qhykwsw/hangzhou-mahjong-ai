@@ -197,4 +197,4 @@ value/PPO 组合的 `train(ctx)` 可生成模型或其他文件。`ctx.play(lear
   --candidate <full-candidate-id> --output /path/to/bundle
 ```
 
-导出候选及其对应冻结运行时。测试房、自由对战与正式比赛各自保存记录，外部成绩不回流研究训练，操作见[平台接入](platform.md)。
+导出候选及其对应冻结运行时。测试房、自由对战与正式比赛各自保存记录，平台记录不进入研究候选（人工项目使用牌谱的方式见 [ADR-0015](../adr/0015-platform-replays-as-training-data.md)），操作见[平台接入](platform.md)。
