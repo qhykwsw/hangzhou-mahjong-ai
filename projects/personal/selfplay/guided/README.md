@@ -12,7 +12,7 @@
 | --- | --- | --- |
 | Mac | 本机 | 控制面：冻结源码与教师、写运行计划、启动远端任务、汇总报告；研究评估中的模型座位用 MPS 推理，不训练 |
 | 4090 | `gpu-4090-wsl` | 模仿阶段（大模型 384/8/8）、RL 方案分支的训练与评估、规模试验与共同大乱斗；大乱斗派到这里时，本机训练进程被暂停，结束后恢复 |
-| 4070 | `gpu-4070-wsl` | 用户的办公机，显卡同时负责桌面显示，不跑训练和长时间评估；正式内网比赛只在这里推理。不跑显存压力探针 |
+| 4070 | `gpu-4070-wsl` | 用户的办公机，显卡同时负责桌面显示；正式内网比赛在这里推理。第一性原理迭代线的 RL 线（小模型 128/4/4）在这里训练与评估，对局进程与显存留出余量给桌面（[ADR-0016](../../../../docs/adr/0016-maintainer-iteration-lines.md)）。不跑显存压力探针 |
 
 - 连接由 [`remote.py`](remote.py) 的 `HOSTS`、`ROOT`、`PYTHON` 定义：经 Windows 宿主 SSH，再以 `wsl.exe -d Ubuntu-20.04 -u user` 进入 WSL；命令按 argv 传递，不拼接 shell。长任务用 `remote.command(..., background_log=...)` 启动，进程脱离 wsl.exe 会话。
 - 两机项目路径都是 `~/code/leihuo_majiang`，解释器 `~/softwares/miniconda3/envs/py311_cu130/bin/python` 自带 CUDA torch，不要重装 CUDA 环境。统一版本的 numpy 放在 `.local/guided-deps/numpy-2.1.2`，`remote.command` 会自动加进 `PYTHONPATH`，不改共享 Conda 环境。
@@ -23,6 +23,7 @@
 每个实验是 Mac 上的一个目录 `projects/personal/selfplay/.local/<种类>/<时间戳>/`，同类实验的现役入口是该种类下的 `current.json`：
 
 - `source/source-manifest.json`：冻结源码的文件清单与 SHA-256，清单摘要即 `source_id`。源码上传到远端 `.local/guided-code/<source_id>/`，入口用 `bootstrap.verify_source()` 核对，与 `plan.json` 不符即拒绝运行。
+- 训练对局默认绑定教师包自带的运行时副本；方案线任务带 `runtime` 时（第一性原理迭代线传对手池的运行时）改绑那份，worker 里的对手包按 `isolation = "none"` 直接进程内加载。
 - 引擎缺少编译的 `_fast` 扩展时会静默退回纯 Python，向听计算和观察编码慢一个数量级。训练与评估的 worker 绑定教师包运行时，其 `_fast` 由 `guided.sync` 在目标机编译；推理服务、测试和其他不绑定教师包的进程用快照自己的 `src/mahjong_ai/`，上传后要在目标机用快照里的 `_fast.c` 编译（setuptools `build_ext`）。`guided.encoding` 导入时检查扩展，缺失即报错。
 - `plan.json`：该实验的主机、模型规模、教师包、初始权重、时长、评估场数和牌墙种子。`overnight`、`brawl`、`brawl_pipeline`、`bc_curve`、`tune_evaluation` 都以 `--root <实验目录>` 读取它。
 - 准备、部署、启动与监控用的操作脚本（`prepare.py`、`deploy.py`、`start.py`、`monitor.py` 等）随实验目录冻结，报告写在同目录 `REPORT.md`。新实验复制上一份脚本后修改，不回写旧实验。
@@ -34,7 +35,7 @@
 
 | 模块 | 职责 |
 | --- | --- |
-| `imitate` | 纯模仿：BC（老师出牌）→ DAgger（学生出牌、老师标注）→ 学习率线性衰减。新鲜样本上的老师交叉熵在 `window_seconds` 内改善不足 `tolerance` 即换阶段，衰减时长为已训练时间的 `decay_fraction`；每 `snapshot_seconds` 存快照，另存各阶段结束点与 `final`。进程被暂停（让位大乱斗）的时间不计入训练时间；`--resume` 续跑时可以换 worker 与桌数 |
+| `imitate` | 纯模仿：BC（老师出牌）→ DAgger（学生出牌、老师标注）→ 学习率线性衰减。新鲜样本上的老师交叉熵在 `window_seconds` 内改善不足 `tolerance` 即换阶段，衰减时长为已训练时间的 `decay_fraction`；给出 `hands`（学习座位的总局数，每场 16 局）时改为按局数固定比例切换（`bc_fraction`、`dagger_fraction`，其余衰减）并在打满后停止；每 `snapshot_seconds` 存快照，另存各阶段结束点与 `final`。进程被暂停（让位大乱斗）的时间不计入训练时间；`--resume` 续跑时可以换 worker 与桌数 |
 | `run` | 单机训练入口：`--bc-seconds` 纯模仿阶段、联合训练、`--snapshot-seconds` 定时快照、`--deadline` 绝对截止、`--resume` |
 | `learning` / `networks` / `encoding` | PPO 与教师交叉熵、Actor 与带隐藏信息的 PopArt Critic、含本手完整公开历史的合法观察编码 |
 | `environment` / `collection` | CPU worker 驱动完整对局，父进程集中做 GPU 推理 |
@@ -45,7 +46,8 @@
 | `brawl` / `brawl_pipeline` | 5、8、10 或 11 个冻结策略的均衡大乱斗；流水线按校准、混合对局冒烟、计分比赛顺序执行，遇错停止 |
 | `trial` / `recipe_jobs` | 训练方案迭代：远端框架在固定时限和显存、内存上限内调用 `recipe.train(ctx)`，对手取研究冻结的评估对手（规则版本按各自运行时隔离运行）；训练出的 Actor 拉回 Mac 交给研究框架评估。Mac 侧任务负责部署、上传方案、脱离运行与轮询，主机不可达时无限期等待，主机重启时记为主机故障、从头重跑 |
 | `platform_replays` / `platform_dataset` | 平台牌谱转成模仿数据（[ADR-0015](../../../../docs/adr/0015-platform-replays-as-training-data.md)）：每手按牌谱的起手牌与摸牌顺序在本地引擎里重放，每个多选决策点取决策方的合法观察，标签是该玩家在平台上的实际动作；摸牌、合法性、每手结算与总分任一处与平台不一致，这一场整场丢弃。`scan` 增量入库并刷新外部玩家实力表 `players.json`，`freeze` 按文件哈希冻结训练清单，`rows` 在训练时现场还原并编码，默认去掉平台代打的超时和我方座位 |
-| `model_server` | 研究对局里模型座位的批量推理服务：每台主机一个，按权重 SHA-256 加载 `research/models/` 下的 Actor；对局进程在本地编码观察，服务只做攒批与推理（CUDA fp32 / MPS fp16） |
+| `collection` | 采集父进程：CPU worker 打整场，父进程跑所有网络。CUDA 上 Actor 前向按补齐形状捕获 CUDA Graph 原地重放（`inference.ActorGraphs`，输入直接写入固定内存缓冲），logits 与逐个发射内核时相同；内置 Critic 或纯模仿时仍走完整批。每次采集把各阶段耗时与批大小写入运行目录的 `collection.jsonl` |
+| `model_server` | 研究对局里模型座位的批量推理服务：每台主机一个，按权重 SHA-256 加载 `research/models/` 下的 Actor；对局进程在本地编码观察，服务只做攒批与推理（CUDA fp32 / MPS fp16）。单线程事件循环，设备上最多保持两批在途：一批提交后不等待，期间到达的请求组成下一批，完成后统一回复（CUDA 由循环轮询完成事件，MPS 由等待线程经管道唤醒）；输入直接写入按形状分档的固定内存缓冲，一次拷贝上设备；回复一次写出（避免 Nagle 与延迟确认叠加的 40 ms 停顿）；CUDA 上每个模型、每种补齐后的输入形状捕获一次 CUDA Graph 原地重放，选出的动作与逐个发射内核时相同。多进程分片试过：CUDA 上多个上下文争抢 GPU 反而变慢，MPS 上没有收益 |
 | `overnight` | 同机启动方式对照（A 直接联合训练，B 先纯模仿再联合训练） |
 | `bc_curve` | 纯模仿时长曲线：定时快照逐个与规则冠军配对评估 |
 | `scale_probe` / `scale_batch` / `scale_study` / `scale_monitor` | 模型规模的资源探针、微批次测量、较长的监督学习对照与只读监控 |

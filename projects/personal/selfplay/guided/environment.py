@@ -5,6 +5,7 @@ binds the immutable rules runtime supplied with its teachers.
 """
 
 import importlib
+from pathlib import Path
 import random
 import time
 import traceback
@@ -141,15 +142,15 @@ class Game:
                 raise RuntimeError("hand action budget exceeded")
             legal = state.legal_actions()
             if len(legal) == 1:
-                state.step(legal[0])
+                state.step(legal[0], legal)
                 continue
             seat = state.turn
-            obs = state.observation()
+            obs = state.observation(legal)
             if seat in self.policies:
                 action = self.policies[seat].act(obs)
                 if action not in legal:
                     raise ValueError("frozen opponent returned an illegal action")
-                state.step(action)
+                state.step(action, legal)
                 continue
             row = encode(obs, self.cfg["lookahead"])
             row.update(
@@ -190,7 +191,7 @@ class Game:
             row.update(action=index, logprob=logprob, value=value)
             self.rows.append(row)
         self.pending = None
-        self.state.step(action)
+        self.state.step(action, legal)
 
 
 class External:
@@ -213,9 +214,12 @@ class External:
         if self.free[spec]:
             return self.free[spec].pop()
         frozen = self.specs[spec]
-        if Path(frozen.get("runtime_path") or "").name == bound_runtime_name():
+        # The task owner may vouch for a package (isolation "none"): it then runs
+        # here under the bound runtime like a bundle rule, whatever runtime it was
+        # frozen with; the rules SDK is behaviour-identical across runtimes.
+        if frozen.get("isolation") == "none" or Path(frozen.get("runtime_path") or "").name == bound_runtime_name():
             return load_package(frozen["package_path"])
-        policy = PolicySpec(**frozen).build()
+        policy = PolicySpec(**{k: v for k, v in frozen.items() if k != "isolation"}).build()
         if hasattr(policy, "start"):
             policy.start()
         return policy
@@ -239,6 +243,11 @@ def worker(conn, cfg, bundle_path, panel_path, worker_index, command):
         from .artifacts import read_bundle, bind_runtime
 
         bundle, panel = read_bundle(bundle_path), read_bundle(panel_path)
+        if command.get("runtime"):
+            # The trial's own frozen runtime (its evaluation pool's) instead of
+            # the bundle's copy: games run on the current engine everywhere.
+            for b in (bundle, panel):
+                b["runtime"], b["runtime_hash"] = command["runtime"], Path(command["runtime"]).name
         bind_runtime(bundle)
         bind_runtime(panel)
         entries = {e["id"]: panel for e in panel["entries"]}

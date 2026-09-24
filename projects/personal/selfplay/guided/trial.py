@@ -67,10 +67,14 @@ def memory_limits(plan):
     limits = DEFAULT_LIMITS | (plan.get("limits") or {})
     total = torch.cuda.get_device_properties(0).total_memory
     torch.cuda.set_per_process_memory_fraction(limits["gpu_memory_fraction"], 0)
-    return {
+    caps = {
         "gpu_limit_bytes": int(total * limits["gpu_memory_fraction"]),
         "ram_limit_bytes": int(_meminfo_total() * limits["ram_fraction"]),
     }
+    if "cpu_capacity" in limits:
+        # A shared host (e.g. a desktop) keeps cores for itself; recipes size workers from it.
+        caps["cpu_capacity"] = limits["cpu_capacity"]
+    return caps
 
 
 def _sha256(path):
@@ -148,9 +152,17 @@ class Context:
         self._started = time.time()
         self._nodes = sorted(int(x) for x in plan.get("snapshot_seconds") or [])
         self._snapshots = []
+        # Optional budget of training hands (plan["hand_budget"]); the time
+        # budget still caps the trial.
+        self.hand_budget = None if smoke else plan.get("hand_budget")
+        self.hands = 0
 
     def time_left(self):
         return self.deadline - time.time()
+
+    def hands_left(self):
+        """Training hands left in the budget, or None without one."""
+        return None if self.hand_budget is None else self.hand_budget - self.hands
 
     def new_actor(self):
         """A fresh Actor with the fixed architecture (e.g. for opponent snapshots)."""
@@ -176,6 +188,8 @@ class Context:
         from .collection import collect
         from .config import configuration
 
+        if self.hand_budget is not None and self.hands_left() <= 0:
+            raise ValueError("hand budget exhausted")
         chosen = cfg.get("opponents")
         chosen = list(self.opponents if chosen is None else chosen)
         unknown = set(chosen) - set(self.opponents) - set(self.rules)
@@ -203,6 +217,7 @@ class Context:
             "iteration": int(iteration),
             "deadline": self.deadline,
             "labels": bool(labels),
+            "runtime": self.plan.get("runtime"),
             # history_probability only draws the recipe's own snapshots.
             "history": list(history or {}),
             "pool": pool,
@@ -211,7 +226,7 @@ class Context:
         models = dict(history or {}) | {
             "model:opponent:" + k: m for k, m in self._opponent_models.items()
         }
-        return collect(
+        rows, records, resources = collect(
             actor,
             None,
             run_cfg,
@@ -221,9 +236,16 @@ class Context:
             models,
             hooks,
         )
+        # Every game started is played out, so the last collection may overrun the budget.
+        self.hands += len(records) * run_cfg["rounds"]
+        with open(self.root / "collection.jsonl", "a") as stream:
+            stream.write(json.dumps({"time": time.time(), "iteration": int(iteration), "workers": run_cfg["workers"],
+                                     "tables": run_cfg["tables"], **{k: v for k, v in resources.items() if k != "workers"}},
+                                    default=float) + "\n")
+        return rows, records, resources
 
     def log(self, **metrics):
-        row = {"time": time.time(), "left": round(self.time_left(), 1), **metrics}
+        row = {"time": time.time(), "left": round(self.time_left(), 1), "hands": self.hands, **metrics}
         self._metrics.write(json.dumps(row, default=float) + "\n")
         self._metrics.flush()
 
@@ -320,6 +342,7 @@ def train(root, smoke=False):
             finished=time.time(),
             training_seconds=time.time() - started,
             overrun_seconds=max(0.0, time.time() - deadline),
+            hands=ctx.hands,
             weights_sha256=meta["weights_sha256"],
         )
     except BaseException as exc:

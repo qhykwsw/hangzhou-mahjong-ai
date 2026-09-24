@@ -68,3 +68,90 @@ def evaluate_requests(pending, actor, history, device, max_batch=128):
         for (conn, ident, _), index in zip(ordered, actions, strict=True)
     ]
     return replies, sizes
+
+
+class ActorGraphs:
+    """CUDA graphs of a model's decision, one per padded input shape.
+
+    The collection parent answers many small batches; launching a few dozen
+    kernels from Python per batch costs more than the kernels. Inputs are
+    written into pinned host buffers of a few padded shapes and copied into
+    the graph's static tensors; the replayed computation is the eager one
+    (forward, mask, log-softmax, then multinomial sampling or argmax and the
+    chosen log-probability), so its outputs are identical in distribution and,
+    for argmax, in value. Shapes beyond the buckets run eagerly.
+    """
+
+    BATCH_BUCKETS = (1, 2, 4, 8, 16, 32, 64, 128)
+    EVENT_BUCKET, MAX_WIDTH = 32, 256
+
+    def __init__(self):
+        self.graphs, self.hosts, self.pool = {}, {}, None
+
+    @staticmethod
+    def shape(rows):
+        size = next((b for b in ActorGraphs.BATCH_BUCKETS if b >= len(rows)), None)
+        width = -(-max(1, max(len(np.asarray(r["events"]).reshape(-1, 5)) for r in rows)) // ActorGraphs.EVENT_BUCKET) * ActorGraphs.EVENT_BUCKET
+        return (size, width) if size is not None and width <= ActorGraphs.MAX_WIDTH else None
+
+    def _host(self, size, width):
+        host = self.hosts.get((size, width))
+        if host is None:
+            tensors = (
+                torch.zeros((size, N_PLANES, 34), dtype=torch.float16).pin_memory(),
+                torch.zeros((size, N_SCALARS), dtype=torch.float16).pin_memory(),
+                torch.zeros((size, width, 5), dtype=torch.int64).pin_memory(),
+                torch.zeros((size, N_ACTIONS), dtype=torch.bool).pin_memory(),
+            )
+            views = [t.numpy() for t in tensors]
+            views[3][:, 0] = True  # padding rows stay valid; they never reach a caller
+            host = self.hosts[(size, width)] = (tensors, views)
+        return host
+
+    @staticmethod
+    def _decide(model, planes, scalars, events, mask, sample):
+        logits = model(planes, scalars, events).float()
+        logp = logits.masked_fill(~mask, -1e9).log_softmax(-1)
+        actions = torch.multinomial(logp.exp(), 1).squeeze(1) if sample else logp.argmax(-1)
+        chosen = logp.gather(1, actions[:, None]).squeeze(1)
+        return torch.stack((actions.float(), chosen), -1)
+
+    def decide(self, key, model, rows, sample):
+        """(action, log-probability) per row on the device: sampled from the policy, or its argmax.
+
+        The caller reads the result to the host before the next call, which is
+        what lets the host buffers be refilled behind non-blocking copies.
+        """
+        shape = self.shape(rows)
+        device = next(model.parameters()).device
+        if shape is None:
+            batch = policy_batch(rows, device)
+            return self._decide(model, batch["planes"], batch["scalars"], batch["events"], batch["mask"], sample)
+        size, width = shape
+        tensors, (planes, scalars, events, mask) = self._host(size, width)
+        for i, row in enumerate(rows):
+            planes[i] = row["planes"]
+            scalars[i] = row["scalars"]
+            history = np.asarray(row["events"]).reshape(-1, 5)
+            events[i, : len(history)] = history
+            events[i, len(history) :] = 0
+            mask[i] = row["mask"]
+        entry = self.graphs.get((key, size, width, sample))
+        if entry is None:
+            static = [t.to(device) for t in tensors]
+            side = torch.cuda.Stream()
+            side.wait_stream(torch.cuda.current_stream())
+            with torch.cuda.stream(side):
+                for _ in range(2):
+                    self._decide(model, *static, sample)
+            torch.cuda.current_stream().wait_stream(side)
+            graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(graph, pool=self.pool):
+                out = self._decide(model, *static, sample)
+            self.pool = graph.pool()
+            entry = self.graphs[(key, size, width, sample)] = (static, out, graph)
+        static, out, graph = entry
+        for target, source in zip(static, tensors):
+            target.copy_(source, non_blocking=True)
+        graph.replay()
+        return out[: len(rows)]

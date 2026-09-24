@@ -299,6 +299,7 @@ def trial_train(task, progress, smoke=False):
         "bundle": task["bundle"],
         "start_actor": task["start_actor"],
         "budget_seconds": task["budget_seconds"],
+        "hand_budget": task.get("hand_budget"),
         "smoke_seconds": task.get("smoke_seconds", 90),
         "seed": task["seed"],
         "line": task["line"],
@@ -306,6 +307,8 @@ def trial_train(task, progress, smoke=False):
         "snapshot_seconds": task.get("snapshot_seconds") or [],
         # Frozen evaluation opponents of the trial, with host-side paths.
         "opponents": task.get("opponents") or {},
+        # Host path of the runtime the games run under (default: the bundle's copy).
+        "runtime": task.get("runtime"),
     }
     budget = plan["smoke_seconds"] if smoke else plan["budget_seconds"]
     status = _run_remote(

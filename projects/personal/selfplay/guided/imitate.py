@@ -10,6 +10,8 @@
 
 A phase ends when the teacher cross entropy on each rollout's fresh rows,
 measured before those rows are trained on, has stopped improving (Plateau).
+With a budget of hands (schedule["hands"]), the phases instead take fixed
+shares of the hands played and the rate decays linearly over the last share.
 Snapshots are saved every snapshot_seconds for evaluation after training.
 """
 
@@ -35,6 +37,9 @@ SCHEDULE = {
     "min_phase_seconds": 1800,
     "decay_fraction": 0.35,
     "snapshot_seconds": 600,
+    "hands": None,
+    "bc_fraction": 0.35,
+    "dagger_fraction": 0.35,
 }
 
 
@@ -88,6 +93,7 @@ class Paused:
 
 
 def rate(schedule, phase, updates, now, decay_start, decay_end):
+    """now, decay_start and decay_end are hands played when the budget is in hands."""
     peak = schedule["peak"]
     if updates < schedule["warmup_updates"]:
         return peak * (updates + 1) / (schedule["warmup_updates"] + 1)
@@ -144,7 +150,13 @@ def train(run_dir, cfg, schedule, bundle_path, *, deadline, resume=False):
     replay = deque(maxlen=cfg["replay_capacity"])
     plateau = Plateau(schedule["window_seconds"], schedule["tolerance"], schedule["min_phase_seconds"])
     s = dict(phase="bc", updates=0, iteration=0, started=time.time(), decay_start=None,
-             decay_end=None, next_snapshot=0.0, collected=0, optimized=0, phase_began=None)
+             decay_end=None, next_snapshot=0.0, collected=0, optimized=0, phase_began=None, hands=0)
+    budget = schedule["hands"]
+    if budget:
+        # Phase boundaries in hands played: BC, DAgger, then decay to the floor.
+        bc_end = schedule["bc_fraction"] * budget
+        s["decay_start"] = (schedule["bc_fraction"] + schedule["dagger_fraction"]) * budget
+        s["decay_end"] = budget
     if resume:
         state = torch.load(latest, map_location=device, weights_only=False)
         # Worker and table counts only change collection speed, not what is learned.
@@ -159,7 +171,7 @@ def train(run_dir, cfg, schedule, bundle_path, *, deadline, resume=False):
         s = state["progress"]
         # Downtime does not count as training time.
         shift = time.time() - state["saved"]
-        for key in ("started", "decay_start", "decay_end", "phase_began"):
+        for key in ("started", "phase_began") + (() if budget else ("decay_start", "decay_end")):
             if s[key] is not None:
                 s[key] += shift
         plateau.began = s["phase_began"]
@@ -190,7 +202,7 @@ def train(run_dir, cfg, schedule, bundle_path, *, deadline, resume=False):
     def snapshot(name):
         path = run_dir / "snapshots" / f"{name}.pt"
         path.parent.mkdir(parents=True, exist_ok=True)
-        meta = dict(elapsed_seconds=time.time() - s["started"], phase=s["phase"],
+        meta = dict(elapsed_seconds=time.time() - s["started"], phase=s["phase"], hands=s["hands"],
                     updates=s["updates"], collected_samples=s["collected"],
                     optimized_samples=s["optimized"])
         # guided-v1 with the Actor config: load_actor/export accept it directly.
@@ -212,7 +224,7 @@ def train(run_dir, cfg, schedule, bundle_path, *, deadline, resume=False):
             # is not training time.
             gap = paused.take()
             if gap:
-                for key in ("started", "decay_start", "decay_end", "phase_began"):
+                for key in ("started", "phase_began") + (() if budget else ("decay_start", "decay_end")):
                     if s[key] is not None:
                         s[key] += gap
                 plateau.began = s["phase_began"]
@@ -220,7 +232,9 @@ def train(run_dir, cfg, schedule, bundle_path, *, deadline, resume=False):
                 deadline += gap
                 log("suspended", seconds=round(gap))
             now = time.time()
-            if s["phase"] == "decay" and now >= s["decay_end"]:
+            if budget and s["hands"] >= budget:
+                break
+            if not budget and s["phase"] == "decay" and now >= s["decay_end"]:
                 break
             s["iteration"] += 1
             teacher_plays = s["phase"] == "bc"
@@ -236,7 +250,8 @@ def train(run_dir, cfg, schedule, bundle_path, *, deadline, resume=False):
             collected = time.time() - began
             ce, agree = fresh_metrics(actor, rows, cfg["minibatch"], device)
             plateau.observe(time.time(), ce)
-            lr = rate(schedule, s["phase"], s["updates"], time.time(), s["decay_start"], s["decay_end"])
+            lr = rate(schedule, s["phase"], s["updates"], s["hands"] if budget else time.time(),
+                      s["decay_start"], s["decay_end"])
             for group in opt.param_groups:
                 group["lr"] = lr
             stats = update(actor, critic, opt, idle, rows,
@@ -245,14 +260,22 @@ def train(run_dir, cfg, schedule, bundle_path, *, deadline, resume=False):
                                              "label_version")} for r in rows)
             s["updates"] += 1
             s["collected"] += len(rows)
+            s["hands"] += len(records) * cfg["rounds"]
             s["optimized"] += stats["optimized_samples"]
             log("update", phase=s["phase"], lr=lr, fresh_ce=ce, fresh_agreement=agree,
                 rows=len(rows), games=len(records), collect_seconds=collected,
                 learn_seconds=time.time() - began - collected, sgd_steps=stats["sgd_steps"],
                 teacher_loss=stats["teacher_loss"],
-                elapsed=time.time() - s["started"], updates=s["updates"])
+                elapsed=time.time() - s["started"], updates=s["updates"], hands=s["hands"])
             now = time.time()
-            if s["phase"] != "decay" and plateau.reached(now):
+            if budget:
+                boundary = {"bc": bc_end, "dagger": s["decay_start"]}.get(s["phase"])
+                if boundary is not None and s["hands"] >= boundary:
+                    done = s["phase"]
+                    s["phase"] = "dagger" if done == "bc" and s["hands"] < s["decay_start"] else "decay"
+                    snapshot(f"phase-end-{done}")
+                    log("phase", ended=done, started=s["phase"], hands=s["hands"])
+            elif s["phase"] != "decay" and plateau.reached(now):
                 done = s["phase"]
                 if done == "bc":
                     s["phase"] = "dagger"
