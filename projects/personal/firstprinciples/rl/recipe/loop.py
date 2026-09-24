@@ -107,7 +107,6 @@ def train(ctx):
     reserve = 5 if ctx.smoke else 60
     if ctx.smoke:
         collect_cfg["tables"] = 1
-    no_values = lambda rows: np.zeros(len(rows), dtype=np.float32)  # noqa: E731
     rng = np.random.default_rng(ctx.seed)
     actor = ctx.actor
     step, iteration, last = 0, 0, 0.0
@@ -119,7 +118,6 @@ def train(ctx):
             iteration += 1
             got, _, _ = ctx.collect(
                 actor, collect_cfg, samples=min(40000, target_rows), iteration=iteration,
-                hooks={"values": no_values},
             )
             rows += got
         if not rows or (len(rows) < target_rows and hands()):

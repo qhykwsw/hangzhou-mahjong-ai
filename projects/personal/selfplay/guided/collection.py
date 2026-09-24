@@ -20,7 +20,7 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
     """
     import torch
     from .learning import make_batch
-    from .inference import ActorGraphs, Decided, evaluate_requests
+    from .inference import ActorGraphs, Decided, evaluate_requests, policy_logits
 
     history = history or {}
     hooks = hooks or {}
@@ -48,6 +48,9 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
     try:
         for i, (parent, child) in enumerate(pairs):
             task = dict(command)
+            task["policy_inputs_only"] = command["kind"] == "evaluate" or (
+                critic is None and "values" not in hooks
+            )
             task["samples"] = max(1, cfg["samples"] // cfg["workers"])
             if "jobs" in command:
                 task["jobs"] = command["jobs"][i :: cfg["workers"]]
@@ -154,7 +157,7 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
                         timers["batch"] += time.perf_counter() - mark
                         continue
                     batch = make_batch(rows_, device)
-                    logits = model(
+                    logits = policy_logits(model,
                         batch["planes"], batch["scalars"], batch["events"]
                     ).float()
                     timers["batch"] += time.perf_counter() - mark
@@ -176,7 +179,7 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
                             dtype=torch.float32,
                             device=device,
                         ).reshape(-1)
-                    elif learning:
+                    elif learning and critic is not None:
                         values = critic(
                             batch["planes"],
                             batch["scalars"],

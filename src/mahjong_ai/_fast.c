@@ -434,7 +434,10 @@ static int baotou_shape(const int *waiting, int open_melds) {
     if (total != 13 - 3 * open_melds) return 0;
     int draw[NTILES];
     memcpy(draw, waiting, sizeof(draw));
-    for (int t = 0; t < NTILES; t++) {
+    /* Honor draws cannot join a sequence. Reject them first, like the
+     * Python reference, before exploring more permissive suited draws. */
+    for (int offset = 0; offset < NTILES; offset++) {
+        int t = offset < 7 ? 27 + offset : offset - 7;
         if (draw[t] >= 4) continue;
         draw[t]++;
         int ok = hu_shape(draw, open_melds);
@@ -482,7 +485,7 @@ static long fan_value(const int *counts, int drawn_tile, int open_melds,
     int waiting[NTILES];
     memcpy(waiting, counts, sizeof(waiting));
     waiting[drawn_tile]--;
-    int bt = baotou_shape(waiting, open_melds);
+    int bt = baotou_cached(waiting, open_melds);
     /* Match the live-server gate in domain/rules.py, including kong draws. */
     if (you_cai_bi_kao && counts[WHITE] && !bt) return 0;
 
@@ -647,21 +650,15 @@ static PyObject *py_improving(PyObject *self, PyObject *args) {
 /* The whole fast path of sdk.shape.analyze for a waiting-length hand: raw
  * distance, improving draws, and the numeric fan of every winning draw
  * (fan_value of the hand plus that draw, as the Python loop computes it). */
-static PyObject *py_analyze_counts(PyObject *self, PyObject *args) {
-    PyObject *counts_obj, *avail_obj;
-    int open_melds, chain_count, piao_count, you_cai_bi_kao;
-    if (!PyArg_ParseTuple(args, "OiOiii", &counts_obj, &open_melds, &avail_obj,
-                          &chain_count, &piao_count, &you_cai_bi_kao))
-        return NULL;
-    if (open_melds < 0 || open_melds > 4) {
-        PyErr_SetString(PyExc_ValueError, "open_melds must be 0..4");
-        return NULL;
-    }
-    int counts[NTILES], avail[NTILES], drawn[NTILES];
-    if (parse_counts(counts_obj, counts) < 0) return NULL;
-    if (parse_vector(avail_obj, avail, 1000000, "available") < 0) return NULL;
+static PyObject *analysis_keys[7];
+
+static PyObject *analyze_result(const int *counts, const int *avail,
+                                int open_melds, int chain_count, int piao_count,
+                                int you_cai_bi_kao, int as_dict) {
+    int drawn[NTILES];
     const draw_slot *table = draw_distances(counts, open_melds);
     int distance = table->distance;
+    if (as_dict && distance < 0) Py_RETURN_NONE;
     int improving[NTILES], wins[NTILES];
     long fans[NTILES];
     int n_improving = 0, n_wins = 0;
@@ -688,6 +685,38 @@ static PyObject *py_analyze_counts(PyObject *self, PyObject *args) {
         copies += avail[wins[i]];
         value += avail[wins[i]] * fans[i];
     }
+    if (as_dict) {
+        PyObject *imp = PyList_New(n_improving), *win = PyList_New(n_wins),
+                 *fan = PyDict_New();
+        if (!imp || !win || !fan) {
+            Py_XDECREF(imp); Py_XDECREF(win); Py_XDECREF(fan);
+            return NULL;
+        }
+        for (int i = 0; i < n_improving; i++)
+            PyList_SET_ITEM(imp, i, PyLong_FromLong(improving[i]));
+        for (int i = 0; i < n_wins; i++) {
+            PyObject *tile = PyLong_FromLong(wins[i]);
+            PyObject *number = PyLong_FromLong(fans[i]);
+            if (!tile || !number || PyDict_SetItem(fan, tile, number) < 0) {
+                Py_XDECREF(tile); Py_XDECREF(number);
+                Py_DECREF(imp); Py_DECREF(win); Py_DECREF(fan);
+                return NULL;
+            }
+            PyList_SET_ITEM(win, i, tile);
+            Py_DECREF(number);
+        }
+        PyObject *values[7] = {PyLong_FromLong(distance), imp,
+            PyLong_FromLong(ukeire), win, PyLong_FromLong(copies), fan,
+            PyLong_FromLong(value)};
+        PyObject *result = PyDict_New();
+        for (int i = 0; i < 7; i++) {
+            if (!values[i] || (result && PyDict_SetItem(result, analysis_keys[i], values[i]) < 0)) {
+                Py_CLEAR(result);
+            }
+            Py_XDECREF(values[i]);
+        }
+        return result;
+    }
     PyObject *imp = PyTuple_New(n_improving), *win = PyTuple_New(n_wins),
              *fan = PyTuple_New(n_wins);
     if (!imp || !win || !fan) goto fail;
@@ -703,6 +732,63 @@ fail:
     Py_XDECREF(win);
     Py_XDECREF(fan);
     return NULL;
+}
+
+static PyObject *py_analyze_counts(PyObject *self, PyObject *args) {
+    PyObject *counts_obj, *avail_obj;
+    int open_melds, chain_count, piao_count, you_cai_bi_kao;
+    if (!PyArg_ParseTuple(args, "OiOiii", &counts_obj, &open_melds, &avail_obj,
+                          &chain_count, &piao_count, &you_cai_bi_kao)) return NULL;
+    if (open_melds < 0 || open_melds > 4) {
+        PyErr_SetString(PyExc_ValueError, "open_melds must be 0..4");
+        return NULL;
+    }
+    int counts[NTILES], avail[NTILES];
+    if (parse_counts(counts_obj, counts) < 0 ||
+        parse_vector(avail_obj, avail, 1000000, "available") < 0) return NULL;
+    return analyze_result(counts, avail, open_melds, chain_count, piao_count,
+                          you_cai_bi_kao, 0);
+}
+
+/* Count tile ids and build the public result without a 34-element Python
+ * count tuple and intermediate result tuples on every hypothetical discard. */
+static PyObject *py_analyze_hand(PyObject *self, PyObject *args) {
+    PyObject *hand, *avail_obj;
+    int opened, chain, piao, you_cai;
+    if (!PyArg_ParseTuple(args, "OiOiii", &hand, &opened, &avail_obj,
+                          &chain, &piao, &you_cai)) return NULL;
+    if (opened < 0 || opened > 4) {
+        PyErr_SetString(PyExc_ValueError, "open_melds must be 0..4");
+        return NULL;
+    }
+    PyObject *seq = PySequence_Fast(hand, "hand must be a sequence");
+    if (!seq) return NULL;
+    int counts[NTILES] = {0}, avail[NTILES];
+    Py_ssize_t size = PySequence_Fast_GET_SIZE(seq);
+    for (Py_ssize_t i = 0; i < size; i++) {
+        PyObject *item = PySequence_Fast_GET_ITEM(seq, i);
+        long tile = PyLong_Check(item) ? PyLong_AsLong(item) : -1;
+        if (tile == -1 && PyErr_Occurred()) PyErr_Clear();
+        if (tile < 0 || tile >= NTILES) {
+            Py_DECREF(seq);
+            PyErr_SetString(PyExc_ValueError, "invalid tile");
+            return NULL;
+        }
+        if (++counts[tile] > 4) {
+            Py_DECREF(seq);
+            PyErr_SetString(PyExc_ValueError, "more than four copies");
+            return NULL;
+        }
+    }
+    Py_DECREF(seq);
+    if (size != 13 - 3 * opened) {
+        PyErr_SetString(PyExc_ValueError, "analyze_hand expects a waiting hand");
+        return NULL;
+    }
+    if (avail_obj == Py_None) {
+        for (int i = 0; i < NTILES; i++) avail[i] = 4 - counts[i];
+    } else if (parse_vector(avail_obj, avail, 1000000, "available") < 0) return NULL;
+    return analyze_result(counts, avail, opened, chain, piao, you_cai, 1);
 }
 
 static PyObject *py_baotou(PyObject *self, PyObject *args) {
@@ -783,7 +869,99 @@ static PyObject *py_counts(PyObject *self, PyObject *hand) {
     return result;
 }
 
+/* Two-ply public-hand enumeration. Keep tile counts in C instead of sorting
+ * and allocating a Python hand and analysis dictionary for every discard. */
+static PyObject *py_baotou_outs(PyObject *self, PyObject *args) {
+    PyObject *obj, *available;
+    int opened, c[NTILES], avail[NTILES];
+    if (!PyArg_ParseTuple(args, "OiO", &obj, &opened, &available)) return NULL;
+    if (opened < 0 || opened > 4) {
+        PyErr_SetString(PyExc_ValueError, "open_melds must be 0..4");
+        return NULL;
+    }
+    if (parse_counts(obj, c) < 0 ||
+        parse_vector(available, avail, 1000000, "available") < 0) return NULL;
+    long total = 0;
+    if (!c[WHITE]) return PyLong_FromLong(0);
+    for (int tile = 0; tile < NTILES; tile++) {
+        if (avail[tile] <= 0 || c[tile] >= 4) continue;
+        c[tile]++;
+        for (int drop = 0; drop < NTILES; drop++) {
+            if (!c[drop]) continue;
+            c[drop]--;
+            int ok = baotou_cached(c, opened);
+            c[drop]++;
+            if (ok) {
+                total += avail[tile];
+                break;
+            }
+        }
+        c[tile]--;
+    }
+    return PyLong_FromLong(total);
+}
+
+static PyObject *py_tenpai_route_value(PyObject *self, PyObject *args) {
+    PyObject *obj, *available;
+    int opened, chain, piao, you_cai, c[NTILES], avail[NTILES];
+    if (!PyArg_ParseTuple(args, "OiOiii", &obj, &opened, &available,
+                         &chain, &piao, &you_cai)) return NULL;
+    if (opened < 0 || opened > 4) {
+        PyErr_SetString(PyExc_ValueError, "open_melds must be 0..4");
+        return NULL;
+    }
+    if (parse_counts(obj, c) < 0 ||
+        parse_vector(available, avail, 1000000, "available") < 0) return NULL;
+    int size = 0;
+    for (int t = 0; t < NTILES; t++) size += c[t];
+    if (size != 13 - 3 * opened) return PyFloat_FromDouble(0.0);
+    const draw_slot *table = draw_distances(c, opened);
+    if (table->distance != 1) return PyFloat_FromDouble(0.0);
+    /* Nested lookups can replace this direct-mapped cache entry. */
+    uint64_t improving = 0;
+    for (int t = 0; t < NTILES; t++)
+        if (avail[t] > 0 && c[t] < 4 && table->draw[t] < 1)
+            improving |= (uint64_t)1 << t;
+    long total = 0;
+    double weighted = 0.0;
+    for (int tile = 0; tile < NTILES; tile++) {
+        if (!(improving >> tile & 1)) continue;
+        c[tile]++;
+        long best = 0;
+        for (int drop = 0; drop < NTILES; drop++) {
+            if (!c[drop]) continue;
+            c[drop]--;
+            if (shanten_raw(c, opened) > 0) {
+                c[drop]++;
+                continue;
+            }
+            const draw_slot *dest = draw_distances(c, opened);
+            /* A waiting-length hand cannot be complete. The Python guarded
+             * shanten maps negative raw distances to zero here. */
+            if (dest->distance <= 0) {
+                long value = 0;
+                for (int t = 0; t < NTILES; t++) {
+                    if (avail[t] <= 0 || c[t] >= 4 || dest->draw[t] >= 0) continue;
+                    c[t]++;
+                    value += avail[t] * fan_value(c, t, opened, chain, piao, you_cai, 0);
+                    c[t]--;
+                }
+                if (value > best) best = value;
+            }
+            c[drop]++;
+        }
+        c[tile]--;
+        total += avail[tile];
+        weighted += (double)avail[tile] * best;
+    }
+    return PyFloat_FromDouble(total ? weighted / total : 0.0);
+}
+
 static PyMethodDef fast_methods[] = {
+    {"baotou_outs", py_baotou_outs, METH_VARARGS, "Weighted draws with a baotou discard."},
+    {"tenpai_route_value", py_tenpai_route_value, METH_VARARGS, "Best tenpai fan after each improving draw."},
+    {"analyze_hand", py_analyze_hand, METH_VARARGS,
+     "Analyze tile ids directly; None defers the winning boundary to Python."},
     {"analyze_counts", py_analyze_counts, METH_VARARGS,
      "Distance, improving draws, winning draws and their numeric fans."},
     {"baotou", py_baotou, METH_VARARGS,
@@ -810,4 +988,12 @@ static struct PyModuleDef fast_module = {
     -1, fast_methods,
 };
 
-PyMODINIT_FUNC PyInit__fast(void) { return PyModule_Create(&fast_module); }
+PyMODINIT_FUNC PyInit__fast(void) {
+    const char *names[7] = {"shanten", "improving", "ukeire", "winning_tiles",
+                           "winning_copies", "fans", "fan_value"};
+    for (int i = 0; i < 7; i++) {
+        if (!analysis_keys[i]) analysis_keys[i] = PyUnicode_InternFromString(names[i]);
+        if (!analysis_keys[i]) return NULL;
+    }
+    return PyModule_Create(&fast_module);
+}

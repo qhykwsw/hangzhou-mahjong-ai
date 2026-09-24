@@ -41,7 +41,8 @@ ruff format --check src tests scripts
 
 `src/mahjong_ai/_fast.c` 是可选的牌形加速器：`sdk/shape.py` 的向听/进张与
 `domain/rules.py` 的胡牌形状在它存在时走 C，负数（和牌边界）结果仍由 Python 参考实现裁决；
-没有构建扩展时自动回退到同一套 Python 实现。`tests/test_shape_fast.py` 用参考实现核对两者一致，
+没有构建扩展时自动回退到同一套 Python 实现。
+`sdk/lookahead.py` 提供摸牌后弃牌的爆头进张与听牌路线价值；C 路径整段枚举并跳过不可能听牌的目的地，Python 路径保留相同定义。固定规则包采用这些函数时派生新包，旧冻结源码不改写。`tests/test_shape_fast.py` 用参考实现核对两者一致，
 修改任一侧都要重跑该测试。冻结运行时按整棵包树复制，指纹覆盖同一集合。
 
 编译扩展、人工项目的 `models/`、`releases/` 与 `runs/` 都是本机生成物，不提交 Git。人工项目测试在临时目录真实训练、构建并校验发布包，不依赖仓库内预置的模型或旧发布版本。

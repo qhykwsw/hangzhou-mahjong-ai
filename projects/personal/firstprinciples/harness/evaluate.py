@@ -29,8 +29,8 @@ Usage (from projects/personal/firstprinciples; handbooks/common.md has the loop)
   python -m harness.evaluate history rule|rl
   python -m harness.evaluate restore rule|rl
   python -m harness.evaluate rule "<what changed>" --design-start <epoch>
-  python -m harness.evaluate model <actor-dir> "<what changed>" --line rl --design-start <epoch> [--host 4070|4090]
-  python -m harness.evaluate reference <research candidate | model name> [--host local|4070|4090]
+  python -m harness.evaluate model <actor-dir> "<what changed>" --line rl --design-start <epoch> [--host 4070|4090|5070ti]
+  python -m harness.evaluate reference <research candidate | model name> [--host local|4070|4090|5070ti]
 """
 import argparse
 import hashlib
@@ -63,9 +63,9 @@ EVAL_HOST = {"rule": "local", "reference": "local", "rl": "4070"}
 # Match processes per host and tables (games played at once, one thread each)
 # per process. Measured throughput knees with headroom for the desktop: on the
 # Mac the inference service is the limit and tables keep the cores busy while
-# model seats wait; on the 4070 tables only add interpreter contention.
-EVAL_WORKERS = {"local": 12, "4070": 24, "4090": 20}
-EVAL_TABLES = {"local": 3, "4070": 2, "4090": 1}
+# model seats wait; too many tables add interpreter contention.
+EVAL_WORKERS = {"local": 12, "4070": 24, "4090": 20, "5070ti": 16}
+EVAL_TABLES = {"local": 3, "4070": 2, "4090": 2, "5070ti": 2}
 ISOLATION = "none"  # the pool's packages run in the match process (see module docstring)
 POLL_SECONDS = 5  # how often remote job results are checked; each stage ends on a poll
 STAGES = tuple(int(x) for x in os.environ.get("FP_STAGES", "1024,2048,4096").split(","))  # blocks; 4 games each
@@ -216,8 +216,9 @@ def reserve_attempt(line, host, description):
     (LOCAL / "running").mkdir(exist_ok=True)
     with (LOCAL / "attempts.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        pool_id = load_pool()["id"]
-        taken = [r["id"] for r in attempts(pool_id, line)] + [r["id"] for r in running(line)]
+        # Packages and training receipts are keyed by attempt id, so replacing
+        # a pool must not reuse the names of historical attempts.
+        taken = [r["id"] for r in attempts(line=line)] + [r["id"] for r in running(line)]
         numbers = [int(i.rsplit("-", 1)[-1]) for i in taken if i.rsplit("-", 1)[-1].isdigit()]
         attempt_id = f"fp-{line}-{max(numbers, default=-1) + 1:03d}"
         atomic_json(LOCAL / "running" / f"{attempt_id}.json",
@@ -298,7 +299,10 @@ _dispatchers = {}
 
 
 def remote_host(name):
-    return RemoteHost(name, research_state()["config"]["hosts"][name], REPO)
+    sys.path.insert(0, str(REPO / "projects/personal/selfplay"))
+    from guided.remote import PROFILES
+
+    return RemoteHost(name, dict(PROFILES[name], workers=EVAL_WORKERS[name]), REPO)
 
 
 def dispatcher(name):
@@ -563,11 +567,11 @@ def main():
     m.add_argument("--line", default="rl")
     ref = sub.add_parser("reference", help="score a research candidate or a pool model as a reference line")
     ref.add_argument("candidate")
-    ref.add_argument("--host", default="local", choices=("local", "4070", "4090"))
+    ref.add_argument("--host", default="local", choices=tuple(EVAL_WORKERS))
     ref.add_argument("--weights", help="score an exported model by its weights hash under this name")
     for sp in (r, m):
         sp.add_argument("--design-start", type=float, required=True, help="epoch when designing this attempt began")
-    m.add_argument("--host", default=None, choices=("4070", "4090"))
+    m.add_argument("--host", default=None, choices=tuple(h for h in EVAL_WORKERS if h != "local"))
     sub.add_parser("seal", help="accept the current evaluation code (only with the user's approval)")
     for name in ("history", "restore"):
         sub.add_parser(name).add_argument("line", choices=("rule", "rl"))

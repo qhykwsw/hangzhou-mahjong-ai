@@ -84,6 +84,65 @@ def test_complete_16_hand_score_matches_authoritative_engine_and_rollout(policie
     assert game.rows[0]["ret"] == sum(row["reward"] for row in game.rows)
 
 
+@pytest.mark.parametrize("public_only", [False, True])
+def test_worker_transport_retains_complete_training_rows(
+    policies, monkeypatch, public_only
+):
+    import multiprocessing as mp
+    import threading
+    import time
+
+    from guided.environment import worker
+
+    bundle, _, _ = policies
+    monkeypatch.setattr(artifacts, "read_bundle", lambda _: bundle)
+    monkeypatch.setattr(artifacts, "bind_runtime", lambda _: None)
+    parent, child = mp.Pipe()
+    cfg = configuration(rounds=1, lookahead=False, tables=1, workers=1)
+    command = dict(
+        kind="collect",
+        iteration=1,
+        deadline=time.time() + 20,
+        samples=1,
+        labels=False,
+        policy_inputs_only=public_only,
+    )
+    thread = threading.Thread(
+        target=worker, args=(child, cfg, "bundle", "bundle", 0, command)
+    )
+    thread.start()
+    records = []
+    try:
+        while True:
+            assert parent.poll(20), "worker failed to send a request"
+            message = parent.recv()
+            assert message[0] != "error", message
+            if message[0] == "done":
+                assert message[1]["unfinished_games"] == 0
+                break
+            _, requests, completed = message
+            records.extend(completed)
+            replies = []
+            for ident, request in requests:
+                row = request["row"]
+                assert ("oracle_planes" in row) != public_only
+                replies.append(
+                    (ident, (int(np.flatnonzero(row["mask"])[0]), -0.5, 0.0))
+                )
+            parent.send(replies)
+        thread.join(5)
+        assert not thread.is_alive()
+        assert records and records[0]["rows"]
+        for row in records[0]["rows"]:
+            assert "oracle_planes" in row and "oracle_scalars" in row
+            assert row["mask"][row["action"]]
+            assert row["value"] == 0 and row["logprob"] == -0.5
+        assert sum(row["reward"] for row in records[0]["rows"]) == records[0]["score"]
+    finally:
+        parent.close()
+        thread.join(5)
+
+
 def test_teacher_label_does_not_replace_student_action_or_behavior_probability(
     policies,
 ):

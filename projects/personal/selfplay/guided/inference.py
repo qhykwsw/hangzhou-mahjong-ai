@@ -7,6 +7,30 @@ from selfplay_core.actions import N_ACTIONS
 from selfplay_core.encoding import N_PLANES, N_SCALARS
 
 
+def prepare_frozen(actor, device):
+    """Precast immutable inference weights to their existing autocast dtype.
+
+    Embeddings, residuals and layer norms stay fp32. Each linear sees exactly
+    the fp16 coefficients autocast would produce, but no longer converts them
+    on every decision (including GPU copy kernels inside a CUDA graph).
+    Never apply this to the learning Actor: its fp32 parameters are optimized.
+    """
+    if torch.device(device).type in ("cuda", "mps"):
+        for module in actor.modules():
+            if isinstance(module, (torch.nn.Linear, torch.nn.MultiheadAttention)):
+                module.half()
+        actor._frozen_fp16 = True
+    return actor
+
+
+def policy_logits(model, planes, scalars, events):
+    """Eager inference also handles frozen precast weights, without CUDA graphs."""
+    if not getattr(model, "_frozen_fp16", False):
+        return model(planes, scalars, events)
+    with torch.autocast(planes.device.type, torch.float16, cache_enabled=False):
+        return model(planes, scalars, events)
+
+
 def policy_batch(rows, device):
     if not rows:
         raise ValueError("cannot infer an empty batch")
@@ -51,8 +75,8 @@ def evaluate_requests(pending, actor, history, device, max_batch=128):
                 group = grouped[slot][first : first + max_batch]
                 batch = policy_batch([item[2]["row"] for item in group], device)
                 model = actor if slot == "model:current" else history[slot]
-                logits = model(
-                    batch["planes"], batch["scalars"], batch["events"]
+                logits = policy_logits(
+                    model, batch["planes"], batch["scalars"], batch["events"]
                 ).float()
                 actions = (
                     logits.masked_fill(~batch["mask"], -1e9).log_softmax(-1).argmax(-1)
@@ -93,8 +117,18 @@ class ActorGraphs:
     @staticmethod
     def shape(rows):
         size = next((b for b in ActorGraphs.BATCH_BUCKETS if b >= len(rows)), None)
-        width = -(-max(1, max(len(np.asarray(r["events"]).reshape(-1, 5)) for r in rows)) // ActorGraphs.EVENT_BUCKET) * ActorGraphs.EVENT_BUCKET
-        return (size, width) if size is not None and width <= ActorGraphs.MAX_WIDTH else None
+        width = (
+            -(
+                -max(1, max(len(np.asarray(r["events"]).reshape(-1, 5)) for r in rows))
+                // ActorGraphs.EVENT_BUCKET
+            )
+            * ActorGraphs.EVENT_BUCKET
+        )
+        return (
+            (size, width)
+            if size is not None and width <= ActorGraphs.MAX_WIDTH
+            else None
+        )
 
     def _host(self, key, size, width):
         # A ring of IN_FLIGHT buffer sets per model and shape: a buffer is not
@@ -111,7 +145,9 @@ class ActorGraphs:
                     torch.zeros((size, N_ACTIONS), dtype=torch.bool).pin_memory(),
                 )
                 views = [t.numpy() for t in tensors]
-                views[3][:, 0] = True  # padding rows stay valid; they never reach a caller
+                views[3][:, 0] = (
+                    True  # padding rows stay valid; they never reach a caller
+                )
                 answers = torch.zeros((size, 2), dtype=torch.float32).pin_memory()
                 ring.append((tensors, views, answers, torch.cuda.Event()))
         turn = self.turn.get((key, size, width), 0)
@@ -128,7 +164,9 @@ class ActorGraphs:
         with torch.autocast("cuda", torch.float16, cache_enabled=False):
             logits = model(planes, scalars, events).float()
         logp = logits.masked_fill(~mask, -1e9).log_softmax(-1)
-        actions = torch.multinomial(logp.exp(), 1).squeeze(1) if sample else logp.argmax(-1)
+        actions = (
+            torch.multinomial(logp.exp(), 1).squeeze(1) if sample else logp.argmax(-1)
+        )
         chosen = logp.gather(1, actions[:, None]).squeeze(1)
         return torch.stack((actions.float(), chosen), -1)
 
@@ -146,9 +184,20 @@ class ActorGraphs:
         device = next(model.parameters()).device
         if shape is None:
             batch = policy_batch(rows, device)
-            return Decided(self._decide(model, batch["planes"], batch["scalars"], batch["events"], batch["mask"], sample))
+            return Decided(
+                self._decide(
+                    model,
+                    batch["planes"],
+                    batch["scalars"],
+                    batch["events"],
+                    batch["mask"],
+                    sample,
+                )
+            )
         size, width = shape
-        tensors, (planes, scalars, events, mask), answers, done = self._host(key, size, width)
+        tensors, (planes, scalars, events, mask), answers, done = self._host(
+            key, size, width
+        )
         for i, row in enumerate(rows):
             planes[i] = row["planes"]
             scalars[i] = row["scalars"]

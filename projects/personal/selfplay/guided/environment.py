@@ -344,6 +344,14 @@ def worker(conn, cfg, bundle_path, panel_path, worker_index, command):
                     del games[ident]
                     add_game()
                 else:
+                    if command.get("policy_inputs_only"):
+                        # Rollout/privileged fields stay in the worker's owned
+                        # row and are sent once with the completed game. Actor
+                        # inference never reads them; BC also needs its label.
+                        request = dict(request, row={
+                            key: request["row"][key]
+                            for key in ("planes", "scalars", "events", "mask", "teacher")
+                        })
                     requests.append((ident, request))
             if requests or finished:
                 conn.send(("batch", requests, finished))

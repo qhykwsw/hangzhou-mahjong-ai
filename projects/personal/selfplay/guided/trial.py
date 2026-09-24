@@ -117,6 +117,7 @@ class Context:
         import torch
         from .artifacts import read_bundle
         from .deployment import load_actor
+        from .inference import prepare_frozen
         from .resources import evaluation_resources
 
         self.plan, self.root, self.deadline, self.smoke = plan, root, deadline, smoke
@@ -132,7 +133,7 @@ class Context:
         self.opponents = list(specs)
         self._rule_specs = {k: v for k, v in specs.items() if v.get("family") != "model"}
         self._opponent_models = {
-            k: load_actor(v["path"], "cuda")[0].eval()
+            k: prepare_frozen(load_actor(v["path"], "cuda")[0].eval(), "cuda")
             for k, v in specs.items()
             if v.get("family") == "model"
         }

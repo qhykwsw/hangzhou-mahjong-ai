@@ -82,6 +82,53 @@ def test_shanten_and_analyze_match_the_reference_path():
     shape._normal.cache_clear()
 
 
+def test_fused_analysis_preserves_fan_context_and_mutable_results():
+    rng = random.Random(250925)
+    for _ in range(400):
+        opened = rng.randrange(5)
+        hand = random_hand(rng, 13 - 3 * opened, white_bias=0.35)
+        available = tuple(rng.randrange(5) for _ in range(34))
+        chain, piao, you_cai = (
+            rng.randrange(4),
+            rng.randrange(4),
+            bool(rng.randrange(2)),
+        )
+        expected = fast.analyze_counts(
+            rules.counts(hand), opened, available, chain, piao, you_cai
+        )
+        actual = shape.analyze(list(hand), opened, available, chain, piao, you_cai)
+        if expected[0] >= 0:
+            distance, improving, wins, fans, ukeire, copies, value = expected
+            assert actual == dict(
+                shanten=distance,
+                improving=list(improving),
+                ukeire=ukeire,
+                winning_tiles=list(wins),
+                winning_copies=copies,
+                fans=dict(zip(wins, fans)),
+                fan_value=value,
+            )
+        again = shape.analyze(hand, opened, available, chain, piao, you_cai)
+        actual["improving"].append(99)
+        actual["winning_tiles"].clear()
+        actual["fans"][99] = 999
+        assert shape.analyze(hand, opened, available, chain, piao, you_cai) == again
+        assert shape.analyze(hand, opened) == shape.analyze(
+            hand, opened, tuple(4 - n for n in rules.counts(hand))
+        )
+
+
+@pytest.mark.parametrize("bad", [-1, 34, 2.5, "2", 2**100])
+def test_fused_analysis_rejects_invalid_tile_ids(bad):
+    with pytest.raises(ValueError):
+        shape.analyze([bad, *range(12)])
+
+
+def test_fused_analysis_rejects_fifth_copy():
+    with pytest.raises(ValueError, match="four copies"):
+        shape.analyze([0] * 5 + list(range(1, 9)))
+
+
 def test_can_hu_matches_the_reference_shape_test():
     rng = random.Random(31337)
     for _ in range(20000):

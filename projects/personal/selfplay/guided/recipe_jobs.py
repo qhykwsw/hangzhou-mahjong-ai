@@ -222,7 +222,7 @@ def _run_remote(task, progress, command, plan, timeout):
     if not launch_file.exists():
         info = remote.command(
             host,
-            [remote.PYTHON, "-m", "guided.trial", command, "--root", root],
+            [remote.python(host), "-m", "guided.trial", command, "--root", root],
             cwd=task["code"],
             environment=env(task["code"], extra),
             background_log=root + f"/{command}.log",
@@ -345,7 +345,7 @@ def fetch_directory(host, source, destination):
     destination.mkdir(parents=True, exist_ok=True)
     args = [
         "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", remote.HOSTS[host],
-        f"wsl.exe -d Ubuntu-20.04 -u user -- tar -czf - -C {source} .",
+        remote.wsl(host) + f"tar -czf - -C {source} .",
     ]
     data = subprocess.run(args, capture_output=True, timeout=1800, check=True).stdout
     subprocess.run(["tar", "-xzf", "-", "-C", str(destination)], input=data, check=True)

@@ -1,4 +1,4 @@
-"""Mac control plane for the two existing Windows/WSL hosts.
+"""Mac control plane for the Windows/WSL training hosts.
 
 Commands use argv through Python, never interpolated shell commands. SSH uses
 existing host keys. Only explicitly enumerated source/artifact files transfer.
@@ -12,9 +12,29 @@ from pathlib import Path
 import subprocess
 import tarfile
 
-HOSTS = {"4090": "user@gpu-4090", "4070": "user@gpu-4070"}
 ROOT = "/home/user/code/leihuo_majiang"
 PYTHON = "/home/user/miniconda3/envs/py311_cu130/bin/python"
+PROFILES = {
+    "4090": dict(ssh="user@gpu-4090", distro="Ubuntu-20.04", user="user", root=ROOT, python=PYTHON),
+    "4070": dict(ssh="user@gpu-4070", distro="Ubuntu-20.04", user="user", root=ROOT, python=PYTHON),
+    "5070ti": dict(ssh="user@gpu-5070ti", distro="Ubuntu", user="user",
+                   root="/home/user/code/leihuo_majiang",
+                   python="/home/user/code/leihuo_majiang/.venv/bin/python"),
+}
+HOSTS = {name: profile["ssh"] for name, profile in PROFILES.items()}
+
+
+def root(host):
+    return PROFILES[host]["root"]
+
+
+def python(host):
+    return PROFILES[host]["python"]
+
+
+def wsl(host):
+    profile = PROFILES[host]
+    return f"wsl.exe -d {profile['distro']} -u {profile['user']} -- "
 
 
 def execute(host, script, *, timeout=120):
@@ -27,7 +47,7 @@ def execute(host, script, *, timeout=120):
         "-o",
         "ConnectTimeout=8",
         HOSTS[host],
-        "wsl.exe -d Ubuntu-20.04 -u user -- " + PYTHON + " -",
+        wsl(host) + python(host) + " -",
     ]
     result = subprocess.run(
         args, input=script, text=True, capture_output=True, timeout=timeout
@@ -38,18 +58,18 @@ def execute(host, script, *, timeout=120):
 
 
 def command(
-    host, argv, *, cwd=ROOT, environment=None, background_log=None, timeout=120
+    host, argv, *, cwd=None, environment=None, background_log=None, timeout=120
 ):
     task = {
         "argv": list(map(str, argv)),
-        "cwd": str(cwd),
+        "cwd": str(cwd or root(host)),
         "env": environment or {},
         "log": background_log,
     }
     script = "import subprocess,os,json,pathlib\ntask=" + repr(task) + "\n"
     script += "env=dict(os.environ,**task['env'])\n"
     script += (
-        "overlay=pathlib.Path(" + repr(ROOT + "/.local/guided-deps/numpy-2.1.2") + ")\n"
+        "overlay=pathlib.Path(" + repr(root(host) + "/.local/guided-deps/numpy-2.1.2") + ")\n"
     )
     script += "if overlay.is_dir(): env['PYTHONPATH']=str(overlay)+os.pathsep+env.get('PYTHONPATH','')\n"
     if background_log:

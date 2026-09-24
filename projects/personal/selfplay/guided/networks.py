@@ -8,9 +8,45 @@ import math
 
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 from selfplay_core.actions import N_ACTIONS
 from selfplay_core.encoding import N_PLANES, N_SCALARS
+
+
+class BatchFirstEncoderLayer(nn.TransformerEncoderLayer):
+    """The fixed pre-norm block without MultiheadAttention's sequence transpose.
+
+    Project contiguous [batch, token, feature] rows with one GEMM. The stock
+    batch-first MHA first transposes them and its projection becomes a batch
+    of small matrix products. Parameter names and the attention equation are
+    unchanged. The final block only needs the 34 tile queries and state query:
+    history keys/values still participate, but their output rows are unused.
+    """
+
+    output_tokens = None
+
+    def forward(self, src, src_mask=None, src_key_padding_mask=None, is_causal=False):
+        if src_mask is not None or is_causal:
+            raise ValueError("the policy encoder uses only a padding mask")
+        x = self.norm1(src)
+        batch, length, dim = x.shape
+        attention = self.self_attn
+        qkv = F.linear(x, attention.in_proj_weight, attention.in_proj_bias)
+        qkv = qkv.reshape(
+            batch, length, 3, attention.num_heads, dim // attention.num_heads
+        )
+        query, key, value = qkv.permute(2, 0, 3, 1, 4).unbind(0)
+        if self.output_tokens is not None:
+            query = query[:, :, : self.output_tokens]
+            src = src[:, : self.output_tokens]
+        mask = src_key_padding_mask
+        if mask is not None:
+            mask = (~mask if mask.dtype == torch.bool else mask)[:, None, None, :]
+        x = F.scaled_dot_product_attention(query, key, value, attn_mask=mask)
+        x = x.transpose(1, 2).reshape(batch, src.shape[1], dim)
+        src = src + F.linear(x, attention.out_proj.weight, attention.out_proj.bias)
+        return src + self.linear2(F.gelu(self.linear1(self.norm2(src))))
 
 
 class HistoryEncoder(nn.Module):
@@ -37,7 +73,7 @@ class HistoryEncoder(nn.Module):
         positional[:, 0::2] = torch.sin(positions * frequencies)
         positional[:, 1::2] = torch.cos(positions * frequencies[: dim // 2])
         self.register_buffer("positions", positional, persistent=False)
-        layer = nn.TransformerEncoderLayer(
+        layer = BatchFirstEncoderLayer(
             dim,
             heads,
             4 * dim,
@@ -57,6 +93,7 @@ class HistoryEncoder(nn.Module):
             nn.init.xavier_uniform_(block.self_attn.out_proj.weight)
             nn.init.xavier_uniform_(block.linear1.weight)
             nn.init.xavier_uniform_(block.linear2.weight)
+        self.transformer.layers[-1].output_tokens = 35
         self.norm = nn.LayerNorm(dim)
 
     def forward(self, planes, scalars, events):

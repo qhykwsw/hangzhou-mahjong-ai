@@ -313,7 +313,8 @@ def service_code_files():
     """Repository files the host's inference service needs."""
     repo = Path(__file__).resolve().parents[3]
     files = subprocess.run(
-        ["git", "ls-files", "src/mahjong_ai", "projects/personal/selfplay/guided",
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard",
+         "src/mahjong_ai", "projects/personal/selfplay/guided",
          "projects/personal/selfplay/src"],
         cwd=repo, capture_output=True, text=True, check=True,
     ).stdout.split()

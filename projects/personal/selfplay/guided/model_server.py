@@ -14,10 +14,10 @@ nothing.)
 
 Rows are written straight into pinned host buffers of a few padded shapes and
 copied to the device at once; on CUDA the whole decision of each shape is a
-captured graph replayed in place, on Apple GPUs it runs eagerly. Both compute
-the linear layers in fp16 (autocast; about twice fp32 throughput on either),
-so a near-tie argmax can differ between devices and from fp32, which does not
-affect paired comparisons because both sides face the same seat.
+captured graph replayed in place. Apple GPUs use compiled MLX when installed,
+with eager Torch MPS as a fallback. The backends compute linear layers in fp16,
+so a near-tie argmax can differ between backends, devices and fp32. Paired
+comparisons require the same frozen backend on both sides.
 
     python -m guided.model_server --root DIR --port 8830 [--device auto]
 """
@@ -37,6 +37,9 @@ MAX_BODY = 4 * 1024 * 1024
 # (hundreds of ms) or captures one on CUDA, which must happen at load time, not
 # inside an action window. Padded rows and history positions are ignored.
 EVENT_BUCKET = 32
+# Keep short histories from being padded to the longest request in a batch.
+# Wider than the tensor buckets: very fine groups waste small-batch launches.
+HISTORY_BAND = 64
 BATCH_BUCKETS = (1, 2, 4, 8, 16, 32, 64)
 WARM_EVENTS = (32, 64, 128, 192, 256, 320, 384, 448, 512)
 IN_FLIGHT = 2  # batches launched ahead of their answers
@@ -54,6 +57,14 @@ def pick_device(name="auto"):
     if torch.cuda.is_available():
         return "cuda"
     if torch.backends.mps.is_available():
+        import importlib.util
+        from importlib.metadata import version
+        from packaging.version import Version
+
+        if importlib.util.find_spec("mlx") is not None and (
+            Version("0.32.2") <= Version(version("mlx")) < Version("0.33")
+        ):
+            return "mlx"
         return "mps"
     return "cpu"
 
@@ -73,30 +84,24 @@ class Models:
             raise ValueError(f"unknown model artifact: {name}")
         with self.lock:
             if name not in self.loaded:
-                actor, meta = load_actor(path, self.device)
-                self.loaded[name] = (prepare(actor, self.device), meta)
+                actor, meta = load_actor(
+                    path, "cpu" if self.device == "mlx" else self.device
+                )
+                if self.device == "mlx":
+                    from .mlx_actor import Actor
+
+                    actor = Actor(actor)
+                else:
+                    actor = prepare(actor, self.device)
+                self.loaded[name] = (actor, meta)
             return self.loaded[name]
 
 
 def prepare(actor, device):
-    """Hold the linear weights in the dtype the device computes them in.
+    """Frozen models do not need to recast every linear weight per decision."""
+    from .inference import prepare_frozen
 
-    Under fp16 autocast every linear casts its fp32 weight and bias again each
-    forward (the cast cache needs grad-requiring leaves and is cleared when the
-    context exits): ~150 small copies per forward of the large Actor, most of
-    the host time of a small batch on Apple GPUs. A weight that is already fp16
-    passes through the cast untouched, so the computation and its outputs are
-    the same; everything else (embeddings, layer norms, the token parameters)
-    stays fp32 exactly as autocast runs it. CUDA replays captured graphs, where
-    the casts cost nothing.
-    """
-    import torch.nn as nn
-
-    if device == "mps":
-        for module in actor.modules():
-            if isinstance(module, (nn.Linear, nn.MultiheadAttention)):
-                module.half()
-    return actor
+    return prepare_frozen(actor, device)
 
 
 def decide(actor, planes, scalars, events, mask):
@@ -109,7 +114,9 @@ def decide(actor, planes, scalars, events, mask):
     import torch.nn.functional as F
 
     device = planes.device.type
-    with torch.autocast(device, torch.float16, enabled=device != "cpu", cache_enabled=False):
+    with torch.autocast(
+        device, torch.float16, enabled=device != "cpu", cache_enabled=False
+    ):
         logits = actor(planes, scalars, events).float()
     choice = F.log_softmax(logits.masked_fill(~mask, -1e9), dim=-1).argmax(-1)
     valid = mask.any(-1).all() & torch.isfinite(logits).all()
@@ -196,7 +203,9 @@ class Graphs:
             side = torch.cuda.Stream()
             side.wait_stream(torch.cuda.current_stream())
             with torch.cuda.stream(side):
-                for _ in range(2):  # warm-up outside the capture, as CUDA graphs require
+                for _ in range(
+                    2
+                ):  # warm-up outside the capture, as CUDA graphs require
                     decide(actor, *static)
             torch.cuda.current_stream().wait_stream(side)
             graph = torch.cuda.CUDAGraph()
@@ -227,20 +236,26 @@ class Runner:
         self.device = torch.device(device)
         self.graphs = Graphs() if graphs and self.device.type == "cuda" else None
         self.polls = self.device.type == "cuda"
+        self.waits = self.device.type not in ("cpu", "cuda")
         self.slots = {}  # (size, width) -> IN_FLIGHT slots
         self.wake, self._signal = os.pipe()
         os.set_blocking(self.wake, False)
         self.launched = queue.Queue()
-        if not self.polls:
-            threading.Thread(target=self._wait, name="device-waiter", daemon=True).start()
+        if self.waits:
+            threading.Thread(
+                target=self._wait, name="device-waiter", daemon=True
+            ).start()
 
     def slot(self, count, length):
         """A free slot of the shape for these rows; None while all are in flight."""
         shape = bucket(count, length)
         ring = self.slots.get(shape)
         if ring is None:
-            ring = self.slots[shape] = [Slot(*shape, self.device) for _ in range(IN_FLIGHT)]
+            ring = self.slots[shape] = [self.new_slot(*shape) for _ in range(IN_FLIGHT)]
         return next((s for s in ring if s.event is None), None)
+
+    def new_slot(self, size, width):
+        return Slot(size, width, self.device)
 
     def launch(self, name, actor, slot):
         import torch
@@ -255,7 +270,7 @@ class Runner:
             slot.valid.copy_(valid, non_blocking=True)
             slot.done = False
             slot.event = self._record(slot)
-        if not self.polls:
+        if self.waits:
             self.launched.put(slot)
 
     def _record(self, slot):
@@ -264,7 +279,9 @@ class Runner:
         if self.device.type == "cpu":
             return True  # CPU work is complete on return
         if slot.marker is None:
-            slot.marker = torch.cuda.Event() if self.device.type == "cuda" else torch.mps.Event()
+            slot.marker = (
+                torch.cuda.Event() if self.device.type == "cuda" else torch.mps.Event()
+            )
         slot.marker.record()
         return slot.marker
 
@@ -304,19 +321,45 @@ class Service:
 
     def __init__(self, models, *, max_batch=64, graphs=True):
         self.models, self.max_batch = models, max_batch
-        self.runner = Runner(models.device, graphs)
-        self.pending = {}  # (model, pre-encoded) -> deque of (sequence, context, request)
+        if models.device == "mlx":
+            from .mlx_runner import Runner as MlxRunner
+
+            self.runner = MlxRunner()
+        else:
+            self.runner = Runner(models.device, graphs)
+        # CUDA's graph launches are already cheap; splitting its small queues
+        # did not improve complete matches. Apple GPUs benefit from less padding.
+        self.history_band = HISTORY_BAND if models.device in ("mps", "mlx") else 0
+        self.pending = {}  # (model, pre-encoded, history band) -> queued requests
         self.sequence = 0
         self.inflight = deque()  # (items, parsed, slot, launched at)
         self.failed = []  # (items, answers) rejected before reaching the device
         self.warmed = set()
-        self.stats = dict(requests=0, batches=0, seconds=0.0, prepare_seconds=0.0,
-                          forward_seconds=0.0)
+        self.stats = dict(
+            requests=0, batches=0, seconds=0.0, prepare_seconds=0.0, forward_seconds=0.0
+        )
 
     def enqueue(self, context, request):
         """Queue one /act request; ``context`` comes back with its answer."""
-        group = (request["model"], "encoded" in request)
-        self.pending.setdefault(group, deque()).append((self.sequence, context, request))
+        encoded = request.get("encoded")
+        packed = encoded.get("events") if isinstance(encoded, dict) else None
+        # Each event is five int16 fields, packed as base64 by the worker.
+        # Bad bodies still reach _rows(), which returns a request error; the
+        # scheduling hint must not turn malformed input into a server failure.
+        length = 0
+        if isinstance(packed, str):
+            byte_count = len(packed) * 3 // 4 - (len(packed) - len(packed.rstrip("=")))
+            length = max(0, byte_count // 10)
+        group = (
+            request["model"],
+            "encoded" in request,
+            (length + self.history_band - 1) // self.history_band
+            if self.history_band
+            else 0,
+        )
+        self.pending.setdefault(group, deque()).append(
+            (self.sequence, context, request)
+        )
         self.sequence += 1
 
     def busy(self):
@@ -333,11 +376,13 @@ class Service:
             self._launch(group, [(context, request) for _, context, request in items])
 
     def _launch(self, group, items):
-        model, pre_encoded = group
+        model, pre_encoded, _ = group
         started = time.perf_counter()
         try:
             actor, meta = self.models.get(model)
-            rows, parsed = self._rows([request for _, request in items], meta, pre_encoded)
+            rows, parsed = self._rows(
+                [request for _, request in items], meta, pre_encoded
+            )
             slot = self.runner.slot(len(rows), max(len(r["events"]) for r in rows))
             if slot is None:
                 raise RuntimeError("no free staging slot")
@@ -360,7 +405,9 @@ class Service:
         from .encoding import encode
 
         parsed = [parse_observation(p["observation"]) for p in requests]
-        return [encode(obs, lookahead=meta["config"]["lookahead"]) for obs in parsed], parsed
+        return [
+            encode(obs, lookahead=meta["config"]["lookahead"]) for obs in parsed
+        ], parsed
 
     def finished(self):
         """(items, answers) of every batch whose answers are ready, oldest first."""
@@ -368,11 +415,19 @@ class Service:
         while self.inflight and self.runner.ready(self.inflight[0][2]):
             items, parsed, slot, launched = self.inflight.popleft()
             started = time.perf_counter()
-            choice, valid = self.runner.take(slot)
+            try:
+                choice, valid = self.runner.take(slot)
+            except Exception as exc:
+                out.append((items, [{"error": str(exc)[:2000]}] * len(items)))
+                continue
             self.stats["forward_seconds"] += started - launched
             if not valid:
-                answers = [{"error": "each policy row must have at least one legal action "
-                            "and finite logits"}] * len(items)
+                answers = [
+                    {
+                        "error": "each policy row must have at least one legal action "
+                        "and finite logits"
+                    }
+                ] * len(items)
             elif parsed is None:
                 answers = [{"index": int(index)} for index in choice]
             else:
@@ -381,8 +436,11 @@ class Service:
                 answers = []
                 for obs, index in zip(parsed, choice):
                     legal = [action_index(a) for a in obs.legal_actions]
-                    answers.append({"legal_index": legal.index(index)} if index in legal
-                                   else {"error": "Actor chose an illegal action"})
+                    answers.append(
+                        {"legal_index": legal.index(index)}
+                        if index in legal
+                        else {"error": "Actor chose an illegal action"}
+                    )
             self.stats["requests"] += len(items)
             self.stats["batches"] += 1
             self.stats["seconds"] += time.perf_counter() - started
@@ -407,7 +465,9 @@ class Service:
         while self.busy():
             self.launch()
             for items, replies in self.finished():
-                answers.update({context: reply for (context, _), reply in zip(items, replies)})
+                answers.update(
+                    {context: reply for (context, _), reply in zip(items, replies)}
+                )
             if self.inflight:
                 self.wait()
         return [answers[i] for i in range(len(payloads))]
@@ -422,7 +482,7 @@ class Service:
                 row = blank()
                 row["events"] = row["events"].repeat(length, axis=0)
                 # A slot of its own: the ring's may be in flight for another worker.
-                slot = Slot(*bucket(size, length), self.runner.device)
+                slot = self.runner.new_slot(*bucket(size, length))
                 slot.fill([row] * size)
                 self.runner.launch(model, actor, slot)
                 while not self.runner.ready(slot):
@@ -440,8 +500,12 @@ def blank():
 
     mask = np.zeros(N_ACTIONS, dtype=bool)
     mask[0] = True
-    return {"planes": np.zeros((N_PLANES, 34), np.float16), "scalars": np.zeros(N_SCALARS, np.float16),
-            "events": np.zeros((1, 5), np.int16), "mask": mask}
+    return {
+        "planes": np.zeros((N_PLANES, 34), np.float16),
+        "scalars": np.zeros(N_SCALARS, np.float16),
+        "events": np.zeros((1, 5), np.int16),
+        "mask": mask,
+    }
 
 
 def decode(data):
@@ -467,10 +531,19 @@ class Connection:
 
 def reply(connection, code, body):
     data = json.dumps(body).encode()
-    reason = {200: "OK", 400: "Bad Request", 404: "Not Found", 413: "Payload Too Large"}[code]
-    head = (f"HTTP/1.1 {code} {reason}\r\nContent-Type: application/json\r\n"
-            f"Content-Length: {len(data)}\r\n\r\n").encode()
-    connection.outbox += head + data  # one write: no Nagle stall between header and body
+    reason = {
+        200: "OK",
+        400: "Bad Request",
+        404: "Not Found",
+        413: "Payload Too Large",
+    }[code]
+    head = (
+        f"HTTP/1.1 {code} {reason}\r\nContent-Type: application/json\r\n"
+        f"Content-Length: {len(data)}\r\n\r\n"
+    ).encode()
+    connection.outbox += (
+        head + data
+    )  # one write: no Nagle stall between header and body
 
 
 def requests(connection):
@@ -532,8 +605,11 @@ def serve(service, port, host="127.0.0.1", code=""):
             close(connection)
             return
         del connection.outbox[:sent]
-        selector.modify(connection.sock, selectors.EVENT_READ | (selectors.EVENT_WRITE if connection.outbox else 0),
-                        connection)
+        selector.modify(
+            connection.sock,
+            selectors.EVENT_READ | (selectors.EVENT_WRITE if connection.outbox else 0),
+            connection,
+        )
 
     polling = service.runner.polls
     reported = time.monotonic()
@@ -542,8 +618,15 @@ def serve(service, port, host="127.0.0.1", code=""):
         if time.monotonic() - reported > 60:
             # Device load of the run: forward seconds against wall seconds.
             reported = time.monotonic()
-            print(json.dumps({k: round(v, 2) if isinstance(v, float) else v for k, v in service.stats.items()}),
-                  flush=True)
+            print(
+                json.dumps(
+                    {
+                        k: round(v, 2) if isinstance(v, float) else v
+                        for k, v in service.stats.items()
+                    }
+                ),
+                flush=True,
+            )
         for key, events in ready:
             if key.fileobj == service.runner.wake:
                 service.runner.drain()
@@ -573,10 +656,21 @@ def serve(service, port, host="127.0.0.1", code=""):
             try:
                 for method, path, body in requests(connection):
                     if method == "GET" and path == "/health":
-                        reply(connection, 200, {"ok": True, "device": service.models.device, "code": code, **service.stats})
+                        reply(
+                            connection,
+                            200,
+                            {
+                                "ok": True,
+                                "device": service.models.device,
+                                "code": code,
+                                **service.stats,
+                            },
+                        )
                     elif method == "POST" and path == "/load":
                         try:
-                            reply(connection, 200, service.load(json.loads(body)["model"]))
+                            reply(
+                                connection, 200, service.load(json.loads(body)["model"])
+                            )
                         except Exception as exc:
                             reply(connection, 400, {"error": str(exc)[:2000]})
                     elif method == "POST" and path == "/act":
@@ -610,10 +704,15 @@ def main():
     p.add_argument("--port", type=int, default=8830)
     p.add_argument("--device", default="auto")
     p.add_argument("--max-batch", type=int, default=64)
-    p.add_argument("--no-graphs", action="store_true", help="eager CUDA inference (for comparison)")
+    p.add_argument(
+        "--no-graphs", action="store_true", help="eager CUDA inference (for comparison)"
+    )
     args = p.parse_args()
-    service = Service(Models(args.root, pick_device(args.device)), max_batch=args.max_batch,
-                      graphs=not args.no_graphs)
+    service = Service(
+        Models(args.root, pick_device(args.device)),
+        max_batch=args.max_batch,
+        graphs=not args.no_graphs,
+    )
     serve(service, args.port, code=str(Path(__file__).resolve().parents[4]))
 
 

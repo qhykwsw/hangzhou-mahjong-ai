@@ -5,13 +5,13 @@ guided.recipe_jobs.trial_train): the recipe package is uploaded, trained from th
 fixed start Actor for the budget against the fixed opponent pool, and the
 trained Actor is scored on the same host by harness.evaluate like any attempt.
 
-Two hosts train and evaluate independently, so the line's session can keep
+GPU hosts train and evaluate independently, so the line's session can keep
 one attempt under way on each; the records and the best version are shared
 (harness.evaluate reserves attempt ids and re-reads the best version).
 
 Usage (from projects/personal/firstprinciples):
-  python -m harness.rl setup <remote checkpoint | weights sha> --name <start name> --host 4070|4090   # once per host
-  python -m harness.rl attempt "<what changed>" --design-start <epoch> --host 4070|4090
+  python -m harness.rl setup <remote checkpoint | weights sha> --name <start name> --host 4070|4090|5070ti   # once per host
+  python -m harness.rl attempt "<what changed>" --design-start <epoch> --host 4070|4090|5070ti
 The loop around it (history, one change, restore, report) is handbooks/common.md.
 """
 import argparse
@@ -21,28 +21,29 @@ import random
 import re
 import shutil
 import sys
+import tempfile
 import time
-from pathlib import Path
 
 from . import evaluate as E
 
 sys.path.insert(0, str(E.REPO / "projects/personal/selfplay"))
 from guided import recipe_jobs, remote  # noqa: E402
-from mahjong_ai.execution.remote import RemoteHost, opponent_specs  # noqa: E402
+from mahjong_ai.execution.remote import opponent_specs  # noqa: E402
 
 # The budget is training hands (16 per game), so an attempt trains the same
-# amount on either host; it shows the trend of a change, not a finished model.
+# amount on each host; it shows the trend of a change, not a finished model.
 # The seconds only cap a run that stalls. FP_RL_HANDS=0 falls back to the time budget.
 HANDS = int(os.environ.get("FP_RL_HANDS", "400000")) or None
 BUDGET = int(os.environ.get("FP_RL_BUDGET", "14400"))
 RL = E.LOCAL / "rl"
-BUNDLE = remote.ROOT + "/.local/guided-teachers/b492a752d115c52c2c9607aa98ec6cd949846a0644d7741dda658f0d753b2199/manifest.json"
-REMOTE = remote.ROOT + "/.local/firstprinciples/rl"
+BUNDLE = "/.local/guided-teachers/b492a752d115c52c2c9607aa98ec6cd949846a0644d7741dda658f0d753b2199/manifest.json"
+REMOTE = "/.local/firstprinciples/rl"
 # What each host keeps for itself: the 4070 is an office desktop (GPU memory,
 # RAM and cores for it), the 4090 only needs room for its own desktop.
 LIMITS = {
     "4070": {"gpu_memory_fraction": 0.6, "ram_fraction": 0.6, "cpu_capacity": 20},
     "4090": {"gpu_memory_fraction": 0.85, "ram_fraction": 0.7, "cpu_capacity": 20},
+    "5070ti": {"gpu_memory_fraction": 0.65, "ram_fraction": 0.6, "cpu_capacity": 16},
 }
 
 
@@ -54,9 +55,8 @@ def setup_path(host):
 def place_on_host(actor_dir, host_name):
     """Put an Actor exported on the host into the host's model store, as if synced.
 
-    The evaluation host's inference service reads models by weights hash from the
-    mirror of the research model store; writing it there (and its sync marker)
-    avoids moving the Actor through the Mac.
+    The training host evaluates its own copy. The controller also retains the
+    small Actor so another host can replay this version for paired confirmation.
     """
     host = E.remote_host(host_name)
     sha = remote.execute(host_name, "import json\nprint(json.load(open(%r))['weights_sha256'])" % (actor_dir + "/meta.json"),
@@ -70,6 +70,14 @@ marker.parent.mkdir(parents=True,exist_ok=True);marker.touch()
 print(json.dumps(True))
 """
     remote.execute(host_name, script, timeout=300)
+    if not local.exists():
+        E.MODELS.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=E.MODELS, prefix=".incoming-actor-") as folder:
+            fetched = recipe_jobs.fetch_directory(host_name, actor_dir, folder)
+            if E.read_json(fetched / "meta.json")["weights_sha256"] != sha:
+                raise ValueError("exported Actor changed during transfer")
+            if not local.exists():
+                fetched.rename(local)
     return {"family": "model", "version": sha[:12], "parameters": {"weights": sha}}
 
 
@@ -77,9 +85,9 @@ def deploy_code(host):
     """Upload the frozen training framework to ``host`` and compile its native extension."""
     RL.mkdir(parents=True, exist_ok=True)
     manifest = recipe_jobs.freeze_source(RL / "source")
-    code = remote.ROOT + "/.local/guided-code/" + manifest["id"]
+    code = remote.root(host) + "/.local/guided-code/" + manifest["id"]
     remote.upload(host, RL / "source", [*manifest["files"], "source-manifest.json"], code)
-    remote.command(host, [remote.PYTHON, "-c", recipe_jobs.NATIVE_BUILD], cwd=code,
+    remote.command(host, [remote.python(host), "-c", recipe_jobs.NATIVE_BUILD], cwd=code,
                    environment=recipe_jobs.env(code), timeout=600)
     return code, manifest["id"]
 
@@ -91,7 +99,7 @@ def export(host, checkpoint, name, target):
     on this machine and needs every pool model.
     """
     code, source_id = deploy_code(host)
-    out = remote.command(host, [remote.PYTHON, "-c", recipe_jobs.START_EXPORT, checkpoint, target],
+    out = remote.command(host, [remote.python(host), "-c", recipe_jobs.START_EXPORT, checkpoint, target],
                          cwd=code, environment=recipe_jobs.env(code), timeout=300)
     meta = json.loads(out.strip().splitlines()[-1])
     local = recipe_jobs.fetch_directory(host, target, RL / "exports" / name)
@@ -102,7 +110,7 @@ def export(host, checkpoint, name, target):
 
 def setup(source, name, host):
     """Put the RL line's start Actor on ``host``: from a checkpoint there, or from the model store."""
-    start = f"{REMOTE}/start/actor"
+    start = f"{remote.root(host)}{REMOTE}/start/actor"
     if re.fullmatch(r"[0-9a-f]{64}", source):
         # An Actor this machine already holds (e.g. the other host's start): the host
         # mirrors the model store, so it is copied there instead of exported again.
@@ -133,7 +141,7 @@ def training_opponents(host_name):
     like in evaluation.
     """
     pool = E.load_pool()
-    host = RemoteHost(host_name, E.research_state()["config"]["hosts"][host_name], E.REPO)
+    host = E.remote_host(host_name)
     specs = opponent_specs(host, {cid: {"spec": spec} for cid, spec in pool["members"].items()},
                            E.MODELS, pool["timeouts"])
     specs = {cid: (dict(spec, isolation=E.ISOLATION) if spec.get("family") != "model" else spec)
@@ -153,8 +161,9 @@ def attempt(description, design_start=None, host="4070"):
     job.mkdir(parents=True)
     shutil.copytree(E.HERE / "rl" / "recipe", job / "recipe", ignore=shutil.ignore_patterns("__pycache__"))
     opponents, runtime = training_opponents(host)
-    task = dict(host=host, remote_dir=f"{REMOTE}/{attempt_id}", job_dir=str(job), code=setup_["code"],
-                source_id=setup_["source_id"], recipe=str(job / "recipe"), bundle=BUNDLE, runtime=runtime,
+    remote_job = remote.root(host) + "/" + job.relative_to(E.REPO).as_posix()
+    task = dict(host=host, remote_dir=remote_job, job_dir=str(job), code=setup_["code"],
+                source_id=setup_["source_id"], recipe=str(job / "recipe"), bundle=remote.root(host) + BUNDLE, runtime=runtime,
                 start_actor=setup_["start_actor"], budget_seconds=BUDGET, hand_budget=HANDS,
                 seed=random.SystemRandom().getrandbits(31), line="rl", limits=LIMITS[host],
                 opponents=opponents, fetch_actor=False)
@@ -197,7 +206,7 @@ def main():
     if args.command == "setup":
         print(json.dumps(setup(args.source, args.name, args.host), ensure_ascii=False))
     elif args.command == "export":
-        target = remote.ROOT + "/.local/firstprinciples/exports/" + args.name
+        target = remote.root(args.host) + "/.local/firstprinciples/exports/" + args.name
         print(json.dumps(export(args.host, args.checkpoint, args.name, target), ensure_ascii=False))
     else:
         print(E.report(attempt(args.description, args.design_start, args.host)))

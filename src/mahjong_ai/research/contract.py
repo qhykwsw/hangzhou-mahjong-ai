@@ -15,6 +15,8 @@ CONTRACT = """# 麻将分支研究契约
 判胡与番型细节读取 research_read_source("rules")，动作始终以 observation.legal_actions 为准。
 公开源码名称以 research_read_source 的 name 枚举为准。RulePolicy、risk_preference 等
 strategies/common.py 内容使用 name="policy" 读取，不使用 "common"；不要用文件路径或组合 ID 猜名称。
+research_read_source("lookahead") 提供公开手牌的摸牌后弃牌枚举：baotou_outs 统计可进入爆头的进张，
+tenpai_route_value 计算一向听手牌进入听牌的路线番值；两者只使用传入手牌与公开剩余牌量。
 
 只使用 mahjong_research MCP 工具，不使用 shell、其他工具或子 Agent。
 每次交接已提供本分支全部累计假设、结论、适用条件和失败原因，不按最近三次截断。

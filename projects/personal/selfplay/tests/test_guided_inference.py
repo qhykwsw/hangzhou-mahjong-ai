@@ -2,7 +2,12 @@ import numpy as np
 import pytest
 
 torch = pytest.importorskip("torch")
-from guided.inference import policy_batch, evaluate_requests
+from guided.inference import (
+    policy_batch,
+    evaluate_requests,
+    policy_logits,
+    prepare_frozen,
+)
 from guided.learning import make_batch
 from guided.networks import Actor
 from selfplay_core.actions import N_ACTIONS
@@ -40,6 +45,30 @@ def test_actor_only_batch_is_exactly_equivalent_without_training_fields():
         policy_batch(inputs, "cpu")
 
 
+def test_precast_frozen_model_supports_eager_inference_without_graphs():
+    import copy
+
+    torch.set_num_threads(1)
+    torch.manual_seed(93)
+    actor = Actor(16, 1, 4).eval()
+    # Exercise fp16 coefficients on the CPU test runner, including the eager
+    # fallback used when a training recipe installs a custom sampling hook.
+    frozen = prepare_frozen(copy.deepcopy(actor), "cuda").cpu()
+    assert actor.encoder.tile_in.weight.dtype == torch.float32
+    assert frozen.encoder.norm.weight.dtype == torch.float32
+    b = policy_batch(rows(), "cpu")
+    args = [b[k] for k in ("planes", "scalars", "events")]
+    with torch.no_grad(), torch.autocast("cpu", torch.float16, cache_enabled=False):
+        expected = frozen(*args)
+        reference = actor(*args)
+    with torch.no_grad():
+        actual = policy_logits(frozen, *args)
+    torch.testing.assert_close(actual, expected, atol=0, rtol=0)
+    # The CPU fallback may select a different fused bias kernel for precast
+    # parameters; its roundoff stays within fp16 precision.
+    torch.testing.assert_close(actual, reference, atol=1e-3, rtol=2e-3)
+
+
 @pytest.mark.parametrize("max_batch", [1, 128])
 def test_mixed_models_and_connections_keep_reference_decisions(max_batch):
     torch.set_num_threads(1)
@@ -73,3 +102,33 @@ def test_mixed_models_and_connections_keep_reference_decisions(max_batch):
     assert {(c, i): r[0] for c, i, r in result} == expected
     assert sum(sizes) == len(inputs)
     assert evaluate_requests([], models["model:small"], models, "cpu") == ([], [])
+
+
+@pytest.mark.parametrize("layers", [1, 3])
+def test_batch_first_attention_matches_stock_outputs_and_gradients(layers):
+    import copy
+
+    torch.set_num_threads(1)
+    torch.manual_seed(250925)
+    actual = Actor(24, layers, 4).eval()
+    reference = copy.deepcopy(actual)
+    stock = torch.nn.TransformerEncoderLayer(
+        24, 4, 96, dropout=0, activation="gelu", batch_first=True, norm_first=True
+    )
+    reference.encoder.transformer = torch.nn.TransformerEncoder(
+        stock, layers, enable_nested_tensor=False
+    ).eval()
+    reference.load_state_dict(actual.state_dict(), strict=True)
+    b = policy_batch(rows(), "cpu")
+    inputs = [b[k] for k in ("planes", "scalars", "events")]
+    before, after = reference(*inputs), actual(*inputs)
+    torch.testing.assert_close(after, before, atol=2e-6, rtol=2e-5)
+    # A real masked policy loss propagates through history keys/values even
+    # though the last block no longer builds unused history output queries.
+    target = torch.randn_like(before)
+    (before.masked_fill(~b["mask"], 0) * target).sum().backward()
+    (after.masked_fill(~b["mask"], 0) * target).sum().backward()
+    for (name, a), (_, r) in zip(
+        actual.named_parameters(), reference.named_parameters()
+    ):
+        torch.testing.assert_close(a.grad, r.grad, atol=2e-5, rtol=2e-4, msg=name)

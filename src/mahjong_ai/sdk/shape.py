@@ -114,33 +114,16 @@ def remaining_tiles(obs):
 
 
 def analyze(hand, open_melds=0, remaining=None, chain=0, piao=0, you_cai_bi_kao=False):
+    if _fast is not None and len(hand) == 13 - 3 * open_melds:
+        result = _fast.analyze_hand(
+            hand, open_melds, remaining, chain, piao, int(you_cai_bi_kao)
+        )
+        if result is not None:
+            return result
     hand_counts = counts(hand)
     available = (
         remaining if remaining is not None else tuple(4 - n for n in hand_counts)
     )
-    if len(hand) == 13 - 3 * open_melds and _fast is not None and hasattr(
-        _fast, "analyze_counts"
-    ):
-        if max(hand_counts) > 4:
-            raise ValueError("more than four copies")
-        # One C call replaces the draw loop below with identical output; a
-        # policy pricing waits calls this for every candidate discard, so the
-        # sorted hand and cached distance are only built on the fallback path.
-        raw, fast_improving, fast_wins, fast_fans, ukeire, copies, value = (
-            _fast.analyze_counts(
-                hand_counts, open_melds, available, chain, piao, int(you_cai_bi_kao)
-            )
-        )
-        if raw >= 0:
-            return {
-                "shanten": raw,
-                "improving": list(fast_improving),
-                "ukeire": ukeire,
-                "winning_tiles": list(fast_wins),
-                "winning_copies": copies,
-                "fans": dict(zip(fast_wins, fast_fans)),
-                "fan_value": value,
-            }
     hand = tuple(sorted(hand))
     distance = shanten(hand, open_melds)
     improving = []

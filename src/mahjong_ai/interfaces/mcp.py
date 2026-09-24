@@ -111,6 +111,7 @@ def server(project, experiment_id, branch):
             "policy",
             "candidate_worker",
             "shape",
+            "lookahead",
             "simulation",
             "learning",
             "heuristic",
@@ -122,7 +123,7 @@ def server(project, experiment_id, branch):
     ) -> dict:
         """按枚举名称分段读取公开源码，以 next_offset 继续，offset/limit 单位为字符。policy 对应 strategies/common.py（RulePolicy、risk_preference 等），不是 common。
         heuristic 提供定向规则与风险风格基线；types 为观察和动作类型，observations 为事件与财飘语义，
-        rules 为判胡与番型，shape 为牌效，simulation 为假想采样；其余源码用 name 枚举中的名称。
+        rules 为判胡与番型，shape 为牌效，lookahead 为摸牌后弃牌的精确枚举，simulation 为假想采样；其余源码用 name 枚举中的名称。
         engine、development、策略组合 ID 不是可读源码名。"""
         if name == "contract":
             return text_page(CONTRACT, offset, limit)
@@ -133,6 +134,7 @@ def server(project, experiment_id, branch):
             "policy",
             "candidate_worker",
             "shape",
+            "lookahead",
             "simulation",
             "learning",
             "heuristic",
@@ -150,6 +152,7 @@ def server(project, experiment_id, branch):
                 "policy": "strategies/common.py",
                 "candidate_worker": "execution/candidate_worker.py",
                 "shape": "sdk/shape.py",
+                "lookahead": "sdk/lookahead.py",
                 "simulation": "sdk/simulation.py",
                 "learning": "strategies/learning.py",
                 "heuristic": "strategies/heuristic.py",

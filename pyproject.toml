@@ -11,8 +11,8 @@ dependencies = ["numpy>=1.26,<3", "scipy>=1.12,<2", "mcp>=1.26,<2", "starlette>=
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
-# 模型座位的推理服务（Mac 用 MPS）；自我对弈项目 src/ 随发布包分发，仍不得依赖它。
-model = ["torch>=2.5"]
+# 模型座位的推理服务（Mac 用 MLX/MPS）；自我对弈项目 src/ 随发布包分发，仍不得依赖它。
+model = ["torch>=2.5", "mlx>=0.32.2,<0.33; sys_platform == 'darwin' and platform_machine == 'arm64' and platform_release >= '25'"]
 
 [project.scripts]
 mahjong-ai = "mahjong_ai.interfaces.cli:main"
