@@ -43,7 +43,9 @@ from mahjong_ai.research.service import Research  # noqa: E402
 LOCAL = Path(os.environ.get("FP_LOCAL", HERE / ".local"))
 RESEARCH = REPO / "projects/agent-research"
 MODELS = RESEARCH / ".local/research/models"
-HOST = "4070"
+# Each line evaluates where it already is: rules on this machine, RL on the 4090 that
+# trained it (no transfer). The two lines never share a host.
+EVAL_HOST = {"rule": "local", "reference": "local", "rl": "4090"}
 STAGES = tuple(int(x) for x in os.environ.get("FP_STAGES", "1024,2048,4096").split(","))  # blocks; 4 games each
 CONFIRM_BLOCKS = int(os.environ.get("FP_CONFIRM", "2048"))
 STOP_SE = 2.0
@@ -155,58 +157,121 @@ def freeze_model(attempt_id, actor_dir):
 
 
 # -- execution -------------------------------------------------------------------
-_dispatcher = None
+_dispatchers = {}
 
 
-def dispatcher():
-    global _dispatcher
-    if _dispatcher is None:
-        host = research_state()["config"]["hosts"][HOST]
-        _dispatcher = Dispatcher(RemoteHost(HOST, host, REPO), MODELS)
-    return _dispatcher
+def remote_host(name):
+    return RemoteHost(name, research_state()["config"]["hosts"][name], REPO)
 
 
-def play(pool, attempt_id, spec, blocks, seed, label):
-    """Play the blocks on the evaluation host; returns ({block: table score}, stats).
+def dispatcher(name):
+    if name not in _dispatchers:
+        _dispatchers[name] = Dispatcher(remote_host(name), MODELS)
+    return _dispatchers[name]
 
-    One evaluation at a time: two lines sharing the host would oversubscribe it,
-    and the resulting decision timeouts would lower both scores.
+
+def play(pool, attempt_id, spec, blocks, seed, label, host):
+    """Play the blocks on host ("local" or a remote); returns ({block: table score}, stats).
+
+    One evaluation per host at a time: two attempts sharing a machine would
+    oversubscribe it, and the resulting decision timeouts would lower both scores.
     """
     import fcntl
 
     LOCAL.mkdir(parents=True, exist_ok=True)
-    with (LOCAL / "evaluation.lock").open("w") as lock:
+    with (LOCAL / f"evaluation-{host}.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        return _play(pool, attempt_id, spec, blocks, seed, label)
+        if host == "local":
+            return _play_local(pool, attempt_id, spec, blocks, seed, label)
+        return _play(pool, attempt_id, spec, blocks, seed, label, host)
 
 
-def _play(pool, attempt_id, spec, blocks, seed, label):
-    host = research_state()["config"]["hosts"][HOST]
-    workers = host["workers"]
+def _tasks(pool, attempt_id, spec, blocks, seed, label, workers):
+    """Job directories and tasks: one job per worker over contiguous blocks."""
     blocks = list(blocks)
     size = -(-len(blocks) // workers)
     policies = dict(pool["members"], **{attempt_id: with_timeouts(spec)})
-    env = {"MAHJONG_MEMORY_MB": str(pool["resources"]["memory_mb"]),
-           **{k: str(pool["resources"]["threads"]) for k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS")}}
-    roots = []
     for n in range(0, len(blocks), size):
         root = LOCAL / "jobs" / attempt_id / f"{label}-{n // size:02d}"
-        roots.append(root)
-        result = root / "result.json"
-        if result.exists() and read_json(result).get("status") == "completed":
-            continue
-        root.mkdir(parents=True, exist_ok=True)
-        result.unlink(missing_ok=True)
         task = dict(kind="match", project=str(REPO), experiment="firstprinciples",
                     runtime_path=pool["runtime_path"], runtime="", config=pool["config"],
                     timeouts=pool["timeouts"], resources=pool["resources"], seed=seed,
                     assignments=assignments(pool, attempt_id, blocks[n:n + size]),
                     scope="paired", candidate=attempt_id, policies=policies,
                     deadline=time.time() + 86400, execution_limit_seconds=None, owner_pid=os.getpid())
+        yield root, task
+
+
+def _collect(value, scores, stats):
+    focal = value["focal"]
+    scores.update(zip(focal["group_blocks"], focal["field_score_group_means"]))
+    for key in stats:
+        stats[key] += int(focal.get(key) or 0)
+
+
+def _job_env(pool):
+    return {"MAHJONG_MEMORY_MB": str(pool["resources"]["memory_mb"]),
+            **{k: str(pool["resources"]["threads"]) for k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS")}}
+
+
+_services = {}
+
+
+def _play_local(pool, attempt_id, spec, blocks, seed, label):
+    """Run the jobs as local processes, the way the research executor does."""
+    import subprocess
+
+    from mahjong_ai.execution.model_seat import ENCODER_ENV
+    from mahjong_ai.execution.model_service import SERVER_ENV, ModelService
+
+    workers = research_state()["config"]["match_workers"]
+    runtime = pool["runtime_path"]
+    env = dict(os.environ, PYTHONPATH=runtime, **_job_env(pool))
+    fingerprint = subprocess.run(
+        [sys.executable, "-c", "from mahjong_ai.persistence.artifacts import runtime_fingerprint;print(runtime_fingerprint())"],
+        env=env, capture_output=True, text=True, check=True).stdout.strip()
+    weights = {m["parameters"]["weights"] for m in [*pool["members"].values(), spec] if m.get("family") == "model"}
+    if weights:
+        service = _services.setdefault("local", ModelService(root=MODELS, log=LOCAL / "model-server.log"))
+        service.warm(weights)
+        env[SERVER_ENV], env[ENCODER_ENV] = service.url(), str(service.project)
+    scores, stats, running = {}, {"timeouts": 0, "fallback_actions": 0, "errors": 0}, []
+    for root, task in _tasks(pool, attempt_id, spec, blocks, seed, label, workers):
+        result = root / "result.json"
+        if result.exists() and read_json(result).get("status") == "completed":
+            _collect(read_json(result), scores, stats)
+            continue
+        root.mkdir(parents=True, exist_ok=True)
+        result.unlink(missing_ok=True)
+        atomic_json(root / "task.json", dict(task, runtime=fingerprint))
+        with (root / "worker.log").open("ab") as out:
+            running.append((root, subprocess.Popen(
+                [sys.executable, "-B", "-m", "mahjong_ai.execution.jobs", str(root)], cwd=REPO, env=env,
+                stdin=subprocess.DEVNULL, stdout=out, stderr=out, start_new_session=True)))
+    for root, process in running:
+        process.wait()
+        value = read_json(root / "result.json") if (root / "result.json").exists() else {}
+        if value.get("status") != "completed":
+            raise RuntimeError(f"{root.name}: {value.get('status')} {str(value.get('error'))[:300]}")
+        _collect(value, scores, stats)
+    return scores, stats
+
+
+def _play(pool, attempt_id, spec, blocks, seed, label, host):
+    workers = research_state()["config"]["hosts"][host]["workers"]
+    env = _job_env(pool)
+    roots = []
+    for root, task in _tasks(pool, attempt_id, spec, blocks, seed, label, workers):
+        roots.append(root)
+        result = root / "result.json"
+        if result.exists() and read_json(result).get("status") == "completed":
+            continue
+        root.mkdir(parents=True, exist_ok=True)
+        result.unlink(missing_ok=True)
         atomic_json(root / "task.json", task)
         job = f"{attempt_id}/{root.name}"
-        if not dispatcher().adopt(job, root):
-            dispatcher().submit(job, root, task, pool["runtime_path"], env)
+        if not dispatcher(host).adopt(job, root):
+            dispatcher(host).submit(job, root, task, pool["runtime_path"], env)
     scores, stats = {}, {"timeouts": 0, "fallback_actions": 0, "errors": 0}
     pending = list(roots)
     while pending:
@@ -219,13 +284,10 @@ def _play(pool, attempt_id, spec, blocks, seed, label):
             if value.get("status") != "completed":
                 log(f"{root.name} {value.get('status')}: {str(value.get('error'))[:200]}; relaunching")
                 path.unlink()
-                dispatcher().submit(f"{attempt_id}/{root.name}", root, read_json(root / "task.json"),
-                                    pool["runtime_path"], env)
+                dispatcher(host).submit(f"{attempt_id}/{root.name}", root, read_json(root / "task.json"),
+                                        pool["runtime_path"], env)
                 continue
-            focal = value["focal"]
-            scores.update(zip(focal["group_blocks"], focal["field_score_group_means"]))
-            for key in stats:
-                stats[key] += int(focal.get(key) or 0)
+            _collect(value, scores, stats)
             pending.remove(root)
     return scores, stats
 
@@ -250,10 +312,11 @@ def evaluate(line, spec, description, attempt_id=None, design_seconds=None):
     attempt_id = attempt_id or f"fp-{line}-{len(history):03d}"
     # A reference (the version on the platform) plays the full ladder and is never compared.
     champion = None if line == "reference" else best(pool["id"], line)
+    host = EVAL_HOST[line]
     started = time.time()
     scores, stats, stage_blocks, verdict, confirm = {}, {"timeouts": 0, "fallback_actions": 0, "errors": 0}, 0, None, None
     for stage in STAGES:
-        new, s = play(pool, attempt_id, spec, range(stage_blocks, stage), pool["dev_seed"], f"dev{stage}")
+        new, s = play(pool, attempt_id, spec, range(stage_blocks, stage), pool["dev_seed"], f"dev{stage}", host)
         scores.update(new)
         for k in stats:
             stats[k] += s[k]
@@ -272,10 +335,10 @@ def evaluate(line, spec, description, attempt_id=None, design_seconds=None):
     elif verdict is None:
         seed = random.SystemRandom().getrandbits(62)
         champion_spec = champion["spec"]
-        mine, _ = play(pool, attempt_id, spec, range(CONFIRM_BLOCKS), seed, "confirm")
+        mine, _ = play(pool, attempt_id, spec, range(CONFIRM_BLOCKS), seed, "confirm", host)
         # The best version replays the same fresh walls under its own id.
         theirs, _ = play(pool, champion["id"], champion_spec, range(CONFIRM_BLOCKS), seed,
-                         f"confirm-for-{attempt_id}")
+                         f"confirm-for-{attempt_id}", host)
         diff, se = paired(mine, theirs, range(CONFIRM_BLOCKS))
         confirm = {"seed": seed, "games": CONFIRM_BLOCKS * 4, "diff": diff, "se": se,
                    "lower90": diff - CONFIRM_Z * se}

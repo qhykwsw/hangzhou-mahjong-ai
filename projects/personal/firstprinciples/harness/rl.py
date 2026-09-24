@@ -31,6 +31,28 @@ REMOTE = remote.ROOT + "/.local/firstprinciples/rl"
 LIMITS = {"gpu_memory_fraction": 0.75, "ram_fraction": 0.75}
 
 
+def place_on_host(actor_dir):
+    """Put an Actor exported on the host into the host's model store, as if synced.
+
+    The evaluation host's inference service reads models by weights hash from the
+    mirror of the research model store; writing it there (and its sync marker)
+    avoids moving the Actor through the Mac.
+    """
+    host = E.remote_host(HOST)
+    sha = remote.execute(HOST, "import json\nprint(json.load(open(%r))['weights_sha256'])" % (actor_dir + "/meta.json"),
+                         timeout=60).strip().splitlines()[-1]
+    local = E.MODELS / sha
+    script = f"""import json,pathlib,shutil
+src,dst,marker=pathlib.Path({actor_dir!r}),pathlib.Path({host.remote_path(local)!r}),pathlib.Path({host._marker(local)!r})
+if not dst.exists():
+    tmp=dst.with_name(dst.name+'.tmp');shutil.rmtree(tmp,ignore_errors=True);shutil.copytree(src,tmp);tmp.rename(dst)
+marker.parent.mkdir(parents=True,exist_ok=True);marker.touch()
+print(json.dumps(True))
+"""
+    remote.execute(HOST, script, timeout=300)
+    return {"family": "model", "version": sha[:12], "parameters": {"weights": sha}}
+
+
 def setup(checkpoint, name):
     """Deploy the frozen training code and export the start Actor from a checkpoint on the host."""
     RL.mkdir(parents=True, exist_ok=True)
@@ -43,6 +65,8 @@ def setup(checkpoint, name):
     out = remote.command(HOST, [remote.PYTHON, "-c", recipe_jobs.START_EXPORT, checkpoint, start],
                          cwd=code, environment=recipe_jobs.env(code), timeout=300)
     meta = json.loads(out.strip().splitlines()[-1])
+    place_on_host(start)  # the RL line evaluates here
+    # The rule line evaluates on this machine and needs the pool's model too.
     local = recipe_jobs.fetch_directory(HOST, start, RL / "start" / "actor")
     spec = E.freeze_model(name, local)
     value = {"code": code, "source_id": manifest["id"], "start_actor": start, "start_meta": meta,
@@ -73,7 +97,7 @@ def attempt(description, design_start=None):
                 source_id=setup_["source_id"], recipe=str(job / "recipe"), bundle=BUNDLE,
                 start_actor=setup_["start_actor"], budget_seconds=BUDGET,
                 seed=random.SystemRandom().getrandbits(31), line="rl", limits=LIMITS,
-                opponents=training_opponents(), fetch_actor=True)
+                opponents=training_opponents(), fetch_actor=False)
     E.log(f"{attempt_id}: training {BUDGET // 60} min on {HOST}")
     result = recipe_jobs.trial_train(task, lambda message: None)
     E.atomic_json(job / "training.json", {k: v for k, v in result.items() if k != "metrics"})
@@ -85,7 +109,7 @@ def attempt(description, design_start=None):
         with E.records_path().open("a") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
         return record
-    spec = E.freeze_model(attempt_id, result["local_actor"])
+    spec = dict(place_on_host(result["actor"]), version=attempt_id)
     return E.evaluate("rl", spec, description, attempt_id, design)
 
 
