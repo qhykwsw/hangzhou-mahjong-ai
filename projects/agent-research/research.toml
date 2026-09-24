@@ -35,7 +35,7 @@ distro = "Ubuntu-20.04"
 user = "user"
 python = "/home/user/miniconda3/envs/py311_cu130/bin/python"
 root = "/home/user/code/leihuo_majiang"
-workers = 22  # 28 线程的 80%
+workers = 14  # 28 线程的一半：这是用户的办公机，满载评估会让桌面卡顿
 
 [training_caps]
 heuristic = 0
@@ -72,13 +72,13 @@ models = ["deepseek"]
 parameters = { style = "unrestricted" }
 
 [[combinations]]
-id = "rl-recipe"  # 方案分支：训练与评估都在 4070，每段每边 4096 → 8192 → 16384 场
+id = "rl-recipe"  # 方案分支：训练在 4070，评估改在 4090（4070 是办公机，满载会卡桌面），每段每边 4096 → 8192 → 16384 场
 branches = 1
 branch_ids = ["01"]
 models = ["astra-high"]
 parameters = { line = "rl" }
 evaluation_games = 4096
-evaluation_host = "4070"
+evaluation_host = "4090"
 
 [game]
 rounds = 16  # 跟随锦标赛配置（二测四个阶段均为 Rounds=16）；自动匹配房的 8 局是自由对战默认，不是赛制
