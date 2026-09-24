@@ -64,8 +64,8 @@ EVAL_HOST = {"rule": "local", "reference": "local", "rl": "4070"}
 # per process. Measured throughput knees with headroom for the desktop: on the
 # Mac the inference service is the limit and tables keep the cores busy while
 # model seats wait; on the 4070 tables only add interpreter contention.
-EVAL_WORKERS = {"local": 12, "4070": 24, "4090": 16}
-EVAL_TABLES = {"local": 3, "4070": 1, "4090": 1}
+EVAL_WORKERS = {"local": 12, "4070": 24, "4090": 20}
+EVAL_TABLES = {"local": 3, "4070": 2, "4090": 1}
 ISOLATION = "none"  # the pool's packages run in the match process (see module docstring)
 POLL_SECONDS = 5  # how often remote job results are checked; each stage ends on a poll
 STAGES = tuple(int(x) for x in os.environ.get("FP_STAGES", "1024,2048,4096").split(","))  # blocks; 4 games each
@@ -330,7 +330,9 @@ def _tasks(pool, attempt_id, spec, blocks, seed, label, host):
     policies = dict(pool["members"], **{attempt_id: with_timeouts(spec)})
     resources = dict(pool["resources"], isolation=ISOLATION, tables=EVAL_TABLES[host])
     for n in range(0, len(blocks), size):
-        root = LOCAL / "jobs" / attempt_id / f"{label}-{n // size:02d}"
+        # Under the pool id: a finished job is reused on restart, and a job of
+        # another pool (other runtime, other walls) must never be.
+        root = LOCAL / "jobs" / pool["id"] / attempt_id / f"{label}-{n // size:02d}"
         task = dict(kind="match", project=str(REPO), experiment="firstprinciples",
                     runtime_path=pool["runtime_path"], runtime="", config=pool["config"],
                     timeouts=pool["timeouts"], resources=resources, seed=seed,
