@@ -11,8 +11,8 @@
 | 角色 | 主机 | 用途 |
 | --- | --- | --- |
 | Mac | 本机 | 控制面：冻结源码与教师、写运行计划、启动远端任务、汇总报告；研究评估中的模型座位用 MPS 推理，不训练 |
-| 4090 | `gpu-4090-wsl` | 模仿阶段（大模型 384/8/8）、规模试验与共同大乱斗；大乱斗派到这里时，本机训练进程被暂停，结束后恢复 |
-| 4070 | `gpu-4070-wsl` | RL 方案分支的训练与评估（从 4090 模仿出的大模型起点出发）；正式内网比赛只在这里推理。不跑显存压力探针 |
+| 4090 | `gpu-4090-wsl` | 模仿阶段（大模型 384/8/8）、RL 方案分支的训练与评估、规模试验与共同大乱斗；大乱斗派到这里时，本机训练进程被暂停，结束后恢复 |
+| 4070 | `gpu-4070-wsl` | 用户的办公机，显卡同时负责桌面显示，不跑训练和长时间评估；正式内网比赛只在这里推理。不跑显存压力探针 |
 
 - 连接由 [`remote.py`](remote.py) 的 `HOSTS`、`ROOT`、`PYTHON` 定义：经 Windows 宿主 SSH，再以 `wsl.exe -d Ubuntu-20.04 -u user` 进入 WSL；命令按 argv 传递，不拼接 shell。长任务用 `remote.command(..., background_log=...)` 启动，进程脱离 wsl.exe 会话。
 - 两机项目路径都是 `~/code/leihuo_majiang`，解释器 `~/softwares/miniconda3/envs/py311_cu130/bin/python` 自带 CUDA torch，不要重装 CUDA 环境。统一版本的 numpy 放在 `.local/guided-deps/numpy-2.1.2`，`remote.command` 会自动加进 `PYTHONPATH`，不改共享 Conda 环境。
