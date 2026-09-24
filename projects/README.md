@@ -9,6 +9,7 @@ projects/
 ├── agent-research/       # 自动研究项目；组合仍由 research.toml 注册
 └── personal/
     ├── selfplay/         # 人工维护的策略训练项目：自我对弈 PPO（ONNX 发布）与规则教师指导（guided/）
+    ├── firstprinciples/  # 维护者亲自推进的规则线与 RL 线（ADR-0016）
     └── rules/            # 人工维护的规则项目
 ```
 

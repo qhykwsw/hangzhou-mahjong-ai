@@ -8,9 +8,9 @@
   const LINES = {
     rule: { name: "规则线", color: "var(--teal)" },
     rl: { name: "RL 线", color: "var(--blue)" },
-    reference: { name: "参照：当前上场版本", color: "var(--red)" },
+    reference: { name: "参照", color: "var(--red)" },
   };
-  const STATUS = { keep: "成功", discard: "失败", unconfirmed: "开发集高但未确认" };
+  const STATUS = { keep: "成功", discard: "失败", unconfirmed: "开发集高但未确认", crash: "崩溃", reference: "参照" };
   const FULL_GAMES = 16384;
   const time = (s) => new Date(s * 1000).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
   const signed = (v, d = 2) => (v == null ? "—" : (v >= 0 ? "+" : "") + v.toFixed(d));
@@ -45,8 +45,12 @@
     for (const [key, meta] of Object.entries(LINES)) {
       const rows = shown.filter((a) => a.line === key).sort((a, b) => a.finished_at - b.finished_at);
       if (key === "reference") {
-        const ref = rows.at(-1);
-        if (ref) parts.push(`<line x1="${L}" x2="${W - R}" y1="${Y(ref.score)}" y2="${Y(ref.score)}" stroke="${meta.color}" class="reference"><title>${esc(ref.description)} ${signed(ref.score)}</title></line>`);
+        // Every reference version is its own dashed level, labelled at the right edge.
+        for (const ref of rows) {
+          const name = ref.id.replace(/^ref-/, "").replace(/^heuristic-[a-z]+--\d+--/, "");
+          parts.push(`<line x1="${L}" x2="${W - R}" y1="${Y(ref.score)}" y2="${Y(ref.score)}" stroke="${meta.color}" class="reference"><title>${esc(ref.description)} ${signed(ref.score)}</title></line>`);
+          parts.push(`<text x="${W - R - 2}" y="${Y(ref.score) - 4}" class="axis" text-anchor="end" fill="${meta.color}">${esc(name)} ${signed(ref.score)}</text>`);
+        }
         continue;
       }
       // The best-so-far staircase through kept attempts.
@@ -83,7 +87,7 @@
       '<span><i style="background:#b8c4c9"></i>失败</span>',
       '<span><i class="hollow"></i>开发集高但未确认</span>',
       '<span><i class="small"></i>提前停止（局数不足）</span>',
-      '<span><i class="dash"></i>参照：当前上场版本</span>',
+      '<span><i class="dash"></i>参照（上场版本与粗测）</span>',
     ].join("");
   }
 

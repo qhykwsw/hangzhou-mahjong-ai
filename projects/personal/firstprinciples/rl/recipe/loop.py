@@ -12,6 +12,8 @@ build advantages (targets.py), accumulate the policy gradient over all rows
 without stepping, then scale the step so that KL(current || new) on a fixed
 subset of the rollout equals `step_kl`. A step starts only if the time left
 covers the previous step's duration, so the loop never overruns the deadline.
+With a hand budget, collection stops when it is spent and the rows gathered so
+far make the last (possibly smaller) step.
 """
 
 import json
@@ -109,17 +111,18 @@ def train(ctx):
     rng = np.random.default_rng(ctx.seed)
     actor = ctx.actor
     step, iteration, last = 0, 0, 0.0
-    while ctx.time_left() > 1.15 * last + reserve:
+    hands = lambda: ctx.hands_left() is None or ctx.hands_left() > 0  # noqa: E731
+    while hands() and ctx.time_left() > 1.15 * last + reserve:
         began = time.time()
         rows = []
-        while len(rows) < target_rows and ctx.time_left() > reserve:
+        while len(rows) < target_rows and hands() and ctx.time_left() > reserve:
             iteration += 1
             got, _, _ = ctx.collect(
                 actor, collect_cfg, samples=min(40000, target_rows), iteration=iteration,
                 hooks={"values": no_values},
             )
             rows += got
-        if len(rows) < target_rows:
+        if not rows or (len(rows) < target_rows and hands()):
             break
         step += 1
         collected = time.time() - began
