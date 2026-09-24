@@ -5,6 +5,7 @@ batched on one device. The service code lives in the self-play project
 (``guided.model_server``) because it needs torch and the Actor encoding.
 """
 
+import atexit
 import json
 import os
 from pathlib import Path
@@ -78,6 +79,8 @@ class ModelService:
                 stderr=log,
                 start_new_session=True,
             )
+        # A one-shot evaluation must not leave the service behind when it exits.
+        atexit.register(self.close)
         deadline = time.monotonic() + 120
         while time.monotonic() < deadline:
             if self.process.poll() is not None:
