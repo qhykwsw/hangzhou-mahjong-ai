@@ -79,6 +79,11 @@ class Models:
     def get(self, name):
         from .deployment import load_actor
 
+        # A loaded immutable artifact is already validated and resident. Avoid
+        # path resolution and filesystem probes on every small inference batch.
+        cached = self.loaded.get(name)
+        if cached is not None:
+            return cached
         path = (self.root / name).resolve()
         if not path.is_relative_to(self.root) or not (path / "meta.json").is_file():
             raise ValueError(f"unknown model artifact: {name}")
@@ -346,7 +351,7 @@ class Service:
         # Each event is five int16 fields, packed as base64 by the worker.
         # Bad bodies still reach _rows(), which returns a request error; the
         # scheduling hint must not turn malformed input into a server failure.
-        length = 0
+        length = len(packed) if request.get("_binary") else 0
         if isinstance(packed, str):
             byte_count = len(packed) * 3 // 4 - (len(packed) - len(packed.rstrip("=")))
             length = max(0, byte_count // 10)
@@ -400,7 +405,7 @@ class Service:
         if pre_encoded:
             if any(p.get("lookahead") != meta["config"]["lookahead"] for p in requests):
                 raise ValueError("encoding does not match the model's lookahead")
-            return [decode(p["encoded"]) for p in requests], None
+            return [p["encoded"] if p.get("_binary") else decode(p["encoded"]) for p in requests], None
         from .deployment import parse_observation
         from .encoding import encode
 
@@ -509,7 +514,7 @@ def blank():
 
 
 def decode(data):
-    """Actor input packed by a match worker (model_seat.pack)."""
+    """Base64 Actor input accepted by the JSON /act endpoint."""
     import base64
     import numpy as np
     from selfplay_core.actions import N_ACTIONS
@@ -527,9 +532,19 @@ def decode(data):
 class Connection:
     def __init__(self, sock):
         self.sock, self.inbox, self.outbox = sock, bytearray(), bytearray()
+        self.binary = None
 
 
 def reply(connection, code, body):
+    if connection.binary:
+        from selfplay_core.wire import REPLY, MAX_ERROR
+
+        if code == 200 and "index" in body:
+            connection.outbox += REPLY.pack(body["index"])
+        else:
+            error = str(body.get("error") or "inference request failed").encode()[:MAX_ERROR]
+            connection.outbox += REPLY.pack(-len(error)) + error
+        return
     data = json.dumps(body).encode()
     reason = {
         200: "OK",
@@ -548,7 +563,26 @@ def reply(connection, code, body):
 
 def requests(connection):
     """Complete HTTP/1.1 requests in the connection's buffer: (method, path, body)."""
+    from selfplay_core.wire import FRAME_HEADER, FRAME_MAGIC
+
     while True:
+        if connection.binary is None:
+            if len(connection.inbox) < len(FRAME_MAGIC):
+                return
+            connection.binary = connection.inbox.startswith(FRAME_MAGIC)
+        if connection.binary:
+            if len(connection.inbox) < FRAME_HEADER.size:
+                return
+            magic, length = FRAME_HEADER.unpack_from(connection.inbox)
+            if magic != FRAME_MAGIC or length > MAX_BODY:
+                raise ValueError("invalid inference frame")
+            end = FRAME_HEADER.size + length
+            if len(connection.inbox) < end:
+                return
+            body = bytes(connection.inbox[FRAME_HEADER.size:end])
+            del connection.inbox[:end]
+            yield "BINARY", "/act", body
+            continue
         end = connection.inbox.find(b"\r\n\r\n")
         if end < 0:
             return
@@ -588,6 +622,8 @@ def serve(service, port, host="127.0.0.1", code=""):
     print(json.dumps({"port": port, "device": service.models.device}), flush=True)
 
     def close(connection):
+        if connection.sock.fileno() < 0:
+            return
         selector.unregister(connection.sock)
         connection.sock.close()
 
@@ -614,7 +650,12 @@ def serve(service, port, host="127.0.0.1", code=""):
     polling = service.runner.polls
     reported = time.monotonic()
     while True:
-        ready = selector.select(0 if polling and service.inflight else None)
+        # CPU launches complete synchronously and parse failures have no
+        # device event to wake select. Drain either before waiting on sockets.
+        immediate = service.failed or (
+            service.inflight and (polling or service.runner.ready(service.inflight[0][2]))
+        ) or (service.pending and len(service.inflight) < IN_FLIGHT)
+        ready = selector.select(0 if immediate else None)
         if time.monotonic() - reported > 60:
             # Device load of the run: forward seconds against wall seconds.
             reported = time.monotonic()
@@ -641,13 +682,15 @@ def serve(service, port, host="127.0.0.1", code=""):
             connection = key.data
             if events & selectors.EVENT_WRITE:
                 flush(connection)
+                if connection.sock.fileno() < 0:
+                    continue
             if not events & selectors.EVENT_READ:
                 continue
             try:
                 data = connection.sock.recv(1 << 20)
             except BlockingIOError:
                 continue
-            except ConnectionError:
+            except OSError:
                 data = b""
             if not data:
                 close(connection)
@@ -671,6 +714,13 @@ def serve(service, port, host="127.0.0.1", code=""):
                             reply(
                                 connection, 200, service.load(json.loads(body)["model"])
                             )
+                        except Exception as exc:
+                            reply(connection, 400, {"error": str(exc)[:2000]})
+                    elif method == "BINARY" and path == "/act":
+                        try:
+                            from selfplay_core.wire import unpack
+
+                            service.enqueue(connection, unpack(body))
                         except Exception as exc:
                             reply(connection, 400, {"error": str(exc)[:2000]})
                     elif method == "POST" and path == "/act":

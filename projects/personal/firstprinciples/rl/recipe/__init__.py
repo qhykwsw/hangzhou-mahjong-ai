@@ -6,6 +6,11 @@ a cross-fitted Critic, and moves the Actor along the full-batch policy gradient
 until KL(current || new) reaches a small fixed target. See loop.py.
 """
 
-from .loop import train
+def train(ctx):
+    # Workers import recipe.features and recipe.returns, which need NumPy only.
+    # Load the learner and torch solely in the training parent.
+    from .loop import train as run
+
+    return run(ctx)
 
 __all__ = ["train"]

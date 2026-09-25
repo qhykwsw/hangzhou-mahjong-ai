@@ -65,7 +65,7 @@ EVAL_HOST = {"rule": "local", "reference": "local", "rl": "4070"}
 # Mac the inference service is the limit and tables keep the cores busy while
 # model seats wait; too many tables add interpreter contention.
 EVAL_WORKERS = {"local": 12, "4070": 24, "4090": 20, "5070ti": 16}
-EVAL_TABLES = {"local": 3, "4070": 2, "4090": 2, "5070ti": 2}
+EVAL_TABLES = {"local": 3, "4070": 8, "4090": 2, "5070ti": 2}
 ISOLATION = "none"  # the pool's packages run in the match process (see module docstring)
 POLL_SECONDS = 5  # how often remote job results are checked; each stage ends on a poll
 STAGES = tuple(int(x) for x in os.environ.get("FP_STAGES", "1024,2048,4096").split(","))  # blocks; 4 games each

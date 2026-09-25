@@ -25,13 +25,13 @@ import torch
 
 from selfplay_core.actions import HU
 
-from .batch import actor_args, make_batch, masked_log_probs
+from .batch import actor_args, make_batch, masked_log_probs, resident_rows
 from .targets import advantages
 
 CONFIG = json.loads(Path(__file__).with_name("config.json").read_text())
 
 
-def gradient(actor, rows, weights, size, device):
+def gradient(actor, rows, weights, size, device, *, batch_source=None):
     """Sum of advantage-weighted log-probability gradients over every row.
 
     The sum does not depend on order, so rows are grouped by history length to
@@ -44,7 +44,8 @@ def gradient(actor, rows, weights, size, device):
     actor.eval()
     for s in range(0, len(order), size):
         idx = order[s : s + size]
-        mb = make_batch([rows[i] for i in idx], device)
+        mb = (batch_source.batch(idx) if batch_source is not None
+              else make_batch([rows[i] for i in idx], device))
         with torch.autocast("cuda", dtype=torch.bfloat16):
             logits = actor(*actor_args(mb))
         logp = masked_log_probs(logits, mb["mask"])
@@ -65,17 +66,20 @@ def kl_step(actor, params, direction, batches, goal):
             return [masked_log_probs(actor(*actor_args(mb)), mb["mask"]) for mb in batches]
 
     reference = logps()
+    probabilities = [old.exp().masked_fill(~mb["mask"], 0) for mb, old in zip(batches, reference)]
+    latest = reference
 
     def kl_at(eta):
+        nonlocal latest
         with torch.no_grad():
             for p, p0, d in zip(params, start, direction):
                 p.copy_(p0 + eta * d)
-        total = n = 0.0
-        for mb, old, new in zip(batches, reference, logps()):
-            probs = old.exp().masked_fill(~mb["mask"], 0)
-            total += float((probs * (old - new).masked_fill(~mb["mask"], 0)).sum())
-            n += len(old)
-        return total / n
+        latest = logps()
+        sums = [(probs * (old - new).masked_fill(~mb["mask"], 0)).sum()
+                for mb, old, probs, new in zip(batches, reference, probabilities, latest)]
+        # Each batch still sums in fp32, then totals in fp64 like Python float.
+        # Only the final scalar crosses the device boundary.
+        return float(torch.stack(sums).double().sum()) / sum(len(old) for old in reference)
 
     norm = float(torch.sqrt(sum((d * d).sum() for d in direction)))
     eta = 1e-3 / max(norm, 1e-12)
@@ -87,8 +91,8 @@ def kl_step(actor, params, direction, batches, goal):
         kl = kl_at(eta)
     hu = [torch.nonzero(mb["mask"][:, HU]).squeeze(1) for mb in batches]
     legal = max(1, sum(len(h) for h in hu))
-    before = sum(int((lp[h].argmax(-1) == HU).sum()) for h, lp in zip(hu, reference)) / legal
-    after = sum(int((lp[h].argmax(-1) == HU).sum()) for h, lp in zip(hu, logps())) / legal
+    before = int(torch.stack([(lp[h].argmax(-1) == HU).sum() for h, lp in zip(hu, reference)]).sum()) / legal
+    after = int(torch.stack([(lp[h].argmax(-1) == HU).sum() for h, lp in zip(hu, latest)]).sum()) / legal
     return {"kl": kl, "step_norm": eta * norm, "hu_before": before, "hu_after": after}
 
 
@@ -124,18 +128,28 @@ def train(ctx):
             break
         step += 1
         collected = time.time() - began
-        weights, stats = advantages(rows, cfg, rng, ctx.device, ctx.seed + 7919 * step)
+        packing_started = time.time()
+        batch_source = (resident_rows(rows, ctx.device, ctx.resources["gpu_limit_bytes"])
+                        if cfg.get("resident_rows", False) else None)
+        packing_seconds = time.time() - packing_started
+        weights, stats = advantages(
+            rows, cfg, rng, ctx.device, ctx.seed + 7919 * step, batch_source=batch_source,
+        )
         fitted = time.time() - began - collected
-        params, direction = gradient(actor, rows, weights, microbatch, ctx.device)
+        params, direction = gradient(actor, rows, weights, microbatch, ctx.device, batch_source=batch_source)
         subset = rng.choice(len(rows), size=min(len(rows), int(cfg["kl_rows"])), replace=False)
-        batches = [make_batch([rows[i] for i in subset[s : s + 512]], ctx.device) for s in range(0, len(subset), 512)]
+        batches = [batch_source.batch(subset[s : s + 512]) if batch_source is not None
+                   else make_batch([rows[i] for i in subset[s : s + 512]], ctx.device)
+                   for s in range(0, len(subset), 512)]
         count = len(rows)
-        del rows
+        used_resident = batch_source is not None
+        del rows, batch_source
         stats |= kl_step(actor, params, direction, batches, float(cfg["step_kl"]))
         ctx.save_actor(actor)
         last = time.time() - began
         ctx.log(
             step=step, rows=count, **stats, collect_seconds=collected,
             critic_seconds=fitted, step_seconds=last,
+            packing_seconds=packing_seconds, resident_rows=used_resident,
         )
     return actor

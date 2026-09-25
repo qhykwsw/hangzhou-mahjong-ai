@@ -70,6 +70,12 @@ class ModelService:
             probe.bind(("127.0.0.1", 0))
             self.port = probe.getsockname()[1]
         env = dict(os.environ)
+        # bootstrap appends paths; editable installs or inherited worker paths
+        # must not select an SDK/native extension from another frozen runtime.
+        paths = [self.project.parents[2] / "src", self.project, self.project / "src"]
+        env["PYTHONPATH"] = os.pathsep.join(
+            [str(path) for path in paths] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else [])
+        )
         for key in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
             env.pop(key, None)
         with self.log.open("ab") as log:

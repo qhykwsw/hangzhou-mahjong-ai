@@ -8,5 +8,6 @@
   "critic_learning_rate": 0.0003,
   "worker_fraction": 0.8,
   "tables": 32,
+  "resident_rows": true,
   "gather_seconds": 0.002
 }

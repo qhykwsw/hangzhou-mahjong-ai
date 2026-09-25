@@ -31,8 +31,14 @@ ENCODING = "guided-current-hand-v1"
 
 
 def encode(obs, lookahead=True):
-    base = base_encode(obs, lookahead=lookahead)
-    events = [e for e in obs.public_events if e.hand_no == obs.stage.round_no]
+    base = base_encode(obs, lookahead=lookahead, include_events=False)
+    # Public events are chronological. Only the current hand's suffix enters
+    # this encoder; scanning all previous hands repeats increasing work.
+    events = obs.public_events
+    first = len(events)
+    while first and events[first - 1].hand_no == obs.stage.round_no:
+        first -= 1
+    events = events[first:]
     result = np.zeros((max(1, len(events)), 5), dtype=np.int16)
     for i, event in enumerate(events):
         result[i] = (

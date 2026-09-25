@@ -36,6 +36,15 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
         if device.type == "cuda" and cfg.get("cuda_graphs", True) and not cfg["bc_only"]
         and "sample" not in hooks and (critic is None or "values" in hooks) else None
     )
+    inference_actor = actor
+    if graphs is not None and command["kind"] != "evaluate" and cfg.get("precast_collection", True):
+        import copy
+        from .inference import prepare_frozen
+
+        # The policy is immutable throughout this on-policy rollout. Its
+        # fp32 learner remains untouched; the snapshot uses the same fp16
+        # coefficients autocast otherwise rebuilds on every graph replay.
+        inference_actor = prepare_frozen(copy.deepcopy(actor).requires_grad_(False), device)
     timers = {"wait": 0.0, "receive": 0.0, "batch": 0.0, "forward": 0.0, "reply": 0.0}
     batch_sizes = []
     ctx = mp.get_context("spawn")
@@ -140,7 +149,7 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
                 group = [item for item in pending if item[2]["slot"] == slot]
                 batch_sizes.append(len(group))
                 mark = time.perf_counter()
-                model = actor if slot == "model:current" else history[slot]
+                model = inference_actor if slot == "model:current" else history[slot]
                 learning = (
                     slot == "model:current"
                     and command["kind"] != "evaluate"

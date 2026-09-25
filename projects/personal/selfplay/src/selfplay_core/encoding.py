@@ -20,6 +20,11 @@ from mahjong_ai.sdk.shape import analyze, remaining_tiles, shanten
 
 from .actions import N_ACTIONS, legal_indices
 
+try:
+    from mahjong_ai import _fast
+except ImportError:
+    _fast = None
+
 ENCODING_VERSION = "selfplay-obs-v1"
 K_EVENTS = 64
 EVENT_FIELDS = 5
@@ -72,27 +77,33 @@ def _count_planes(target, tiles):
         target[:] = c[None, :] >= _THRESH
 
 
-def encode(obs: Observation, lookahead: bool = True) -> Encoded:
+def encode(obs: Observation, lookahead: bool = True, *, include_events: bool = True) -> Encoded:
     seat = obs.stage.seat
     rel = [(seat + i) % 4 for i in range(4)]  # rel[i] = physical seat at relative offset i
     planes = np.zeros((N_PLANES, 34), dtype=np.float32)
     hand = obs.hand
     opened = len(obs.melds[seat])
 
-    _count_planes(planes[P_HAND : P_HAND + 4], hand)
-    if obs.drawn_tile is not None:
-        planes[P_DRAWN, obs.drawn_tile] = 1.0
-    for i, s in enumerate(rel):
-        meld_tiles = [t for m in obs.melds[s] for t in m.tiles]
-        _count_planes(planes[P_MELDS + 4 * i : P_MELDS + 4 * i + 4], meld_tiles)
-        river = obs.discards[s]
-        _count_planes(planes[P_DISCARDS + 4 * i : P_DISCARDS + 4 * i + 4], river)
-        if river:
-            planes[P_LAST_DISCARD + i, river[-1]] = 1.0
-    remaining = remaining_tiles(obs)
-    planes[P_REMAINING : P_REMAINING + 4] = (
-        np.asarray(remaining, dtype=np.float32)[None, :] >= _THRESH
-    )
+    if _fast is not None:
+        remaining = _fast.encode_public_planes(
+            hand, obs.discards, obs.melds, obs.drawn_tile, seat,
+            planes[:P_REMAINING + 4],
+        )
+    else:
+        _count_planes(planes[P_HAND : P_HAND + 4], hand)
+        if obs.drawn_tile is not None:
+            planes[P_DRAWN, obs.drawn_tile] = 1.0
+        for i, s in enumerate(rel):
+            meld_tiles = [t for m in obs.melds[s] for t in m.tiles]
+            _count_planes(planes[P_MELDS + 4 * i : P_MELDS + 4 * i + 4], meld_tiles)
+            river = obs.discards[s]
+            _count_planes(planes[P_DISCARDS + 4 * i : P_DISCARDS + 4 * i + 4], river)
+            if river:
+                planes[P_LAST_DISCARD + i, river[-1]] = 1.0
+        remaining = remaining_tiles(obs)
+        planes[P_REMAINING : P_REMAINING + 4] = (
+            np.asarray(remaining, dtype=np.float32)[None, :] >= _THRESH
+        )
     planes[P_SUIT : P_SUIT + 5] = _CONST
 
     legal = legal_indices(obs.legal_actions)
@@ -102,7 +113,15 @@ def encode(obs: Observation, lookahead: bool = True) -> Encoded:
 
     # ---- shape lookahead ---------------------------------------------------
     ref_shanten, ref_ukeire, ref_wincopies, ref_fanvalue = 8, 0, 0, 0.0
-    if lookahead:
+    native_ref = None
+    if lookahead and _fast is not None:
+        native_ref = _fast.encode_lookahead(
+            hand, opened, remaining, obs.chain_count, obs.piao_count,
+            int(obs.you_cai_bi_kao), planes[P_DISC_SHANTEN : P_WINNING + 1],
+        )
+    if native_ref is not None:
+        ref_shanten, ref_ukeire, ref_wincopies, ref_fanvalue = native_ref
+    elif lookahead:
         discard_phase = len(hand) == 14 - 3 * opened
         if discard_phase:
             best, best_key = None, None
@@ -213,8 +232,8 @@ def encode(obs: Observation, lookahead: bool = True) -> Encoded:
     scalars = np.asarray(f, dtype=np.float32)
 
     # ---- events --------------------------------------------------------------
-    events = np.zeros((K_EVENTS, EVENT_FIELDS), dtype=np.int16)
-    recent = obs.public_events[-K_EVENTS:]
+    events = np.zeros((K_EVENTS if include_events else 0, EVENT_FIELDS), dtype=np.int16)
+    recent = obs.public_events[-K_EVENTS:] if include_events else ()
     current_hand = ctx.round_no
     offset = K_EVENTS - len(recent)
     for i, e in enumerate(recent):

@@ -38,8 +38,9 @@ class BatchFirstEncoderLayer(nn.TransformerEncoderLayer):
         )
         query, key, value = qkv.permute(2, 0, 3, 1, 4).unbind(0)
         if self.output_tokens is not None:
-            query = query[:, :, : self.output_tokens]
-            src = src[:, : self.output_tokens]
+            selected = self.output_tokens if isinstance(self.output_tokens, slice) else slice(self.output_tokens)
+            query = query[:, :, selected]
+            src = src[:, selected]
         mask = src_key_padding_mask
         if mask is not None:
             mask = (~mask if mask.dtype == torch.bool else mask)[:, None, None, :]
@@ -50,12 +51,13 @@ class BatchFirstEncoderLayer(nn.TransformerEncoderLayer):
 
 
 class HistoryEncoder(nn.Module):
-    def __init__(self, dim, layers, heads, max_events=4096):
+    def __init__(self, dim, layers, heads, max_events=4096, *, state_only=False):
         super().__init__()
         if dim % heads or dim < 2:
             raise ValueError("dim must be divisible by heads and at least 2")
         self.dim, self.layers, self.heads = dim, layers, heads
         self.max_events = max_events
+        self.state_only = state_only
         self.tile_in = nn.Linear(N_PLANES, dim)
         self.tile_embedding = nn.Parameter(torch.empty(34, dim))
         self.state_in = nn.Linear(N_SCALARS, dim)
@@ -93,7 +95,7 @@ class HistoryEncoder(nn.Module):
             nn.init.xavier_uniform_(block.self_attn.out_proj.weight)
             nn.init.xavier_uniform_(block.linear1.weight)
             nn.init.xavier_uniform_(block.linear2.weight)
-        self.transformer.layers[-1].output_tokens = 35
+        self.transformer.layers[-1].output_tokens = slice(34, 35) if state_only else 35
         self.norm = nn.LayerNorm(dim)
 
     def forward(self, planes, scalars, events):
@@ -129,6 +131,8 @@ class HistoryEncoder(nn.Module):
             dim=1,
         )
         encoded = self.norm(self.transformer(tokens, src_key_padding_mask=padding))
+        if self.state_only:
+            return encoded[:, 0], encoded[:, :0]
         return encoded[:, 34], encoded[:, :34]
 
 

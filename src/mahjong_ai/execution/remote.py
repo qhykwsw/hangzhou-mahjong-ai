@@ -136,6 +136,8 @@ if health().get('ok') and not ok():
 if not ok():
     log=open({self.service_code + '/model-server.log'!r},'ab')
     env=dict(os.environ); [env.pop(k,None) for k in ('http_proxy','https_proxy','HTTP_PROXY','HTTPS_PROXY')]
+    paths=[{self.service_code + '/src'!r},{self.service_code + '/projects/personal/selfplay'!r},{self.service_code + '/projects/personal/selfplay/src'!r}]
+    env['PYTHONPATH']=os.pathsep.join(paths+([env['PYTHONPATH']] if env.get('PYTHONPATH') else []))
     subprocess.Popen([{self.config['python']!r},'-m','guided.model_server','--root',{self.remote_path(models_root)!r},'--port','{SERVICE_PORT}'],
         cwd={self.service_code + '/projects/personal/selfplay'!r},env=env,stdin=subprocess.DEVNULL,stdout=log,stderr=log,start_new_session=True)
     for _ in range(240):
@@ -312,6 +314,12 @@ def opponent_specs(host, candidates, models_root, timeouts):
 def service_code_files():
     """Repository files the host's inference service needs."""
     repo = Path(__file__).resolve().parents[3]
+    manifest = repo / "source-manifest.json"
+    if manifest.is_file():
+        prefixes = ("src/mahjong_ai/", "projects/personal/selfplay/guided/",
+                    "projects/personal/selfplay/src/")
+        return sorted(name for name in json.loads(manifest.read_text())["files"]
+                      if name.startswith(prefixes))
     files = subprocess.run(
         ["git", "ls-files", "--cached", "--others", "--exclude-standard",
          "src/mahjong_ai", "projects/personal/selfplay/guided",
