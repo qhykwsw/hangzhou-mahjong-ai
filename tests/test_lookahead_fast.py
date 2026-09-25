@@ -36,3 +36,32 @@ def test_unavailable_draws_and_nonwaiting_route():
     assert lookahead.baotou_outs(hand, 0, (0,) * 34) == 0
     assert lookahead.tenpai_route_value(hand, 0, (0,) * 34) == 0.0
     assert lookahead.tenpai_route_value((*hand, 33), 0, (4,) * 34) == 0.0
+
+
+def test_baotou_absent_honor_representative_matches_every_draw():
+    """Exercise joker-heavy wins, all-honors fallback, and all legal draw tiles."""
+    from mahjong_ai.domain.rules import counts
+
+    rng = random.Random(250925)
+    for opened in range(5):
+        for _ in range(6000):
+            hand = []
+            while len(hand) < 13 - 3 * opened:
+                tile = 33 if rng.random() < 0.3 else rng.randrange(34)
+                if hand.count(tile) < 4:
+                    hand.append(tile)
+            c = list(counts(hand))
+            # The test deliberately bypasses the optimized baotou predicate,
+            # keeping only the live v35 four-white exception (rules._baotou).
+            expected = bool(c[33]) and not (opened == 2 and c[33] == 4 and 3 in c[:33])
+            if expected:
+                for tile in range(34):
+                    if c[tile] >= 4:
+                        continue
+                    c[tile] += 1
+                    won = fast.can_hu(c, opened)
+                    c[tile] -= 1
+                    if not won:
+                        expected = False
+                        break
+            assert fast.baotou(c, opened) == expected

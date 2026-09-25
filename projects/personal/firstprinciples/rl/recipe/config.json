@@ -5,5 +5,7 @@
   "kl_rows": 20000,
   "microbatch": 256,
   "critic_batch": 256,
-  "critic_learning_rate": 0.0003
+  "critic_learning_rate": 0.0003,
+  "resident_rows": true,
+  "gradient_graphs": true
 }

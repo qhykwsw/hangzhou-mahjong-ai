@@ -14,7 +14,7 @@ import numpy as np
 from .critic import fit_predict
 
 
-def advantages(rows, cfg, rng, device, seed):
+def advantages(rows, cfg, rng, device, seed, *, batch_source=None):
     hand = np.array([r["hand"] for r in rows])
     reward = np.array([float(r["reward"]) for r in rows])
     game = np.cumsum(np.r_[1, (np.diff(hand) < 0).astype(int)]) - 1
@@ -45,7 +45,10 @@ def advantages(rows, cfg, rng, device, seed):
     value = np.zeros(count)
     for h in (0, 1):
         fit_idx, pred_idx = np.flatnonzero(side != h), np.flatnonzero(side == h)
-        value[pred_idx] = fit_predict(rows, target, fit_idx, pred_idx, cfg, rng, device, seed + h)
+        value[pred_idx] = fit_predict(
+            rows, target, fit_idx, pred_idx, cfg, rng, device, seed + h,
+            batch_source=batch_source,
+        )
     adv = target - value
     r2 = 1.0 - float(((target - value) ** 2).mean() / max(target.var(), 1e-9))
     stats = {"premium": premium, "critic_r2": r2, "games": games, "advantage_sd": float(adv.std())}

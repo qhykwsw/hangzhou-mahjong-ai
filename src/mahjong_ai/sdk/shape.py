@@ -63,10 +63,11 @@ def shanten(hand, open_melds=0):
         raise ValueError("more than four copies")
     if _fast is not None:
         value = _fast.shanten_raw(c, open_melds)
-        # Every winning boundary defers to the reference implementation, so the
-        # accelerator only has to agree on non-negative distances.
         if value >= 0:
             return value
+        # The native hu predicate already mirrors the reference's physical
+        # winning boundary; avoid recomputing the entire shape in Python.
+        return -1 if _fast.can_hu(c, open_melds) else 0
     return _shanten_reference(hand, open_melds)
 
 
@@ -104,6 +105,8 @@ def _improving_reference(hand, open_melds, available, distance):
 
 
 def remaining_tiles(obs):
+    if _fast is not None:
+        return _fast.remaining_tiles(obs.hand, obs.discards, obs.melds)
     visible = Counter(obs.hand)
     for row in obs.discards:
         visible.update(row)

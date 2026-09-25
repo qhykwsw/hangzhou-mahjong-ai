@@ -46,10 +46,12 @@ LIMITS = {
     "4090": {"gpu_memory_fraction": 0.85, "ram_fraction": 0.7, "cpu_capacity": 20},
     "5070ti": {"gpu_memory_fraction": 0.65, "ram_fraction": 0.6, "cpu_capacity": 16},
 }
-# Collection execution per host (the recipe's own workers/tables are ignored):
-# 80% of the cores the host lends, 32 tables each, 2 ms to gather a batch.
+# Collection execution per host (the recipe's own choices are ignored): 80% of
+# the cores the host lends, 32 tables each, 2 ms to gather a batch, and the
+# host's inference scheduling (the CPU-bound hosts keep the coarser batches).
 EXECUTION = {
-    "4070": {"workers": 16, "tables": 32, "gather_seconds": 0.002},
+    "4070": {"workers": 16, "tables": 32, "gather_seconds": 0.002,
+             "inference_history_band": 64, "fine_graph_batches": True},
     "4090": {"workers": 16, "tables": 32, "gather_seconds": 0.002},
     "5070ti": {"workers": 12, "tables": 32, "gather_seconds": 0.002},
 }

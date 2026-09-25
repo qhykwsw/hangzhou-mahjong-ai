@@ -121,6 +121,13 @@ def upload(host, root, files, destination):
 
 
 def source_files(repo):
+    manifest = Path(repo) / "source-manifest.json"
+    if manifest.is_file():
+        # Frozen control planes need no Git checkout, and must not discover
+        # files from an enclosing live repository.
+        import json
+
+        return sorted(json.loads(manifest.read_text())["files"])
     result = subprocess.run(
         ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
         cwd=repo,

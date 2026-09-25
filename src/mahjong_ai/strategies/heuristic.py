@@ -88,6 +88,17 @@ class HeuristicPolicy(RulePolicy):
         return np.asarray(values)
 
     def _preferences(self, obs):
+        # Every hypothetical discard uses the same public score context. Keep
+        # one immutable key/value pair, never an observation or hidden state.
+        key = (obs.stage, self.style, self.reward_preference, self.risk_aversion)
+        cached = getattr(self, "_preference_cache", None)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        result = self._calculate_preferences(obs)
+        self._preference_cache = (key, result)
+        return result
+
+    def _calculate_preferences(self, obs):
         if self.style == "adaptive":
             # Public score gaps and remaining rounds govern the speed/value tradeoff.
             risk = risk_preference(obs)

@@ -6,7 +6,6 @@ are addressed by the SHA-256 of their weights, which is also the artifact
 directory name below the service root on every host.
 """
 
-import base64
 import http.client
 import json
 import os
@@ -48,10 +47,6 @@ def _encoder():
     return _ENCODER[0]
 
 
-def pack(array):
-    return base64.b64encode(array.tobytes()).decode()
-
-
 class ModelPolicy:
     def __init__(self, weights, version, action_seconds=10.0):
         self.weights, self.version, self.action_seconds = weights, version, action_seconds
@@ -67,7 +62,12 @@ class ModelPolicy:
         if not url:
             raise RuntimeError(f"{SERVER_ENV} is not set; no inference service for model seats")
         parsed = urlparse(url)
-        self.connection = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=self.action_seconds)
+        if encoder():
+            from selfplay_core.wire import SocketClient
+
+            self.connection = SocketClient(parsed.hostname, parsed.port, self.action_seconds)
+        else:
+            self.connection = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=self.action_seconds)
 
     def start(self):
         if self.connection is None:
@@ -86,20 +86,18 @@ class ModelPolicy:
             if codec:
                 encode, action_index = codec
                 row = encode(observation, lookahead=True)
-                request = {"model": self.weights, "lookahead": True, "encoded": {
-                    "planes": pack(row["planes"]), "scalars": pack(row["scalars"]),
-                    "events": pack(row["events"]), "mask": pack(row["mask"]),
-                }}
+                from selfplay_core.wire import pack as pack_inputs
+
+                body = pack_inputs(self.weights, row, lookahead=True)
+                reply = self.connection.decide(body)
             else:
                 data, _ = observation_payload(observation, None)
-                request = {"model": self.weights, "observation": data}
-            self.connection.request(
-                "POST", "/act", json.dumps(request), {"Content-Type": "application/json"}
-            )
-            response = self.connection.getresponse()
-            reply = json.loads(response.read())
-            if response.status != 200:
-                raise RuntimeError(reply.get("error", f"HTTP {response.status}"))
+                body = json.dumps({"model": self.weights, "observation": data})
+                self.connection.request("POST", "/act", body, {"Content-Type": "application/json"})
+                response = self.connection.getresponse()
+                reply = json.loads(response.read())
+                if response.status != 200:
+                    raise RuntimeError(reply.get("error", f"HTTP {response.status}"))
             if codec:
                 legal = [action_index(a) for a in observation.legal_actions]
                 if reply["index"] not in legal:

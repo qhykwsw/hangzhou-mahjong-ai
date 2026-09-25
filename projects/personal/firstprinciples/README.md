@@ -25,6 +25,8 @@ RL 线最初的最好版本就是模仿起点本身，三台主机从一开始�
 
 迭代 Agent 只改 `rule/` 或 `rl/recipe/`。下面这些是维护者的工作，每次改完都要重新封存（`seal`），否则迭代会拒绝运行：
 
+训练采集的执行参数按主机校准，设置在 `harness/rl.py` 的 `EXECUTION`（进程数、桌数、攒批时间与推理调度），随训练计划冻结并封存。推理调度里，历史长度分组只减少 padding，细化批次大小只减少空行，都保留完整观察与训练量；CPU 瓶颈与 GPU 瓶颈的主机使用各自实测的配置。
+
 ```bash
 cd projects/personal/firstprinciples
 ../../../.venv/bin/python -m harness.evaluate runtime                                       # 把 src/mahjong_ai 冻结为运行时

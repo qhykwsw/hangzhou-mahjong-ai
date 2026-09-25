@@ -107,16 +107,25 @@ class ActorGraphs:
     """
 
     BATCH_BUCKETS = (1, 2, 4, 8, 16, 32, 64, 128)
+    FINE_BATCH_BUCKETS = (1, 2, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128)
     EVENT_BUCKET, MAX_WIDTH = 32, 256
 
     IN_FLIGHT = 2  # launches of one model and shape that may be unread at a time
 
-    def __init__(self):
+    def __init__(self, *, fine_batches=False, history_band=0):
+        # Distinct history groups must map to distinct graph widths. Otherwise
+        # one round could reuse a two-slot ring before its answers are consumed.
+        if (not isinstance(history_band, int) or history_band < 0
+                or history_band % self.EVENT_BUCKET):
+            raise ValueError("history band must be a nonnegative multiple of 32")
+        self.history_band = history_band
+        self.batch_buckets = (
+            self.FINE_BATCH_BUCKETS if fine_batches else self.BATCH_BUCKETS
+        )
         self.graphs, self.hosts, self.turn, self.pool = {}, {}, {}, None
 
-    @staticmethod
-    def shape(rows):
-        size = next((b for b in ActorGraphs.BATCH_BUCKETS if b >= len(rows)), None)
+    def shape(self, rows):
+        size = next((b for b in self.batch_buckets if b >= len(rows)), None)
         width = (
             -(
                 -max(1, max(len(np.asarray(r["events"]).reshape(-1, 5)) for r in rows))

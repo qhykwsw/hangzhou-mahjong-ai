@@ -29,6 +29,8 @@ from .run import atomic_json
 
 GRACE_SECONDS = {"train": 120, "smoke": 60}
 DEFAULT_LIMITS = {"gpu_memory_fraction": 0.85, "ram_fraction": 0.75}
+# What a harness may fix per host through plan["execution"]: throughput only.
+EXECUTION_OPTIONS = {"workers", "tables", "gather_seconds", "inference_history_band", "fine_graph_batches"}
 
 
 def _meminfo_total():
@@ -184,7 +186,8 @@ class Context:
         return Actor(c["dim"], c["layers"], c["heads"]).to(self.device)
 
     def collect(
-        self, actor, cfg, *, samples, iteration, labels=False, history=None, hooks=None
+        self, actor, cfg, *, samples, iteration, labels=False, history=None, hooks=None,
+        inference_session=None
     ):
         """Play training games with ``actor`` in the learning seat.
 
@@ -212,9 +215,12 @@ class Context:
         known = {k: v for k, v in cfg.items() if k in configuration()}
         extra = {k: v for k, v in cfg.items() if k not in known}
         run_cfg = configuration(**known) | extra
-        # A harness may fix the execution per host (workers, tables, batching);
-        # the recipe's own choices of these are then ignored.
-        run_cfg |= self.plan.get("execution") or {}
+        # A harness may fix the execution per host (workers, tables, batching,
+        # inference scheduling); the recipe's own choices of these are then ignored.
+        execution = self.plan.get("execution") or {}
+        if set(execution) - EXECUTION_OPTIONS:
+            raise ValueError("unknown collection execution option")
+        run_cfg |= execution
         samples = int(samples)
         if self.hand_budget is not None:
             # Near the end of the budget, ask only for the rows the hands left
@@ -258,6 +264,7 @@ class Context:
             command,
             models,
             hooks,
+            inference_session=inference_session,
         )
         # Every game started is played out, so the last collection may overrun the budget.
         self.hands += len(records) * run_cfg["rounds"]
