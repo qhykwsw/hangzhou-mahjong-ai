@@ -1,4 +1,7 @@
-"""Training loop: large on-policy rollout, full-batch gradient, one small KL step.
+"""Training loop: large on-policy rollout with teacher labels, one epoch of distillation.
+
+The update is now DAgger (distill below); the policy-gradient pieces that
+follow (gradient, kl_step, targets.py) are kept but unused.
 
 Why this shape (docs/adr/0012 has the measurements): one decision's advantage
 is dominated by luck, so a policy-gradient direction needs hundreds of
@@ -101,35 +104,39 @@ def kl_step(actor, params, direction, batches, goal):
     return {"kl": kl, "step_norm": eta * norm, "hu_before": before, "hu_after": after}
 
 
-def distill(actor, rows, opt, size, device, rng, *, batch_source=None):
-    """One epoch of cross entropy toward the teacher's label on the learner's own states.
+def distill(actor, rows, opt, size, device, rng, epochs, *, batch_source=None):
+    """Epochs of cross entropy toward the teacher's label on the learner's own states.
 
     DAgger: the learner played these rows with its own policy, so its mistakes
     lead to states behaviour cloning never visited; the teacher labels them.
-    Each batch's loss is taken before that batch is trained on (fresh rows).
+    The first epoch's loss is taken before each batch is trained on (fresh rows).
     """
     teacher = np.array([r["teacher"] for r in rows])
-    order = rng.permutation(np.flatnonzero(teacher >= 0))
+    labeled = np.flatnonzero(teacher >= 0)
     actor.eval()
     total_ce, agree = 0.0, 0.0
-    for s in range(0, len(order), size):
-        idx = order[s : s + size]
-        mb = (batch_source.batch(idx) if batch_source is not None
-              else make_batch([rows[i] for i in idx], device))
-        with torch.autocast("cuda", dtype=torch.bfloat16):
-            logits = actor(*actor_args(mb))
-        logp = masked_log_probs(logits, mb["mask"])
-        label = torch.as_tensor(teacher[idx], device=device)
-        loss = -logp.gather(1, label[:, None]).mean()
-        opt.zero_grad(set_to_none=True)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(actor.parameters(), 1.0)
-        opt.step()
-        total_ce += float(loss) * len(idx)
-        agree += float((logp.argmax(-1) == label).sum())
+    # Each later epoch reshuffles; only the first one reports fresh metrics.
+    for epoch in range(epochs):
+        order = rng.permutation(labeled)
+        for s in range(0, len(order), size):
+            idx = order[s : s + size]
+            mb = (batch_source.batch(idx) if batch_source is not None
+                  else make_batch([rows[i] for i in idx], device))
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                logits = actor(*actor_args(mb))
+            logp = masked_log_probs(logits, mb["mask"])
+            label = torch.as_tensor(teacher[idx], device=device)
+            loss = -logp.gather(1, label[:, None]).mean()
+            opt.zero_grad(set_to_none=True)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(actor.parameters(), 1.0)
+            opt.step()
+            if epoch == 0:
+                total_ce += float(loss) * len(idx)
+                agree += float((logp.argmax(-1) == label).sum())
     opt.zero_grad(set_to_none=True)
-    n = max(1, len(order))
-    return {"labeled": len(order), "fresh_ce": total_ce / n, "fresh_agreement": agree / n}
+    n = max(1, len(labeled))
+    return {"labeled": len(labeled), "fresh_ce": total_ce / n, "fresh_agreement": agree / n}
 
 
 def train(ctx):
@@ -146,22 +153,19 @@ def train(ctx):
     reserve = 5 if ctx.smoke else 60
     rng = np.random.default_rng(ctx.seed)
     actor = ctx.actor
-    # The first distill_steps rollouts only distil the teacher on the learner's
-    # own states (DAgger, where imitation gains fastest); the rest only take
-    # policy-gradient steps. Interleaving the two made each undo the other.
+    # The update is teacher distillation on the learner's own rollouts (DAgger).
     opt = torch.optim.Adam(actor.parameters(), lr=float(cfg["distill_learning_rate"]), eps=1e-5)
     step, iteration, last = 0, 0, 0.0
     hands = lambda: ctx.hands_left() is None or ctx.hands_left() > 0  # noqa: E731
     while hands() and ctx.time_left() > 1.15 * last + reserve:
         began = time.time()
         rows = []
-        distilling = step < int(cfg["distill_steps"])
         with InferenceSession(actor) as session:
             while len(rows) < target_rows and hands() and ctx.time_left() > reserve:
                 iteration += 1
                 got, _, _ = ctx.collect(
                     actor, collect_cfg, samples=min(40000, target_rows), iteration=iteration,
-                    labels=distilling, inference_session=session,
+                    labels=True, inference_session=session,
                 )
                 rows += got
         if not rows or (len(rows) < target_rows and hands()):
@@ -172,31 +176,12 @@ def train(ctx):
         batch_source = (resident_rows(rows, ctx.device, ctx.resources["gpu_limit_bytes"])
                         if cfg.get("resident_rows", False) else None)
         packing_seconds = time.time() - packing_started
-        if distilling:
-            stats = distill(actor, rows, opt, microbatch, ctx.device, rng, batch_source=batch_source)
-            count = len(rows)
-            del rows, batch_source
-            ctx.save_actor(actor)
-            last = time.time() - began
-            ctx.log(step=step, rows=count, **stats, collect_seconds=collected, step_seconds=last,
-                    packing_seconds=packing_seconds)
-            continue
-        weights, stats = advantages(
-            rows, cfg, rng, ctx.device, ctx.seed + 7919 * step, batch_source=batch_source,
-        )
-        fitted = time.time() - began - collected
-        params, direction = gradient(
-            actor, rows, weights, microbatch, ctx.device, batch_source=batch_source,
-            capture=cfg.get("gradient_graphs", False),
-        )
-        subset = rng.choice(len(rows), size=min(len(rows), int(cfg["kl_rows"])), replace=False)
-        batches = [batch_source.batch(subset[s : s + 512]) if batch_source is not None
-                   else make_batch([rows[i] for i in subset[s : s + 512]], ctx.device)
-                   for s in range(0, len(subset), 512)]
+        fitted = 0.0
+        stats = distill(actor, rows, opt, microbatch, ctx.device, rng, int(cfg["distill_epochs"]),
+                        batch_source=batch_source)
         count = len(rows)
         used_resident = batch_source is not None
         del rows, batch_source
-        stats |= kl_step(actor, params, direction, batches, float(cfg["step_kl"]))
         ctx.save_actor(actor)
         last = time.time() - began
         ctx.log(
