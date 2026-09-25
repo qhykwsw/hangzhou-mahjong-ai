@@ -28,7 +28,7 @@
 | `teacher`、`rules`、`bundle` | 教师 ID、规则包里的规则代表 ID、冻结包路径 |
 | `opponents` | 本次迭代冻结的评估对手 ID（规则版本按各自运行时运行，`model:` 开头的是模型） |
 | `new_actor()` | 同结构的新 Actor，例如用作自身历史快照对手 |
-| `collect(actor, cfg, samples=, iteration=, labels=False, history=None, hooks=None)` | 采集训练对局，见下文 |
+| `collect(actor, cfg, samples=, iteration=, labels=False, history=None, hooks=None, inference_session=None)` | 采集训练对局，见下文 |
 | `log(**metrics)` | 写一行训练诊断，评估报告和下一轮交接都会引用 |
 | `save_actor(actor)` | 保存 Actor 检查点，防止超时丢失成果 |
 
@@ -62,6 +62,8 @@ Graph 的批次大小。它们覆盖同名 `cfg` 项，只减少 padding，不�
 - `hooks["sample"](logits, mask) -> (actions, logprobs)`：替换默认的按策略概率采样，例如调温度来增加探索。返回的 `logprobs` 必须是实际采样分布下的对数概率。
 
 评估时不调用任何钩子，Actor 取概率最大的动作。
+
+在同一学习步里多次采集且 Actor、对手权重均不变时，可用 `with guided.collection_session.InferenceSession(actor) as session`，将 `inference_session=session` 传给各次 `ctx.collect`。会话只复用设备端推理快照与 CUDA Graph；每次采集仍创建独立游戏和规则策略，保持各自的 seed、完整收尾与预算统计。参数、buffer、模型对象或推理配置在会话内改变会报错。必须在训练更新前退出会话，释放推理显存；不能用 `.data` 等绕过版本计数的方式修改会话内权重。
 
 ## 约定
 

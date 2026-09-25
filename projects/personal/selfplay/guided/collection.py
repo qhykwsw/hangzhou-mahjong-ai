@@ -23,7 +23,7 @@ def request_groups(pending, history_band=0):
     return [(slot, group) for (slot, _), group in sorted(groups.items())]
 
 
-def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None):
+def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None, *, inference_session=None):
     """Play games in CPU workers; the parent runs every network.
 
     Optional training-recipe hooks apply only to the learning seat during
@@ -41,28 +41,41 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
     if critic is not None:
         critic.eval()
     device = next(actor.parameters()).device
-    # The built-in Critic needs the full batch and a sampling hook its own
-    # ops; every other path is the fixed decision, which the graphs replay
-    # straight from the rows.
-    graphs = (
-        ActorGraphs(
-            fine_batches=cfg.get("fine_graph_batches", False),
-            history_band=cfg.get("inference_history_band", 0) if not hooks else 0,
+    def prepare_inference():
+        # The built-in Critic needs the full batch and a sampling hook its own
+        # ops; every other path is the fixed decision, which the graphs replay
+        # straight from the rows.
+        graphs = (
+            ActorGraphs(
+                fine_batches=cfg.get("fine_graph_batches", False),
+                history_band=cfg.get("inference_history_band", 0) if not hooks else 0,
+            )
+            if device.type == "cuda" and cfg.get("cuda_graphs", True) and not cfg["bc_only"]
+            and "sample" not in hooks and (critic is None or "values" in hooks) else None
         )
-        if device.type == "cuda" and cfg.get("cuda_graphs", True) and not cfg["bc_only"]
-        and "sample" not in hooks and (critic is None or "values" in hooks) else None
-    )
+        inference_actor = actor
+        if graphs is not None and command["kind"] != "evaluate" and cfg.get("precast_collection", True):
+            import copy
+            from .inference import prepare_frozen
+
+            # The policy is immutable throughout this on-policy rollout. Its
+            # fp32 learner remains untouched; the snapshot uses the same fp16
+            # coefficients autocast otherwise rebuilds on every graph replay.
+            inference_actor = prepare_frozen(copy.deepcopy(actor).requires_grad_(False), device)
+        return graphs, inference_actor
+
+    if inference_session is None:
+        graphs, inference_actor = prepare_inference()
+    else:
+        options = (
+            command["kind"], id(critic), cfg["bc_only"],
+            cfg.get("cuda_graphs", True), cfg.get("fine_graph_batches", False),
+            cfg.get("inference_history_band", 0), cfg.get("precast_collection", True),
+            tuple((key, id(value)) for key, value in sorted(hooks.items())),
+        )
+        graphs, inference_actor = inference_session.resolve(actor, history, options, prepare_inference)
     # Custom hooks keep their original batches; they may couple their rows.
     history_band = graphs.history_band if graphs else 0
-    inference_actor = actor
-    if graphs is not None and command["kind"] != "evaluate" and cfg.get("precast_collection", True):
-        import copy
-        from .inference import prepare_frozen
-
-        # The policy is immutable throughout this on-policy rollout. Its
-        # fp32 learner remains untouched; the snapshot uses the same fp16
-        # coefficients autocast otherwise rebuilds on every graph replay.
-        inference_actor = prepare_frozen(copy.deepcopy(actor).requires_grad_(False), device)
     timers = {"wait": 0.0, "receive": 0.0, "batch": 0.0, "forward": 0.0, "reply": 0.0}
     batch_sizes = []
     ctx = mp.get_context("spawn")

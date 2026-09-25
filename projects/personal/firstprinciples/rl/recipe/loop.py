@@ -24,6 +24,7 @@ import numpy as np
 import torch
 
 from selfplay_core.actions import HU
+from guided.collection_session import InferenceSession
 
 from .batch import actor_args, make_batch, masked_log_probs, resident_rows
 from .targets import advantages
@@ -122,12 +123,14 @@ def train(ctx):
     while hands() and ctx.time_left() > 1.15 * last + reserve:
         began = time.time()
         rows = []
-        while len(rows) < target_rows and hands() and ctx.time_left() > reserve:
-            iteration += 1
-            got, _, _ = ctx.collect(
-                actor, collect_cfg, samples=min(40000, target_rows), iteration=iteration,
-            )
-            rows += got
+        with InferenceSession(actor) as session:
+            while len(rows) < target_rows and hands() and ctx.time_left() > reserve:
+                iteration += 1
+                got, _, _ = ctx.collect(
+                    actor, collect_cfg, samples=min(40000, target_rows), iteration=iteration,
+                    inference_session=session,
+                )
+                rows += got
         if not rows or (len(rows) < target_rows and hands()):
             break
         step += 1

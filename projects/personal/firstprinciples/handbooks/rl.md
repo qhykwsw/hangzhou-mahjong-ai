@@ -42,3 +42,5 @@ Actor 与 Critic 共用每台设备的预热 stream，复用 cuBLAS 工作区。
 - 采集的执行参数在方案配置里：`tables`（每个 worker 同时打的桌数）与 `gather_seconds`（父进程有一轮推理在设备上时再等这么久攒批）。它们只改吞吐不改训练内容；默认每个 worker 开 32 桌；只增加桌数，不增加进程数，按实测吞吐与桌面余量选择。
 - 学习步的 `resident_rows` 将本轮输入按列驻留 GPU，供两折 Critic、Actor 梯度与 KL 检查复用；样本顺序、历史补齐、计算精度与更新次数保持原方案。Actor 批次不包含 oracle 字段。驻留遵守原 GPU 上限，并预留反向传播空间；空间不足时沿用逐批搬运。该配置可关闭以做同工作量对照。
 - 除了 `rl/recipe/`，本线还负责 `harness/rl.py` 和 RL 需要的 `projects/personal/selfplay/guided/` 框架。改动这些不算一次尝试，只在确有必要时进行，并告诉用户。
+
+- 一个学习步内的连续采集使用同一 `InferenceSession`，复用权重不变的 Actor 推理快照和 CUDA Graph；各次采集的游戏、规则策略、seed 与预算统计仍独立。进入 Critic/Actor 更新前关闭会话，释放推理显存；权重或推理选项变化时不能沿用旧会话。

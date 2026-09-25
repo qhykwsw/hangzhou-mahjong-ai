@@ -173,7 +173,8 @@ class Context:
         return Actor(c["dim"], c["layers"], c["heads"]).to(self.device)
 
     def collect(
-        self, actor, cfg, *, samples, iteration, labels=False, history=None, hooks=None
+        self, actor, cfg, *, samples, iteration, labels=False, history=None, hooks=None,
+        inference_session=None
     ):
         """Play training games with ``actor`` in the learning seat.
 
@@ -240,6 +241,7 @@ class Context:
             command,
             models,
             hooks,
+            inference_session=inference_session,
         )
         # Every game started is played out, so the last collection may overrun the budget.
         self.hands += len(records) * run_cfg["rounds"]
