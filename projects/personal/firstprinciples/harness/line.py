@@ -680,10 +680,10 @@ def main():
             status(args.line)
         elif args.command == "stop":
             release(args.line)
-            print(f"已退出{E.LINE_NAMES[args.line]}的循环；在途尝试继续跑，结果在下次 wait 时汇报")
+            print(f"{E.LINE_NAMES[args.line]}：已退出循环；在途尝试继续跑，结果在下次 wait 时汇报")
         elif args.command == "takeover":
             claim(args.line, force=True)
-            print(f"本会话接管了{E.LINE_NAMES[args.line]}；原会话下次调用时会停下")
+            print(f"{E.LINE_NAMES[args.line]}：本会话已接管；原会话下次调用时会停下")
         elif args.command == "hosts":
             hosts(args.action, args.host, args.now)
         elif args.command == "cancel":
