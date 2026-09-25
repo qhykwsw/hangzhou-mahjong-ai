@@ -149,3 +149,17 @@ def test_new_best_is_compared_with_the_free_play_version(harness, monkeypatch):
     assert flag["games"] == 160 and flag["above"]
     worse = {k: v - 3.0 for k, v in mine.items()}
     assert not E.against_platform({"id": "fp-rl-002", "pool": "pool-a", "dev_blocks": worse})["above"]
+
+
+def test_one_version_one_record(harness):
+    E, _, _ = harness
+    model = {"family": "model", "parameters": {"weights": "w"}}
+    rows = [
+        dict(id="ref-small", line="reference", games=4096, finished_at=1, spec=model),
+        dict(id="fp-rl-start-x", line="rl", games=16384, finished_at=2, spec=model),
+        dict(id="ref-piao", line="reference", games=4096, finished_at=3, spec={"package_hash": "p"}),
+        dict(id="ref-piao", line="reference", games=16384, finished_at=4, spec={"package_hash": "p"}),
+        dict(id="fp-rl-003", line="rl", games=0, finished_at=5, spec=None),
+    ]
+    shown = E.distinct(rows)
+    assert [(r["id"], r["games"]) for r in shown] == [("fp-rl-start-x", 16384), ("ref-piao", 16384), ("fp-rl-003", 0)]

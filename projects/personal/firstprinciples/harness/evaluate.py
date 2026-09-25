@@ -7,16 +7,16 @@ depend only on the set's seed and the block number, so the development set is
 the same games for every attempt and results do not depend on how the blocks
 are split into jobs.
 
-Ladder on the development set: 1024, 2048 then 4096 blocks (4096, 8192, 16384
-games). An attempt more than two standard errors below the best on the blocks
-played so far stops; one still above the best after 4096 blocks goes to a fresh
-confirmation set, where it and the best each play 2048 blocks and the paired
-difference must have a one-sided 90% lower bound above zero.
+Every version (attempt, reference, the RL start) plays the whole development
+set, 4096 blocks (16384 games), so one version has one score. An attempt above
+the best there goes to a fresh confirmation set, where it and the best each
+play 2048 blocks and the paired difference must have a one-sided 90% lower
+bound above zero.
 
 The maintainer seals the evaluation conditions (conditions(): the harness
 code, the pool, and each RL host's frozen training framework and start); an
 attempt refuses to start or resume under anything else until the maintainer
-reseals. Shortened settings (FP_STAGES, FP_CONFIRM, FP_RL_HANDS, FP_RL_BUDGET)
+reseals. Shortened settings (FP_DEV, FP_CONFIRM, FP_RL_HANDS, FP_RL_BUDGET)
 are accepted only with FP_LOCAL, a separate record for pipeline checks.
 
 Games run without sandboxes: the pool's packages are the maintainer's own, so
@@ -84,12 +84,10 @@ EVAL_HOST = {"rule": "local", "reference": "local", "rl": "4070"}
 EVAL_WORKERS = {"local": 12, "4070": 24, "4090": 20, "5070ti": 16}
 EVAL_TABLES = {"local": 3, "4070": 2, "4090": 2, "5070ti": 2}
 ISOLATION = "none"  # the pool's packages run in the match process (see module docstring)
-POLL_SECONDS = 5  # how often remote job results are checked; each stage ends on a poll
-STAGES = override("FP_STAGES", (1024, 2048, 4096), lambda v: tuple(int(x) for x in v.split(",")))  # blocks; 4 games each
+POLL_SECONDS = 5  # how often remote job results are checked
+DEV_BLOCKS = override("FP_DEV", 4096)  # 4 games each
 CONFIRM_BLOCKS = override("FP_CONFIRM", 2048)
 JOB_RETRIES = 3  # a job that fails this often (not a host fault) fails the attempt
-REFERENCE_BLOCKS = 1024  # a reference only needs a score with its error bar
-STOP_SE = 2.0
 CONFIRM_Z = 1.2816  # one-sided 90%
 TIMEOUTS = {"discard": 2.0, "response": 0.6}  # platform limits minus network and concurrency margin
 RULE_OPPONENTS = [
@@ -231,6 +229,28 @@ def attempts(pool_id=None, line=None):
     return [r for r in rows if (pool_id is None or r["pool"] == pool_id) and (line is None or r["line"] == line)]
 
 
+def version(record):
+    """What makes records the same version: the model's weights or the code package's hash."""
+    spec = record.get("spec") or {}
+    return (spec.get("parameters") or {}).get("weights") or spec.get("package_hash") or record["id"]
+
+
+def distinct(rows):
+    """One record per version, for showing and ranking (the log itself only grows).
+
+    A later record of an id replaces the earlier one (a reference played
+    again); of records of the same version, the one over the most games
+    stands (the RL start is also the imitation model's reference).
+    """
+    latest = {r["id"]: r for r in rows}
+    chosen = {}
+    for r in latest.values():
+        held = chosen.get(version(r))
+        if held is None or (r["games"], r["finished_at"]) >= (held["games"], held["finished_at"]):
+            chosen[version(r)] = r
+    return [r for r in latest.values() if chosen[version(r)] is r]
+
+
 def best(pool_id, line):
     kept = [r for r in attempts(pool_id, line) if r["status"] == "keep"]
     return kept[-1] if kept else None
@@ -353,11 +373,12 @@ STAGE_NAMES = {"queued": "排队等主机", "training": "训练中", "evaluating
 def history(line):
     """Every attempt of the line, its best version and the reference, for designing the next one."""
     pool = load_pool()
-    rows = attempts(pool["id"], line)
+    shown = distinct(attempts(pool["id"]))
+    rows = [r for r in shown if r["line"] == line]
     champion = best(pool["id"], line)
-    out = [f"固定对手池 {pool['id']}；{LINE_NAMES[line]}共 {len(rows)} 次尝试，"
+    out = [f"固定对手池 {pool['id']}；{LINE_NAMES[line]}共 {len(rows)} 条记录，"
            + (f"当前最好 {champion['id']}（{champion['score']:+.2f}）" if champion else "还没有成功的版本")]
-    for r in attempts(pool["id"], "reference"):
+    for r in (r for r in shown if r["line"] == "reference"):
         out.append(f"参照 {r['id']}：{r['score']:+.2f} ± {r['se']:.2f}（{r['games']} 场）")
     for r in rows:
         score = "—" if r["score"] is None else f"{r['score']:+.2f}±{r['se']:.2f}"
@@ -554,7 +575,7 @@ def mean_se(values):
 
 def evaluate(line, spec, description, attempt_id=None, design_seconds=None, host=None,
              confirm_seed=None, extra=None):
-    """Play the ladder and, on success, the confirmation set; append the record.
+    """Play the development set and, above the best, the confirmation set; append the record.
 
     Attempts of a line may run on several hosts at once, so the best version
     is re-read whenever it is compared against: the development blocks are the
@@ -570,29 +591,18 @@ def evaluate(line, spec, description, attempt_id=None, design_seconds=None, host
     attempt_id = attempt_id or reserve_attempt(line, host or EVAL_HOST[line], description)
     # A reference (the version on the platform) plays a fixed set and is never compared.
     reference = line == "reference"
-    champion = None if reference else best(pool["id"], line)
     host = host or EVAL_HOST[line]
     started = time.time()
-    scores, stats, stage_blocks, verdict, confirm = {}, {"timeouts": 0, "fallback_actions": 0, "errors": 0}, 0, None, None
-    for stage in (REFERENCE_BLOCKS,) if reference else STAGES:
-        new, s = play(pool, attempt_id, spec, range(stage_blocks, stage), pool["dev_seed"], f"dev{stage}", host)
-        scores.update(new)
-        for k in stats:
-            stats[k] += s[k]
-        stage_blocks = stage
-        champion = None if reference else best(pool["id"], line)
-        if champion is None:
-            continue  # the baseline plays the whole ladder
-        diff, se = paired(scores, {int(k): v for k, v in champion["dev_blocks"].items()}, range(stage))
-        log(f"{attempt_id} dev {stage * 4} games: diff {diff:+.3f} ± {se:.3f} vs {champion['id']}")
-        if stage != STAGES[-1] and diff < -STOP_SE * se:
-            verdict = "discard"
-            break
-        if stage == STAGES[-1] and diff <= 0:
-            verdict = "discard"
+    confirm = None
+    scores, stats = play(pool, attempt_id, spec, range(DEV_BLOCKS), pool["dev_seed"], "dev", host)
+    champion = None if reference else best(pool["id"], line)
     if champion is None:
         verdict = "reference" if reference else "keep"
-    elif verdict is None:
+    else:
+        diff, se = paired(scores, {int(k): v for k, v in champion["dev_blocks"].items()}, range(DEV_BLOCKS))
+        log(f"{attempt_id} dev {DEV_BLOCKS * 4} games: diff {diff:+.3f} ± {se:.3f} vs {champion['id']}")
+        verdict = "discard" if diff <= 0 else None
+    if verdict is None:
         seed = confirm_seed or random.SystemRandom().getrandbits(62)
         mine, _ = play(pool, attempt_id, spec, range(CONFIRM_BLOCKS), seed, "confirm", host)
         while True:
@@ -608,12 +618,12 @@ def evaluate(line, spec, description, attempt_id=None, design_seconds=None, host
         confirm = {"seed": seed, "games": CONFIRM_BLOCKS * 4, "diff": diff, "se": se,
                    "lower90": diff - CONFIRM_Z * se, "against": champion["id"]}
         verdict = "keep" if diff - CONFIRM_Z * se > 0 else "unconfirmed"
-    score, se = mean_se(scores[k] for k in range(stage_blocks))
+    score, se = mean_se(scores[k] for k in range(DEV_BLOCKS))
     record = dict(
         id=attempt_id, line=line, pool=pool["id"], status=verdict, description=description, host=host,
-        started_at=started, finished_at=time.time(), games=stage_blocks * 4, score=score, se=se,
+        started_at=started, finished_at=time.time(), games=DEV_BLOCKS * 4, score=score, se=se,
         best_before=champion["score"] if champion else None,
-        diff=paired(scores, {int(k): v for k, v in champion["dev_blocks"].items()}, range(stage_blocks))[0] if champion else None,
+        diff=paired(scores, {int(k): v for k, v in champion["dev_blocks"].items()}, range(DEV_BLOCKS))[0] if champion else None,
         confirm=confirm, stats=stats, spec=spec, dev_blocks={str(k): scores[k] for k in sorted(scores)},
         design_seconds=design_seconds,
     ) | (extra or {})
@@ -679,7 +689,7 @@ def ranking(record):
     """Place among the best versions of both lines and the references (scores are comparable)."""
     pool_id = record["pool"]
     rows = [r for r in attempts(pool_id, "reference")] + [b for b in (best(pool_id, "rule"), best(pool_id, "rl")) if b]
-    rows = [r for r in rows if r["id"] != record["id"]] + [record]
+    rows = distinct([r for r in rows if r["id"] != record["id"]] + [record])
     rows.sort(key=lambda r: -r["score"])
     return "；".join(f"{i + 1}. {r['id']} {r['score']:+.2f}" for i, r in enumerate(rows))
 

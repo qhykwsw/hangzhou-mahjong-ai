@@ -112,18 +112,23 @@ def application(project, tailscale_url=None):
         if not pool_path.exists():
             return {"enabled": False}
         pool = json.loads(pool_path.read_text())
-        rows = []
+        latest = {}
         if log_path.exists():
             for line in log_path.read_text().splitlines():
-                if not line.strip():
-                    continue
-                r = json.loads(line)
-                if r.get("pool") != pool["id"]:
-                    continue
-                rows.append({k: r.get(k) for k in (
-                    "id", "line", "status", "description", "started_at", "finished_at",
-                    "games", "score", "se", "best_before", "diff", "confirm", "stats",
-                    "design_seconds")})
+                if line.strip() and (r := json.loads(line)).get("pool") == pool["id"]:
+                    latest[r["id"]] = r  # a reference played again replaces its earlier record
+        # One point per version, as the harness shows it (harness.evaluate.distinct):
+        # of records with the same weights or package, the one over the most games.
+        chosen = {}
+        for r in latest.values():
+            spec = r.get("spec") or {}
+            key = (spec.get("parameters") or {}).get("weights") or spec.get("package_hash") or r["id"]
+            if key not in chosen or (r["games"], r["finished_at"]) >= (chosen[key]["games"], chosen[key]["finished_at"]):
+                chosen[key] = r
+        rows = [{k: r.get(k) for k in (
+            "id", "line", "status", "description", "started_at", "finished_at",
+            "games", "score", "se", "best_before", "diff", "confirm", "stats",
+            "design_seconds")} for r in latest.values() if r in chosen.values()]
         return {"enabled": True, "pool": {"id": pool["id"], "members": sorted(pool["members"])},
                 "attempts": rows}
 

@@ -11,7 +11,6 @@
     reference: { name: "参照", color: "var(--red)" },
   };
   const STATUS = { keep: "成功", discard: "失败", unconfirmed: "开发集高但未确认", crash: "崩溃", invalid: "无效", cancelled: "已取消", reference: "参照" };
-  const FULL_GAMES = 16384;
   const time = (s) => new Date(s * 1000).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
   const signed = (v, d = 2) => (v == null ? "—" : (v >= 0 ? "+" : "") + v.toFixed(d));
 
@@ -62,10 +61,9 @@
         parts.push(`<path d="${d}" fill="none" stroke="${meta.color}" stroke-width="2"/>`);
       }
       for (const a of rows) {
-        const r = a.games < FULL_GAMES ? 3.2 : 5;
         const tip = `${a.id} ${STATUS[a.status] || a.status} ${signed(a.score)} ± ${a.se?.toFixed(2)}（${a.games} 场）\n${a.description}`;
         const cls = a.status === "keep" ? `fill="${meta.color}"` : a.status === "unconfirmed" ? 'fill="none" stroke="#c9822b" stroke-width="2"' : 'fill="#b8c4c9"';
-        parts.push(`<circle cx="${X(a.finished_at)}" cy="${Y(a.score)}" r="${r}" ${cls}><title>${esc(tip)}</title></circle>`);
+        parts.push(`<circle cx="${X(a.finished_at)}" cy="${Y(a.score)}" r="5" ${cls}><title>${esc(tip)}</title></circle>`);
       }
     }
     return `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="迭代线得分">${parts.join("")}</svg>`;
@@ -86,7 +84,6 @@
       `<span><i style="background:var(--blue)"></i>RL 线（${counts("rl")}）</span>`,
       '<span><i style="background:#b8c4c9"></i>失败</span>',
       '<span><i class="hollow"></i>开发集高但未确认</span>',
-      '<span><i class="small"></i>提前停止（局数不足）</span>',
       '<span><i class="dash"></i>参照（上场版本与粗测）</span>',
     ].join("");
   }
