@@ -58,6 +58,10 @@ class Refused(Exception):
     """The harness will not do this; the message says why and who can change it."""
 
 
+class Unsealed(Refused):
+    """The conditions differ from the seal: the maintainer changed them and has not resealed yet."""
+
+
 # FP_LOCAL runs a separate record for pipeline checks; only there may settings be shortened.
 LOCAL = Path(os.environ.get("FP_LOCAL", HERE / ".local"))
 TEST = "FP_LOCAL" in os.environ
@@ -197,7 +201,7 @@ def check_seal():
     if not path.exists():
         raise Refused("评估条件还没有封存：维护者确认条件后运行 python -m harness.evaluate seal。")
     if read_json(path)["conditions"] != conditions():
-        raise Refused("评估条件（harness 代码、对手池或 RL 主机的训练框架与起点）与封存时不一致，拒绝运行。"
+        raise Unsealed("评估条件（harness 代码、对手池或 RL 主机的训练框架与起点）与封存时不一致，拒绝运行。"
                       "这些归维护者管：撤回改动，或由维护者确认后重新 seal。")
 
 

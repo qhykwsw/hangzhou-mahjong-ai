@@ -493,6 +493,13 @@ def wait(line, minutes):
         try:
             claim(line)
             preflight(line)
+        except E.Unsealed as exc:
+            # The maintainer changes the conditions and reseals right after;
+            # only a mismatch that outlasts this wait is theirs to settle.
+            if time.time() < deadline:
+                time.sleep(POLL_SECONDS)
+                continue
+            return emit([], [], f"停下：{exc}", line)
         except (E.Refused, FileNotFoundError) as exc:
             return emit([], [], f"停下：{exc}", line)
         ensure_drivers(line)
