@@ -116,9 +116,9 @@ def test_source_rules_hold_for_rule_strategies(harness, tmp_path):
     package.mkdir()
     (package / "strategy.py").write_text(
         "import ctypes\nimport torch\nfrom concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor\n"
-        "torch.set_num_threads(8)\npool = ProcessPoolExecutor()\nnice = 3\n")
+        "torch.set_num_threads(8)\npool = ProcessPoolExecutor()\nnice = 3\neval(\"1\")\nx = re.compile\n")
     problems = E.check_source(package)
-    assert len(problems) == 3, problems
+    assert len(problems) == 4, problems
 
 
 def test_lease_refuses_a_second_live_session(harness, monkeypatch):

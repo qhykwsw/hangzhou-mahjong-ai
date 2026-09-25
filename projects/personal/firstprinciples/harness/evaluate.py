@@ -288,8 +288,9 @@ def release_attempt(attempt_id):
 # would take cores from the opponents at the table; in training, cores the
 # host keeps for itself.
 FORBIDDEN_IMPORTS = ("subprocess", "multiprocessing", "torch.multiprocessing", "ctypes", "cffi", "importlib")
-FORBIDDEN_NAMES = ("ProcessPoolExecutor", "__import__", "set_num_threads", "set_num_interop_threads",
+FORBIDDEN_NAMES = ("ProcessPoolExecutor", "set_num_threads", "set_num_interop_threads",
                    "set_per_process_memory_fraction")
+BUILTINS = ("__import__", "eval", "exec")  # would hide the rest from this check
 # os functions that start processes or change scheduling.
 FORBIDDEN_OS = ("system", "popen", "fork", "forkpty", "posix_spawn", "posix_spawnp", "nice",
                 "setpriority", "sched_setaffinity")
@@ -320,7 +321,7 @@ def check_source(package, imports=()):
             word = node.attr if isinstance(node, ast.Attribute) else node.id if isinstance(node, ast.Name) else None
             spawn = (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "os"
                      and (node.attr in FORBIDDEN_OS or node.attr.startswith(("exec", "spawn"))))
-            if word in FORBIDDEN_NAMES or spawn:
+            if word in FORBIDDEN_NAMES or spawn or (isinstance(node, ast.Name) and word in BUILTINS):
                 problems.append(f"{name}:{node.lineno} 用了 {word}")
     return problems
 
