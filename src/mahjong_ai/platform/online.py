@@ -1089,6 +1089,7 @@ class TournamentRunner:
                 )
                 ingest(delta)
                 if delta.get("snapshot"):
+                    res = delta
                     snap = delta["snapshot"]
                     seq = max(seq, delta.get("seq", seq))
                 elif delta.get("seq", 0) > res.get("seq", 0):
@@ -1097,6 +1098,12 @@ class TournamentRunner:
                     )
                     if res.get("snapshot"):
                         snap = res["snapshot"]
+            # A history refresh can advance the decision (even the hand).
+            # Keep its snapshot, logged sequence and timeline watermark from
+            # the same response; an old envelope mislabels otherwise valid play.
+            fetched_seq = max(fetched_seq, int(res.get("seq", 0) or 0))
+            hand_no = snap["round_no"]
+            last_snap = snap
             with self.lock:
                 tournament = self.tournament
             try:

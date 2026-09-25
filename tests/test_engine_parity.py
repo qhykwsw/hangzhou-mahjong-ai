@@ -39,6 +39,75 @@ def test_real_official_round_replays_through_engine(case, monkeypatch):
     assert report["status"] == "passed", report
 
 
+def test_owner_draw_retains_catch_play_until_discard_in_official_snapshot(monkeypatch):
+    case = json.loads((FIXTURES / "official-v35-catch-owner-draw.json").read_text())
+    snap = case["snapshot"]
+    observed = []
+    original = HandState.step
+
+    def step(self, action):
+        if action == Action("hu"):
+            observed.append(self.observation())
+        return original(self, action)
+
+    monkeypatch.setattr(HandState, "step", step)
+    report = audit_replay(case["replay"])
+    assert report["status"] == "passed", report
+    assert case["accepted"] and len(observed) == 1
+    obs = observed[0]
+    assert obs.catch_play == snap["god"]["catch_play"]
+    assert obs.god_discarder_seat == snap["god"]["god_discarder_seat"]
+    assert obs.stage.seat == obs.god_discarder_seat
+    assert not obs.catch_restricted
+
+
+@pytest.mark.parametrize("reference", [False, True], ids=["accelerated", "python"])
+def test_official_four_white_two_meld_fan_agrees(reference, monkeypatch):
+    from mahjong_ai.domain import rules
+
+    if reference:
+        monkeypatch.setattr(rules, "_fast", None)
+    rules._baotou.cache_clear()
+    rules._calculate_fan_cached.cache_clear()
+    case = json.loads(
+        (FIXTURES / "official-v35-four-white-melds-mismatch.json").read_text()
+    )
+    report = audit_replay(case["replay"])
+    assert report["status"] == "passed", report["failures"]
+    assert report["outcomes"][0]["local_fan"] == 2
+    assert report["outcomes"][0]["local_payments"] == (-16, -2, 20, -2)
+
+
+@pytest.mark.parametrize(
+    "case",
+    json.loads((FIXTURES / "official-v35-four-white-controls.json").read_text())[
+        "cases"
+    ],
+    ids=lambda c: c["case"],
+)
+def test_official_four_white_controls_keep_live_fan(case, monkeypatch):
+    snapshot = case.get("four_white_snapshot")
+    observed = []
+    original = HandState.step
+
+    def step(self, action):
+        if snapshot and action == Action("discard", WHITE):
+            from mahjong_ai.domain.rules import tile_id
+
+            if sorted(self.hands[self.turn]) == sorted(
+                tile_id(t) for t in snapshot["my_hand"]
+            ):
+                observed.append(self.current_fan().baotou)
+        return original(self, action)
+
+    monkeypatch.setattr(HandState, "step", step)
+    report = audit_replay(case["replay"])
+    assert report["status"] == "passed", report["failures"]
+    assert report["outcomes"][0]["local_fan"] == case["expected_fan"]
+    if snapshot:
+        assert observed == [snapshot["god"]["baotou"]] == [True]
+
+
 def test_actual_server_accepted_post_peng_kong_is_in_projected_actions():
     document = json.loads(
         (FIXTURES / "official-v34-post-peng-kong-snapshot.json").read_text()

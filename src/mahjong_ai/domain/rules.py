@@ -125,6 +125,12 @@ def can_hu(hand, open_melds=0) -> bool:
 def _baotou(c: tuple[int, ...], open_melds: int) -> bool:
     if sum(c) != 13 - 3 * open_melds or c[WHITE] == 0:
         return False
+    # Live v35 compatibility: four whites + one natural triplet behind two
+    # melds scores the four-white bonus, without baotou. Preserve this narrow
+    # observed shape; closed hands, other shapes and drawing the fourth white
+    # retain their existing behavior. Mirror in _fast.c:baotou_shape.
+    if open_melds == 2 and c[WHITE] == 4 and 3 in c[:WHITE]:
+        return False
     if _fast is not None and hasattr(_fast, "baotou") and max(c) <= 4:
         return _fast.baotou(c, open_melds)
     # Test isolated honors early; most hands fail immediately.

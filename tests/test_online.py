@@ -1,8 +1,8 @@
+"""Normalized contract fixtures; these are not captured official player snapshots."""
+
 import json
 import threading
 import time
-"""Normalized contract fixtures; these are not captured official player snapshots."""
-
 from dataclasses import asdict
 
 import pytest
@@ -130,6 +130,38 @@ def test_409_resync_does_not_submit_duplicate_action(tmp_path):
     assert sum(m == "POST" for m, _ in calls) == 1
     post_index = next(i for i, (method, _) in enumerate(calls) if method == "POST")
     assert calls[post_index + 1][1].endswith("seq=0")
+
+
+def test_history_refresh_keeps_snapshot_sequence_and_round_together(tmp_path):
+    initial = fixture(HandState(RoundConfig(), 4)) | {"seq": 10}
+    refreshed = fixture(HandState(RoundConfig(), 5, hand_no=2)) | {"seq": 14}
+
+    class Client:
+        reads = 0
+        posts = 0
+
+        def request(self, method, path, body=None):
+            if method == "POST":
+                self.posts += 1
+                return {"ok": True}
+            self.reads += 1
+            if self.reads == 1:
+                return initial
+            if self.reads == 2:
+                assert path.endswith("seq=1")
+                return refreshed
+            return {"finished": True, "seq": 15}
+
+    client = Client()
+    runner = TournamentRunner(client, PolicySpec(), adapter(), tmp_path)
+    runner.tournament = {}
+    runner._play("refresh-fixture")
+    assert client.posts == 1
+    record = json.loads(next(tmp_path.glob("*.jsonl")).read_text())
+    assert record["snapshot"]["round_no"] == 2
+    assert record["seq"] == 14
+    state = json.loads(next(tmp_path.glob("game-*.json")).read_text())
+    assert state["round_no"] == 2
 
 
 def fake_connection(answers, fail=0):

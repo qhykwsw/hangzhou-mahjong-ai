@@ -126,7 +126,7 @@ def test_circle_only_opens_windows_for_owner_even_without_claim(discarder, can_c
             assert state.legal_actions() == (Action("pass"),)
         state.step(Action("pass"))
     assert state.phase == "draw" and state.turn == (discarder + 1) % 4
-    assert state.catch_owner == (None if discarder == 3 else 0)
+    assert state.catch_owner == 0
 
 
 @pytest.mark.parametrize("claim,discarder", [("peng", 1), ("chi", 3)])

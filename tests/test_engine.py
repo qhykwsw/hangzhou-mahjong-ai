@@ -61,6 +61,15 @@ def test_white_discard_forces_catch_play_and_only_drawn_discard():
         state.step(Action("discard", state.drawn))
         pass_windows(state)
         assert state.turn == expected
+    assert state.catch_owner == 0
+    assert not state.observation().catch_restricted
+    state.step(
+        next(
+            a
+            for a in state.legal_actions()
+            if a.action == "discard" and a.tile != WHITE
+        )
+    )
     assert state.catch_owner is None
 
 

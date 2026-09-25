@@ -9,10 +9,10 @@
 | [赛事流程](platform-flow.html) | 当前门户 `section#view-flow` 的原始 HTML |
 | [最小 Bot 示例](official-minimal-bot.py) | 从最新指南提取的原始示例；不包含完整策略和并发调度 |
 | [回放逻辑](platform-replay.js) | 当前门户 `/portal/replay.js`；用于赛后回放，并非完整对局引擎 |
-| [四白板番型响应](fan-calc-four-whites.json) | 重新请求无状态 `/portal/api/tools/fan-calc` 的输入与响应；由规则回归测试直接引用 |
+| [四白板番型响应](fan-calc-four-whites.json) | 无状态 `/portal/api/tools/fan-calc` 的闭手输入与响应；用于闭手控制回归，不代表实战副露路径 |
 | [番型校准](fan-calibration.json) | 重新运行 32 组本地计算与当前官方无状态响应的对照，保存真实一致性结果 |
 
-原始文本保持原貌；发现指南、版本日志与响应冲突时，核对证据后更新现行速查。无状态番型计算不能证明全部合法动作和状态转换等价。
+原始文本保持原貌；发现指南、版本日志与响应冲突时，以真实线上对局的动作、快照和结算核对，更新[平台规则与接入](../reference/platform.md)。无状态番型计算不能证明全部合法动作和状态转换等价，也不能覆盖与其冲突的实战结算。实战反例与正向控制保存在 `tests/fixtures/official-*`，独立于本目录的资料刷新。
 
 ## 整套更新
 

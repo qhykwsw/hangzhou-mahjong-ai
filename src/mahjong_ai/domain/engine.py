@@ -20,7 +20,7 @@ from mahjong_ai.domain.types import (
 )
 
 
-ENGINE_VERSION = "hangzhou-local-v7"
+ENGINE_VERSION = "hangzhou-local-v9"
 POLICY_EVENT_KINDS = frozenset(("draw", "discard", "chi", "peng", "gang", "hand_ended"))
 
 
@@ -120,8 +120,9 @@ class HandState:
         if len(self.wall) <= 20:
             self._finish(None)
             return
-        if not kong and self.catch_owner == seat:
-            self.catch_owner = None
+        # Official snapshots retain the circle through its owner's next draw.
+        # The owner is exempt; their non-white discard clears it, while another
+        # white discard starts the next circle. Keep this policy feature aligned.
         self.turn = seat
         self.drawn = self.wall.pop(0) if kong else self.wall.pop()
         self.hands[seat].append(self.drawn)

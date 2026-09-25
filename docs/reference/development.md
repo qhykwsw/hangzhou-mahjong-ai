@@ -49,11 +49,13 @@ ruff format --check src tests scripts
 
 操作系统适配修改先运行 `tests/test_sandbox.py`、`tests/test_service_host.py` 和 `tests/test_candidate_runtime.py`：验证只读/私有文件、断网、禁止派生进程但允许线程、沙箱子进程 RSS 限制，以及服务真实启停和重启。systemd 用户管理器不可用时真实服务测试跳过；不能把跳过当成后台服务验收通过。macOS 分支有命令与配置回归，发布双平台能力仍需在 Mac 实机运行测试。
 
-引擎与平台事实优先核对 `tests/fixtures/official-v25-*` 官方快照与牌谱。抓打圈的豁免、吃碰后续飘与断链有合成契约回归，四白板使用 `docs/sources/fan-calc-four-whites.json` 原始响应。合成用例不能证明完整线上阶段等价。
+引擎与平台事实以官方实战快照、完整牌谱及对应回归为准。`tests/fixtures/official-v25-*` 保留基础协议样本，较新的规则反例与控制见同目录 `official-v34-*`、`official-v35-*`。抓打圈的豁免、吃碰后续飘与断链另有合成契约回归。四白板的 `docs/sources/fan-calc-four-whites.json` 仅为闭手试算控制；实战计番兼容分支及正向控制见[平台规则](platform.md)。理论规则、闭手试算和合成用例均不能覆盖或替代真实对局回执。
 
 `tests/fixtures/official-v34-parity.json` 保存官方完成牌谱的整局片段，覆盖碰后补杠和圈外吃后财飘；玩家身份与房间标识已移除，局内记录保持原貌。`official-v34-post-peng-kong-snapshot.json` 保存当前服务器接受补杠时的玩家快照。`tests/test_engine_parity.py` 将这些记录送入真实引擎，并覆盖底分传递、暗杠隐私、副露来源与事件特征一致性。
 
 `platform/replay_audit.py` 直接用 `HandState.step` 重放官方动作和摸牌顺序，检查合法性、番数、逐家分数、连庄、牌张守恒和官方出牌超时的代打选择；不维护第二份吃碰杠状态机。缺少结算分数不能报告通过。补齐本地顺序 pass 只用于推进响应窗口，网络时序与跨窗请求仍由完整平台日志审计。
+
+`official-v35-catch-owner-draw.json` 保留一局官方牌谱及打财神者再次摸牌后的真实决策快照。此时线上仍保留抓打圈及豁免座位，直到本人出非财神牌才解除；`test_engine_parity.py` 验证本地观察一致。这类观察字段差异可能不改变已执行动作和最终分数，验收须同时比较线上决策快照，不能仅检查整局重放。
 
 已执行动作的重放只验证已走过的路径，不能证明两端合法动作集合相同。升级验收还应保存被拒动作的快照和请求时间，并在官方超时代打发生前比较本地 `timeout_action()`；确认服务器拒绝本地合法动作时，要排除截止时间、已被消费的响应窗口及其他玩家抢先声明等因素。`tests/test_youcai_parity.py` 保留“有财必拷响”杠后拒胡快照和完整超时局，核对 Python/C、平台投影与假想模拟，并验证审计器能检出本地额外允许胡牌的情况。指南冲突与证据边界见[平台规则](platform.md)。假想模拟会将已知刚摸牌恢复到手牌末尾，用于一致的超时代打；没有刚摸牌时，排序观察不能恢复完整历史插入顺序。
 

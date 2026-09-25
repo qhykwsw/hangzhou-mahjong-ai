@@ -432,6 +432,11 @@ static int baotou_shape(const int *waiting, int open_melds) {
     int total = 0;
     for (int i = 0; i < NTILES; i++) total += waiting[i];
     if (total != 13 - 3 * open_melds) return 0;
+    /* Live v35 four-white/two-meld natural-triplet exception. Keep in sync
+     * with rules._baotou; do not suppress other four-white waits. */
+    if (open_melds == 2 && waiting[WHITE] == 4) {
+        for (int t = 0; t < WHITE; t++) if (waiting[t] == 3) return 0;
+    }
     int draw[NTILES];
     memcpy(draw, waiting, sizeof(draw));
     /* Honor draws cannot join a sequence. Reject them first, like the
