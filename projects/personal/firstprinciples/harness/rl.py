@@ -15,9 +15,7 @@ hand budget, each host's resource limits and collection execution (workers,
 tables, batching), and which modules a recipe may import.
 """
 import argparse
-import ast
 import json
-from pathlib import Path
 import re
 import shutil
 import sys
@@ -57,42 +55,49 @@ EXECUTION = {
 }
 HOSTS = tuple(LIMITS)
 # A recipe trains through ctx; it may not play games or run jobs by itself.
-FORBIDDEN_IMPORTS = (
+GUIDED_FORBIDDEN = (
     "guided.collection", "guided.environment", "guided.trial", "guided.recipe_jobs", "guided.remote",
     "guided.sync", "guided.run", "guided.bootstrap", "guided.model_server",
-    "subprocess", "multiprocessing", "importlib",
 )
-FORBIDDEN_NAMES = ("set_per_process_memory_fraction", "__import__")
-# os functions that start processes.
-FORBIDDEN_OS = ("system", "popen", "fork", "forkpty", "posix_spawn", "posix_spawnp")
 
 
 def check_recipe(package):
     """What in the recipe breaks the line's rules (empty when none)."""
-    package = Path(package)
-    problems = []
-    for path in sorted(package.rglob("*.py")):
-        name = path.relative_to(package)
-        try:
-            tree = ast.parse(path.read_text(), str(path))
-        except SyntaxError as exc:
-            problems.append(f"{name}:{exc.lineno} 语法错误：{exc.msg}")
-            continue
-        for node in ast.walk(tree):
-            modules = []
-            if isinstance(node, ast.Import):
-                modules = [a.name for a in node.names]
-            elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
-                modules = [node.module] + [f"{node.module}.{a.name}" for a in node.names]
-            for module in modules:
-                if any(module == f or module.startswith(f + ".") for f in FORBIDDEN_IMPORTS):
-                    problems.append(f"{name}:{node.lineno} 导入了 {module}（只能通过 ctx 训练和采集）")
-            word = node.attr if isinstance(node, ast.Attribute) else node.id if isinstance(node, ast.Name) else None
-            spawn = (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "os"
-                     and (node.attr in FORBIDDEN_OS or node.attr.startswith(("exec", "spawn"))))
-            if word in FORBIDDEN_NAMES or spawn:
-                problems.append(f"{name}:{node.lineno} 用了 {word}（资源上限与执行方式归维护者）")
-    return problems
+    return E.check_source(package, GUIDED_FORBIDDEN)
+
+
+def start_id(pool):
+    """The RL line's first best version in a pool: the start Actor itself."""
+    return f"fp-rl-start-{pool['id'][:8]}"
+
+
+def baseline(host):
+    """Score the start Actor on the whole development ladder as the RL line's first best version.
+
+    Every attempt trains from this start, so it is what an attempt must beat,
+    and the three hosts can fork from it at once. Its recipe snapshot is the
+    template the first designs change. Once per pool (the maintainer).
+    """
+    pool = E.load_pool()
+    E.check_seal()
+    if E.best(pool["id"], "rl"):
+        raise E.Refused("RL 线在当前对手池下已经有最好版本")
+    setups = [E.read_json(setup_path(h)) for h in HOSTS if setup_path(h).exists()]
+    if not setups or len({s["weights"] for s in setups}) != 1:
+        raise E.Refused("各主机的 RL 起点不一致或还没有 setup")
+    rel = E.SOURCES["rl"].relative_to(E.REPO).as_posix()
+    import subprocess
+
+    if subprocess.run(["git", "status", "--porcelain", "--", rel], cwd=E.REPO,
+                      capture_output=True, text=True).stdout.strip():
+        raise E.Refused(f"{rel} 与 HEAD 不一致：起点的方案快照取已提交的基线方案")
+    attempt_id = start_id(pool)
+    snapshot(attempt_id)
+    spec = {"family": "model", "version": attempt_id, "parameters": {"weights": setups[0]["weights"]}}
+    record = E.evaluate("rl", spec, f"起点：{setups[0]['name']}（模仿，未经 RL 训练）", attempt_id, host=host,
+                        extra={"why": "RL 线的起点：每次尝试都从它开始训练"})
+    E.mark_reported([record])
+    return record
 
 
 def setup_path(host):
@@ -253,9 +258,16 @@ def main():
     x.add_argument("checkpoint")
     x.add_argument("--name", required=True)
     x.add_argument("--host", required=True)
+    b = sub.add_parser("baseline", help="score the start Actor as the RL line's first best version (once per pool)")
+    b.add_argument("--host", default="4070", choices=HOSTS)
     args = parser.parse_args()
     if args.command == "setup":
         print(json.dumps(setup(args.source, args.name, args.host), ensure_ascii=False))
+    elif args.command == "baseline":
+        try:
+            print(E.report(baseline(args.host)))
+        except E.Refused as exc:
+            raise SystemExit(str(exc))
     else:
         target = remote.root(args.host) + "/.local/firstprinciples/exports/" + args.name
         print(json.dumps(export(args.host, args.checkpoint, args.name, target), ensure_ascii=False))

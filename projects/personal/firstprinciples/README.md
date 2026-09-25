@@ -19,7 +19,7 @@
 
 用户在 Claude Code 或 Codex 里说「开始/继续执行规则迭代」或「开始/继续执行 RL 迭代」，那个会话就成为该线的迭代 Agent，按[公共手册](handbooks/common.md)循环：`harness.line wait` 带回汇报和下一步，`harness.line start` 开跑一次尝试。尝试在脱离会话的驱动进程里运行，状态全部在 `.local/running/<编号>.json`；驱动进程死了（会话关闭、Mac 重启），下一次 wait 会把它重新拉起，从原来的阶段接着做。同一条线同一时间只有一个会话持有推进权。
 
-RL 线的三台主机是三个尝试位，共享一个最好版本。主机离线时尝试等它回来；主机重启丢了训练，尝试排队由任一空闲主机重做。用户可以随时关闭或开启某台主机。
+RL 线最初的最好版本就是模仿起点本身，三台主机从一开始就能各朝一个方向改；三个尝试位共享一个最好版本。主机离线时尝试等它回来；主机重启丢了训练，尝试排队由任一空闲主机重做。用户可以随时关闭或开启某台主机。
 
 ## 维护者
 
@@ -32,10 +32,12 @@ cd projects/personal/firstprinciples
 ../../../.venv/bin/python -m harness.evaluate reference <研究候选 ID | 池内模型名> [--weights <sha>] [--host local|4070|4090|5070ti]  # 参照线
 ../../../.venv/bin/python -m harness.rl export <远端 checkpoint> --name <模型名> --host <主机>  # 导出别处训练的模型（如对手池成员）
 ../../../.venv/bin/python -m harness.rl setup <主机上的 checkpoint | 权重 sha> --name <起点名> --host 4070|4090|5070ti  # RL 起点（每台主机一次）
+../../../.venv/bin/python -m harness.rl baseline [--host 4070]                                   # 起点的完整开发集成绩，作为 RL 线最初的最好版本（每个对手池一次）
 ../../../.venv/bin/python -m harness.evaluate seal                                          # 接受当前的评估条件
 ```
 
 - 封存覆盖 `harness/` 全部代码（评估、训练预算与按主机的执行参数、循环）、对手池，以及每台 RL 主机的训练框架快照与起点。
+- 换了对手池就要在新池下重跑参照和 `harness.rl baseline`；没有起点成绩时 RL 线的迭代会停下。
 - 修改 `projects/personal/selfplay/guided/` 后：把 `.local/rl/source` 按其 `source-manifest.json` 的 id 归档到 `.local/rl/sources/<id>`，再对每台主机重新 `setup <起点 sha>`，最后 `seal`。
 - 往 4070 上传教师包时，清单里登记的文件要全部带上，包括 Mac 的 `.so`，否则 `read_bundle` 会拒绝；每个运行时目录都要在主机上单独编译 `_fast` 扩展。对手池里的大模型是 384/8/8，评估时由对局执行器从 Mac 的模型库自动同步，不要手动往主机拷贝模型。
 - 流程检查：把 `.local/pool.json`、`.local/seal.json` 和 `.local/rl/setup-*.json` 复制到仓库内一个单独的目录，设 `FP_LOCAL` 指向它，再用 `FP_STAGES`、`FP_CONFIRM`、`FP_RL_HANDS`、`FP_RL_BUDGET` 缩短场数与训练预算，跑一遍 wait/start。这些缩短的设置只在 `FP_LOCAL` 下被接受，流程检查不提交 Git、不改动自由对战，跑完删掉这个目录。

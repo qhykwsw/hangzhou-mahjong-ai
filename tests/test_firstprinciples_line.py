@@ -90,13 +90,35 @@ def test_requeued_attempts_take_free_hosts_before_new_designs(harness):
     assert line.free_hosts("rl") == ["5070ti"]
 
 
-def test_first_attempt_is_the_baseline_alone(harness):
+def test_rule_line_starts_with_v0_alone(harness):
+    E, _, line = harness
+    assert line.design_slot("rule") == ("local", None)
+    E.reserve_attempt("rule", "local", "v0", stage="evaluating")
+    assert line.design_slot("rule")[0] is None
+
+
+def test_rl_hosts_fork_from_the_start_at_once(harness):
     E, rl, line = harness
-    (rl.RL / "setup-4070.json").write_text("{}")
-    (rl.RL / "setup-4090.json").write_text("{}")
-    assert line.design_slot("rl")[0] == "4070"
-    E.reserve_attempt("rl", "4070", "v0", stage="training")
-    assert line.design_slot("rl")[0] is None
+    for host in rl.HOSTS:
+        (rl.RL / f"setup-{host}.json").write_text("{}")
+    E.seal()
+    with pytest.raises(E.Refused):
+        line.preflight("rl")  # no start record yet
+    record(E, id=rl.start_id(E.load_pool()))
+    line.preflight("rl")
+    E.reserve_attempt("rl", "4070", "one direction", stage="training")
+    assert line.design_slot("rl") == ("4090", None)
+
+
+def test_source_rules_hold_for_rule_strategies(harness, tmp_path):
+    E, _, _ = harness
+    package = tmp_path / "rule"
+    package.mkdir()
+    (package / "strategy.py").write_text(
+        "import ctypes\nimport torch\nfrom concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor\n"
+        "torch.set_num_threads(8)\npool = ProcessPoolExecutor()\nnice = 3\n")
+    problems = E.check_source(package)
+    assert len(problems) == 3, problems
 
 
 def test_lease_refuses_a_second_live_session(harness, monkeypatch):

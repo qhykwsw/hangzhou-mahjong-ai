@@ -38,10 +38,10 @@ def _meminfo_total():
     raise RuntimeError("MemTotal missing from /proc/meminfo")
 
 
-def _group_rss(pgid):
-    """Resident memory of every process in the training process group."""
+def _group_usage(pgid):
+    """Resident memory and number of processes of the training process group."""
     page = os.sysconf("SC_PAGE_SIZE")
-    total = 0
+    total = count = 0
     for entry in os.listdir("/proc"):
         if not entry.isdigit():
             continue
@@ -50,9 +50,10 @@ def _group_rss(pgid):
                 continue
             with open(f"/proc/{entry}/statm") as stream:
                 total += int(stream.read().split()[1]) * page
+            count += 1
         except (OSError, ValueError, IndexError):
             continue
-    return total
+    return total, count
 
 
 def memory_limits(plan):
@@ -158,6 +159,15 @@ class Context:
         self.hand_budget = None if smoke else plan.get("hand_budget")
         self.hands = 0
         self._rows = 0
+        # With a fixed execution, the recipe keeps torch's thread counts
+        # (checked on its own thread whenever it calls ctx).
+        self._threads = (torch.get_num_threads(), torch.get_num_interop_threads()) if plan.get("execution") else None
+
+    def _guard(self):
+        import torch
+
+        if self._threads and (torch.get_num_threads(), torch.get_num_interop_threads()) != self._threads:
+            raise ValueError(f"方案改了 torch 线程数（应为 {self._threads}），执行参数由 harness 固定")
 
     def time_left(self):
         return self.deadline - time.time()
@@ -190,6 +200,7 @@ class Context:
         from .collection import collect
         from .config import configuration
 
+        self._guard()
         if self.hand_budget is not None and self.hands_left() <= 0:
             raise ValueError("hand budget exhausted")
         chosen = cfg.get("opponents")
@@ -258,6 +269,7 @@ class Context:
         return rows, records, resources
 
     def log(self, **metrics):
+        self._guard()
         row = {"time": time.time(), "left": round(self.time_left(), 1), "hands": self.hands, **metrics}
         self._metrics.write(json.dumps(row, default=float) + "\n")
         self._metrics.flush()
@@ -301,23 +313,43 @@ def train(root, smoke=False):
     limits = memory_limits(plan)
     status["limits"] = limits
     pgid = os.getpgid(0)
-    peak = {"ram": 0}
+    peak = {"ram": 0, "processes": 0}
+    # A harness that fixes the execution also caps what the recipe may add:
+    # the parent, the collection workers and multiprocessing's helper are the
+    # whole process group, and the GPU allocator stays under its cap.
+    execution = plan.get("execution") or {}
+    max_processes = int(execution["workers"]) + 3 if execution.get("workers") else None
+
+    def breach():
+        rss, processes = _group_usage(pgid)
+        peak["ram"] = max(peak["ram"], rss)
+        peak["processes"] = max(peak["processes"], processes)
+        if rss > limits["ram_limit_bytes"]:
+            return "ram_limit", (f"训练进程组内存 {rss / 2**30:.1f} GB 超过上限 "
+                                 f"{limits['ram_limit_bytes'] / 2**30:.1f} GB，已强制结束")
+        if max_processes and processes > max_processes:
+            return "process_limit", (f"训练进程组有 {processes} 个进程，超过执行参数允许的 "
+                                     f"{max_processes} 个，已强制结束")
+        reserved = torch.cuda.memory_reserved(0)
+        if execution and reserved > limits["gpu_limit_bytes"]:
+            return "gpu_limit", (f"显存占用 {reserved / 2**30:.1f} GB 超过上限 "
+                                 f"{limits['gpu_limit_bytes'] / 2**30:.1f} GB，已强制结束")
+        return None
 
     def watchdog():
         grace = GRACE_SECONDS["smoke" if smoke else "train"]
         while time.time() < deadline + grace:
-            rss = _group_rss(pgid)
-            peak["ram"] = max(peak["ram"], rss)
-            if rss > limits["ram_limit_bytes"]:
+            found = breach()
+            if found:
                 atomic_json(
                     root / "status.json",
                     status
                     | {
                         "state": "failed",
-                        "reason": "ram_limit",
-                        "error": f"训练进程组内存 {rss / 2**30:.1f} GB 超过上限 "
-                        f"{limits['ram_limit_bytes'] / 2**30:.1f} GB，已强制结束",
+                        "reason": found[0],
+                        "error": found[1],
                         "ram_peak_bytes": peak["ram"],
+                        "processes_peak": peak["processes"],
                         "finished": time.time(),
                     },
                 )
@@ -372,7 +404,8 @@ def train(root, smoke=False):
         status.update(
             gpu_peak_allocated_bytes=torch.cuda.max_memory_allocated(),
             gpu_peak_reserved_bytes=torch.cuda.max_memory_reserved(),
-            ram_peak_bytes=max(peak["ram"], _group_rss(pgid)),
+            ram_peak_bytes=max(peak["ram"], _group_usage(pgid)[0]),
+            processes_peak=peak["processes"],
         )
         atomic_json(root / "status.json", status)
 

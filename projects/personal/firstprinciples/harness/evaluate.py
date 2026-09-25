@@ -283,6 +283,48 @@ def release_attempt(attempt_id):
     (LOCAL / "running" / f"{attempt_id}.lock").unlink(missing_ok=True)
 
 
+# A strategy or recipe runs in the process the harness gives it and keeps to
+# it: no processes, thread pools or native code of its own. In a game that
+# would take cores from the opponents at the table; in training, cores the
+# host keeps for itself.
+FORBIDDEN_IMPORTS = ("subprocess", "multiprocessing", "torch.multiprocessing", "ctypes", "cffi", "importlib")
+FORBIDDEN_NAMES = ("ProcessPoolExecutor", "__import__", "set_num_threads", "set_num_interop_threads",
+                   "set_per_process_memory_fraction")
+# os functions that start processes or change scheduling.
+FORBIDDEN_OS = ("system", "popen", "fork", "forkpty", "posix_spawn", "posix_spawnp", "nice",
+                "setpriority", "sched_setaffinity")
+
+
+def check_source(package, imports=()):
+    """What in a line's source breaks its rules (empty when none); start refuses on any."""
+    import ast
+
+    package = Path(package)
+    problems = []
+    for path in sorted(package.rglob("*.py")):
+        name = path.relative_to(package)
+        try:
+            tree = ast.parse(path.read_text(), str(path))
+        except SyntaxError as exc:
+            problems.append(f"{name}:{exc.lineno} 语法错误：{exc.msg}")
+            continue
+        for node in ast.walk(tree):
+            modules = []
+            if isinstance(node, ast.Import):
+                modules = [a.name for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
+                modules = [node.module] + [f"{node.module}.{a.name}" for a in node.names]
+            for module in modules:
+                if any(module == f or module.startswith(f + ".") for f in (*FORBIDDEN_IMPORTS, *imports)):
+                    problems.append(f"{name}:{node.lineno} 导入了 {module}")
+            word = node.attr if isinstance(node, ast.Attribute) else node.id if isinstance(node, ast.Name) else None
+            spawn = (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "os"
+                     and (node.attr in FORBIDDEN_OS or node.attr.startswith(("exec", "spawn"))))
+            if word in FORBIDDEN_NAMES or spawn:
+                problems.append(f"{name}:{node.lineno} 用了 {word}")
+    return problems
+
+
 def freeze_rule(attempt_id):
     source = HERE / "rule"
     target = LOCAL / "attempts" / attempt_id / "package"
@@ -585,6 +627,17 @@ def append_record(record):
     with records_path().open("a") as f:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
     release_attempt(record["id"])
+
+
+def reported():
+    """Records already shown to the user (by harness.line wait)."""
+    path = LOCAL / "reported.json"
+    return set(read_json(path)) if path.exists() else set()
+
+
+def mark_reported(records):
+    if records:
+        atomic_json(LOCAL / "reported.json", sorted(reported() | {r["id"] for r in records}))
 
 
 def platform_entrant():

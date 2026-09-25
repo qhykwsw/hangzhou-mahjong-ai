@@ -119,7 +119,7 @@ def design_slot(line, probe=True):
     """(host, None) when a new attempt may start now, else (None, why not)."""
     champion = E.best(E.load_pool()["id"], line)
     if champion is None and E.running(line):
-        return None, "第一次尝试（基线）还没有结果，它成为最好版本后才能设计新尝试"
+        return None, "第一次尝试（v0）还没有结果，它成为最好版本后才能设计新尝试"
     free, waiting = free_hosts(line, probe), queued(line)
     if len(free) > len(waiting):
         return free[len(waiting)], None
@@ -450,16 +450,8 @@ def preflight(line):
     E.check_seal()
     if line == "rl" and not any(ready(h) for h in rl.HOSTS):
         raise E.Refused("RL 线还没有任何主机完成起步（harness.rl setup），这是维护者的事。")
-
-
-def reported():
-    path = E.LOCAL / "reported.json"
-    return set(E.read_json(path)) if path.exists() else set()
-
-
-def mark_reported(records):
-    if records:
-        E.atomic_json(E.LOCAL / "reported.json", sorted(reported() | {r["id"] for r in records}))
+    if line == "rl" and E.best(E.load_pool()["id"], "rl") is None:
+        raise E.Refused("RL 线在当前对手池下还没有起点成绩（harness.rl baseline），这是维护者的事。")
 
 
 def summary(line):
@@ -506,21 +498,21 @@ def wait(line, minutes):
         ensure_drivers(line)
         retry_kills()
         pool_id = E.load_pool()["id"]
-        done = reported()
+        done = E.reported()
         records = [r for r in E.attempts(pool_id, line) if r["id"] not in done]
         notices = host_notices(line)
         flagged = [r["id"] for r in records if (r.get("reference") or {}).get("above")]
         host, why_not = design_slot(line)
         if flagged:
-            mark_reported(records)
+            E.mark_reported(records)
             return emit(records, notices, f"停下：{'、'.join(flagged)} 高于自由对战的参照线。问用户是否换上；"
                                           "用户同意就运行 promote <编号>，然后继续循环。", line)
         if host or records or notices or time.time() >= deadline:
-            mark_reported(records)
+            E.mark_reported(records)
             if host:
                 champion = restore(line)
                 base = (f"本线目录已恢复为最好版本 {champion['id']}" if champion
-                        else "还没有最好版本，第一次尝试用本线目录原样（基线）")
+                        else "还没有最好版本，第一次尝试用本线目录原样（v0）")
                 where = f"空闲主机 {host}；" if line == "rl" else ""
                 step = f"设计：{where}{base}。先读 status 与迭代笔记 {notes_path(line)}，只改一处，然后运行 start。"
             else:
@@ -541,14 +533,14 @@ def start(line, change, why, design_start):
         if base != champion["id"]:
             raise E.Refused(f"最好版本现在是 {champion['id']}，本线目录不是从它恢复来的。"
                             "运行 wait 恢复后，把这处改动重新做在它上面。")
-        if E.tree_hash(source) == E.tree_hash(E.frozen_source(champion)):
+        # The start was never trained with its recipe, so training that recipe unchanged is an attempt too.
+        if champion["id"] != rl.start_id(E.load_pool()) and E.tree_hash(source) == E.tree_hash(E.frozen_source(champion)):
             raise E.Refused("本线目录与最好版本完全相同，没有可评估的改动。")
     elif git("status", "--porcelain", "--", rel).stdout.strip():
-        raise E.Refused("还没有最好版本：第一次尝试必须是本线目录原样（基线）。运行 wait 恢复后再开跑。")
-    if line == "rl":
-        problems = rl.check_recipe(source)
-        if problems:
-            raise E.Refused("方案不符合迭代线约定，没有开跑：\n" + "\n".join(problems))
+        raise E.Refused("还没有最好版本：第一次尝试必须是本线目录原样（v0）。运行 wait 恢复后再开跑。")
+    problems = rl.check_recipe(source) if line == "rl" else E.check_source(source)
+    if problems:
+        raise E.Refused("不符合迭代线约定（进程、线程与资源归维护者），没有开跑：\n" + "\n".join(problems))
     online(LINE_HOSTS[line])
     with E.attempts_lock():
         host, why_not = design_slot(line, probe=False)
