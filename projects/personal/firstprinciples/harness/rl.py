@@ -237,8 +237,6 @@ def train(state):
     E.log(f"{attempt_id}: training {HANDS} hands on {host}")
     result = recipe_jobs.trial_train(task, lambda message: None)
     E.atomic_json(job / "training.json", {k: v for k, v in result.items() if k != "metrics"})
-    # The training curve (one row per step: KL, critic fit, timings) for later analysis.
-    (job / "metrics.jsonl").write_text("".join(json.dumps(row) + "\n" for row in result.get("metrics") or []))
     status = result["status"]
     training = {"host": host, "state": status.get("state"), "hands": status.get("hands"),
                 "training_seconds": status.get("training_seconds")}
