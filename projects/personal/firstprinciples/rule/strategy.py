@@ -4,7 +4,8 @@ Only self-draws win, so a hand is worth the fan it can collect times its chance
 of drawing it before an opponent does. Between two of my draws the three
 opponents win with chance Q. A waiting hand that wins on a fraction p of draws,
 collecting e fan per draw on average, is worth e / (1 - (1 - p)(1 - Q)) just
-before my draw. One step from waiting, each improving draw leads to the best
+before my draw; a wait holding a white also counts the draws that let a discard
+turn it into baotou, when that beats winning on them at once. One step from waiting, each improving draw leads to the best
 waiting hand it allows; further away a generic discount per step stands in.
 A win also cancels the payment I would owe to someone else's win, SAVED fan.
 Passing on a discard lets the opponents between its discarder and me draw
@@ -41,7 +42,30 @@ def waiting_value(hand, opened, available, chain=0, piao=0):
     row = analyze(hand, opened, available, chain, piao)
     if row["shanten"] <= 0:
         copies = row["winning_copies"]
-        return race(copies / unseen, (row["fan_value"] + SAVED * copies) / unseen)
+        gain = row["fan_value"] + SAVED * copies
+        if WHITE not in hand or is_baotou(hand, opened):
+            return race(copies / unseen, gain / unseen)
+        # A draw that frees a white lets a discard turn the wait into baotou,
+        # which may beat winning on it at once.
+        fans = row["fans"]
+        gain, reach = 0.0, 0
+        for tile in range(34):
+            if available[tile] <= 0 or hand.count(tile) >= 4:
+                continue
+            drawn = list(hand)
+            drawn.append(tile)
+            best = 0.0
+            for drop in set(drawn):
+                rest = tuple(sorted(without(drawn, drop)))
+                if is_baotou(rest, opened):
+                    best = max(best, waiting_value(rest, opened, available))
+            if tile in fans:
+                gain += available[tile] * max(fans[tile] + SAVED, (1 - Q) * best)
+            elif best:
+                gain += available[tile] * (1 - Q) * best
+                reach += available[tile]
+        stay = (1 - Q) * (1 - (copies + reach) / unseen)
+        return gain / unseen / (1 - stay)
     u = row["ukeire"] / unseen
     if row["shanten"] == 1:
         weighted = 0.0
