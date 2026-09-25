@@ -25,6 +25,14 @@
 4. 冒烟通过后，提交工作区里尚未提交的框架与文档改动，逐个写路径，不用 `-A`。
 5. 第一次正式尝试用基线方案原样（v0）。
 
+## 学习执行
+
+方案的 `resident_rows` 在显存限额内让学习输入常驻 GPU；空间不足时沿用逐批搬运。
+`gradient_graphs` 在常驻输入上捕获 Actor 的取数、前向、反向与梯度累加，保持原始批次行数、历史长度和累加顺序。
+按历史长度排序后，使用次数足够的形状才捕获，低频形状直接执行；切换形状时释放已经用完的 Graph，避免为不再访问的形状保留显存。
+Actor 与 Critic 共用每台设备的预热 stream，复用 cuBLAS 工作区。
+这些执行参数不改变采集量、模型、优势计算、Critic 拟合或 KL 更新口径。
+
 ## 注意
 
 - 冻结的训练框架源码在 `.local/rl/source`。修改 `projects/personal/selfplay/guided/` 后，先按 `source-manifest.json` 的 id 把这个目录归档到 `.local/rl/sources/<id>`，再对每台主机重新 `setup`，让框架重新冻结上传。

@@ -5,6 +5,8 @@ import copy
 import torch
 from torch.nn import functional as F
 
+from .cuda_execution import warmup_stream
+
 
 class CriticSteps:
     def __init__(self, model, learning_rate):
@@ -36,7 +38,7 @@ class CriticSteps:
             # moments before capture, preserving the persistent tensor addresses.
             saved_model = copy.deepcopy(self.model.state_dict())
             saved_optimizer = copy.deepcopy(self.optimizer.state_dict())
-            side = torch.cuda.Stream()
+            side = warmup_stream(next(self.model.parameters()).device)
             side.wait_stream(torch.cuda.current_stream())
             with torch.cuda.stream(side):
                 for _ in range(2):

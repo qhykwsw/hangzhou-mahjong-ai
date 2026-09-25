@@ -9,5 +9,6 @@
   "worker_fraction": 0.8,
   "tables": 32,
   "resident_rows": true,
+  "gradient_graphs": true,
   "gather_seconds": 0.002
 }

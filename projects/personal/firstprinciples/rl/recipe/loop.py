@@ -31,13 +31,17 @@ from .targets import advantages
 CONFIG = json.loads(Path(__file__).with_name("config.json").read_text())
 
 
-def gradient(actor, rows, weights, size, device, *, batch_source=None):
+def gradient(actor, rows, weights, size, device, *, batch_source=None, capture=False):
     """Sum of advantage-weighted log-probability gradients over every row.
 
     The sum does not depend on order, so rows are grouped by history length to
     avoid padding short histories to long ones; bf16 autocast halves the cost.
     The direction's precision far exceeds its sampling noise.
     """
+    if capture and batch_source is not None and torch.device(device).type == "cuda":
+        from .actor_gradient import gradient as resident_gradient
+
+        return resident_gradient(actor, rows, weights, size, device, batch_source=batch_source)
     params = [p for p in actor.parameters() if p.requires_grad]
     total = [torch.zeros_like(p) for p in params]
     order = np.argsort([len(r["events"]) for r in rows], kind="stable")
@@ -136,7 +140,10 @@ def train(ctx):
             rows, cfg, rng, ctx.device, ctx.seed + 7919 * step, batch_source=batch_source,
         )
         fitted = time.time() - began - collected
-        params, direction = gradient(actor, rows, weights, microbatch, ctx.device, batch_source=batch_source)
+        params, direction = gradient(
+            actor, rows, weights, microbatch, ctx.device, batch_source=batch_source,
+            capture=cfg.get("gradient_graphs", False),
+        )
         subset = rng.choice(len(rows), size=min(len(rows), int(cfg["kl_rows"])), replace=False)
         batches = [batch_source.batch(subset[s : s + 512]) if batch_source is not None
                    else make_batch([rows[i] for i in subset[s : s + 512]], ctx.device)
