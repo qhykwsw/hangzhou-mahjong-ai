@@ -1,28 +1,27 @@
-"""RL line (ADR-0016): train rl/recipe on a GPU host for a budget of hands, then evaluate it there.
+"""RL line (ADR-0016): train a recipe snapshot on a GPU host for a budget of hands, then evaluate it there.
 
 The training harness is the recipe framework's own (guided.trial via
-guided.recipe_jobs.trial_train): the recipe package is uploaded, trained from the
-fixed start Actor for the budget against the fixed opponent pool, and the
-trained Actor is scored on the same host by harness.evaluate like any attempt.
+guided.recipe_jobs.trial_train): the attempt's recipe snapshot is uploaded,
+trained from the fixed start Actor for the budget against the fixed opponent
+pool, and the trained Actor is scored on the same host by harness.evaluate.
+harness.line starts attempts and drives them (train() here is one resumable
+step of that); the maintainer prepares each host:
 
-GPU hosts train and evaluate independently, so the line's session can keep
-one attempt under way on each; the records and the best version are shared
-(harness.evaluate reserves attempt ids and re-reads the best version).
+  python -m harness.rl setup <remote checkpoint | weights sha> --name <start name> --host 4070|4090|5070ti
+  python -m harness.rl export <checkpoint> --name <model name> --host <host>
 
-Usage (from projects/personal/firstprinciples):
-  python -m harness.rl setup <remote checkpoint | weights sha> --name <start name> --host 4070|4090|5070ti   # once per host
-  python -m harness.rl attempt "<what changed>" --design-start <epoch> --host 4070|4090|5070ti
-The loop around it (history, one change, restore, report) is handbooks/common.md.
+What the recipe may not decide is fixed here and sealed with the pool: the
+hand budget, each host's resource limits and collection execution (workers,
+tables, batching), and which modules a recipe may import.
 """
 import argparse
+import ast
 import json
-import os
-import random
+from pathlib import Path
 import re
 import shutil
 import sys
 import tempfile
-import time
 
 from . import evaluate as E
 
@@ -32,9 +31,13 @@ from mahjong_ai.execution.remote import opponent_specs  # noqa: E402
 
 # The budget is training hands (16 per game), so an attempt trains the same
 # amount on each host; it shows the trend of a change, not a finished model.
-# The seconds only cap a run that stalls. FP_RL_HANDS=0 falls back to the time budget.
-HANDS = int(os.environ.get("FP_RL_HANDS", "400000")) or None
-BUDGET = int(os.environ.get("FP_RL_BUDGET", "14400"))
+# The seconds cap the training too: a recipe that spends more per hand trains
+# fewer hands within them, which is its own cost.
+HANDS = E.override("FP_RL_HANDS", 1_000_000)
+BUDGET = E.override("FP_RL_BUDGET", 14400)
+# A collection plays out every game it started, so the last one may pass the
+# budget a little; past this allowance the attempt is invalid.
+HAND_ALLOWANCE = 25_000
 RL = E.LOCAL / "rl"
 BUNDLE = "/.local/guided-teachers/b492a752d115c52c2c9607aa98ec6cd949846a0644d7741dda658f0d753b2199/manifest.json"
 REMOTE = "/.local/firstprinciples/rl"
@@ -45,11 +48,55 @@ LIMITS = {
     "4090": {"gpu_memory_fraction": 0.85, "ram_fraction": 0.7, "cpu_capacity": 20},
     "5070ti": {"gpu_memory_fraction": 0.65, "ram_fraction": 0.6, "cpu_capacity": 16},
 }
+# Collection execution per host (the recipe's own workers/tables are ignored):
+# 80% of the cores the host lends, 32 tables each, 2 ms to gather a batch.
+EXECUTION = {
+    "4070": {"workers": 16, "tables": 32, "gather_seconds": 0.002},
+    "4090": {"workers": 16, "tables": 32, "gather_seconds": 0.002},
+    "5070ti": {"workers": 12, "tables": 32, "gather_seconds": 0.002},
+}
+HOSTS = tuple(LIMITS)
+# A recipe trains through ctx; it may not play games or run jobs by itself.
+FORBIDDEN_IMPORTS = (
+    "guided.collection", "guided.environment", "guided.trial", "guided.recipe_jobs", "guided.remote",
+    "guided.sync", "guided.run", "guided.bootstrap", "guided.model_server",
+    "subprocess", "multiprocessing", "importlib",
+)
+FORBIDDEN_NAMES = ("set_per_process_memory_fraction", "__import__")
+# os functions that start processes.
+FORBIDDEN_OS = ("system", "popen", "fork", "forkpty", "posix_spawn", "posix_spawnp")
+
+
+def check_recipe(package):
+    """What in the recipe breaks the line's rules (empty when none)."""
+    package = Path(package)
+    problems = []
+    for path in sorted(package.rglob("*.py")):
+        name = path.relative_to(package)
+        try:
+            tree = ast.parse(path.read_text(), str(path))
+        except SyntaxError as exc:
+            problems.append(f"{name}:{exc.lineno} 语法错误：{exc.msg}")
+            continue
+        for node in ast.walk(tree):
+            modules = []
+            if isinstance(node, ast.Import):
+                modules = [a.name for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
+                modules = [node.module] + [f"{node.module}.{a.name}" for a in node.names]
+            for module in modules:
+                if any(module == f or module.startswith(f + ".") for f in FORBIDDEN_IMPORTS):
+                    problems.append(f"{name}:{node.lineno} 导入了 {module}（只能通过 ctx 训练和采集）")
+            word = node.attr if isinstance(node, ast.Attribute) else node.id if isinstance(node, ast.Name) else None
+            spawn = (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "os"
+                     and (node.attr in FORBIDDEN_OS or node.attr.startswith(("exec", "spawn"))))
+            if word in FORBIDDEN_NAMES or spawn:
+                problems.append(f"{name}:{node.lineno} 用了 {word}（资源上限与执行方式归维护者）")
+    return problems
 
 
 def setup_path(host):
-    legacy = RL / "setup.json"  # the 4070's setup from before the line had two hosts
-    return legacy if host == "4070" and legacy.exists() and not (RL / f"setup-{host}.json").exists() else RL / f"setup-{host}.json"
+    return RL / f"setup-{host}.json"
 
 
 def place_on_host(actor_dir, host_name):
@@ -149,42 +196,50 @@ def training_opponents(host_name):
     return specs, host.remote_path(pool["runtime_path"])
 
 
-def attempt(description, design_start=None, host="4070"):
-    setup_ = E.read_json(setup_path(host))
-    pool = E.load_pool()
-    E.check_harness(pool)  # before an hour of training, not after
-    attempt_id = E.reserve_attempt("rl", host, description)
-    design = time.time() - design_start if design_start else None
+def snapshot(attempt_id):
+    """Freeze the working recipe for a new attempt; training only ever sees this copy."""
     job = RL / "attempts" / attempt_id
     if job.exists():
         shutil.rmtree(job)
     job.mkdir(parents=True)
-    shutil.copytree(E.HERE / "rl" / "recipe", job / "recipe", ignore=shutil.ignore_patterns("__pycache__"))
-    opponents, runtime = training_opponents(host)
+    shutil.copytree(E.SOURCES["rl"], job / "recipe", ignore=shutil.ignore_patterns("__pycache__"))
+
+
+def train(state):
+    """Train the attempt's recipe snapshot on its host; resumable.
+
+    Returns (outcome, spec, training): outcome "ok" with the placed Actor's
+    spec, or "crash" / "invalid" with the reason in training["error"].
+    Raises recipe_jobs.HostFault when the host lost the work (it restarted)
+    and connection errors when the host cannot be reached; harness.line
+    requeues or waits on those, since neither is the attempt's fault.
+    """
+    host, attempt_id = state["host"], state["id"]
+    setup_ = E.read_json(setup_path(host))
+    job = RL / "attempts" / attempt_id
     remote_job = remote.root(host) + "/" + job.relative_to(E.REPO).as_posix()
+    if not (job / "launch-train.json").exists():
+        # A fresh launch (the first, or after the work was lost): nothing left from an earlier run.
+        remote.execute(host, f"import shutil\nshutil.rmtree({remote_job!r}, ignore_errors=True)", timeout=120)
+    opponents, runtime = training_opponents(host)
     task = dict(host=host, remote_dir=remote_job, job_dir=str(job), code=setup_["code"],
-                source_id=setup_["source_id"], recipe=str(job / "recipe"), bundle=remote.root(host) + BUNDLE, runtime=runtime,
-                start_actor=setup_["start_actor"], budget_seconds=BUDGET, hand_budget=HANDS,
-                seed=random.SystemRandom().getrandbits(31), line="rl", limits=LIMITS[host],
+                source_id=setup_["source_id"], recipe=str(job / "recipe"), bundle=remote.root(host) + BUNDLE,
+                runtime=runtime, start_actor=setup_["start_actor"], budget_seconds=BUDGET, hand_budget=HANDS,
+                seed=state["seed"], line="rl", limits=LIMITS[host], execution=EXECUTION[host],
                 opponents=opponents, fetch_actor=False)
-    E.log(f"{attempt_id}: training {f'{HANDS} hands' if HANDS else f'{BUDGET // 60} min'} on {host}")
-    try:
-        result = recipe_jobs.trial_train(task, lambda message: None)
-    except BaseException:
-        E.release_attempt(attempt_id)
-        raise
+    E.log(f"{attempt_id}: training {HANDS} hands on {host}")
+    result = recipe_jobs.trial_train(task, lambda message: None)
     E.atomic_json(job / "training.json", {k: v for k, v in result.items() if k != "metrics"})
+    status = result["status"]
+    training = {"host": host, "state": status.get("state"), "hands": status.get("hands"),
+                "training_seconds": status.get("training_seconds")}
     if not result["ok"]:
-        record = dict(id=attempt_id, line="rl", pool=pool["id"], status="crash", description=description, host=host,
-                      started_at=time.time(), finished_at=time.time(), games=0, score=None, se=None,
-                      best_before=None, diff=None, confirm=None, stats={}, spec=None, dev_blocks={},
-                      design_seconds=design, error=str(result["status"])[:2000])
-        with E.records_path().open("a") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
-        E.release_attempt(attempt_id)
-        return record
+        return "crash", None, training | {"error": str(status.get("error") or status)[-2000:]}
+    if HANDS and (status.get("hands") or 0) > HANDS + HAND_ALLOWANCE:
+        return "invalid", None, training | {
+            "error": f"训练了 {status['hands']:,} 局，超过预算 {HANDS:,} 局加余量 {HAND_ALLOWANCE:,} 局"}
     spec = dict(place_on_host(result["actor"], host), version=attempt_id)
-    return E.evaluate("rl", spec, description, attempt_id, design, host=host)
+    return "ok", spec, training
 
 
 def main():
@@ -193,23 +248,17 @@ def main():
     s = sub.add_parser("setup")
     s.add_argument("source", help="checkpoint path on the host, or the weights sha of an Actor this machine holds")
     s.add_argument("--name", required=True)
-    s.add_argument("--host", default="4070", choices=sorted(LIMITS))
+    s.add_argument("--host", required=True, choices=HOSTS)
     x = sub.add_parser("export", help="export and freeze a model trained elsewhere (e.g. a pool member)")
     x.add_argument("checkpoint")
     x.add_argument("--name", required=True)
     x.add_argument("--host", required=True)
-    a = sub.add_parser("attempt")
-    a.add_argument("description")
-    a.add_argument("--design-start", type=float, required=True)
-    a.add_argument("--host", default="4070", choices=sorted(LIMITS))
     args = parser.parse_args()
     if args.command == "setup":
         print(json.dumps(setup(args.source, args.name, args.host), ensure_ascii=False))
-    elif args.command == "export":
+    else:
         target = remote.root(args.host) + "/.local/firstprinciples/exports/" + args.name
         print(json.dumps(export(args.host, args.checkpoint, args.name, target), ensure_ascii=False))
-    else:
-        print(E.report(attempt(args.description, args.design_start, args.host)))
 
 
 if __name__ == "__main__":

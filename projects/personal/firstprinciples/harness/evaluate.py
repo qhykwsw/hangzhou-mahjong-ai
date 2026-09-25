@@ -13,8 +13,11 @@ played so far stops; one still above the best after 4096 blocks goes to a fresh
 confirmation set, where it and the best each play 2048 blocks and the paired
 difference must have a one-sided 90% lower bound above zero.
 
-The pool also records the hash of this file: once frozen, an evaluation
-refuses to run under changed evaluation code until the user approves resealing.
+The maintainer seals the evaluation conditions (conditions(): the harness
+code, the pool, and each RL host's frozen training framework and start); an
+attempt refuses to start or resume under anything else until the maintainer
+reseals. Shortened settings (FP_STAGES, FP_CONFIRM, FP_RL_HANDS, FP_RL_BUDGET)
+are accepted only with FP_LOCAL, a separate record for pipeline checks.
 
 Games run without sandboxes: the pool's packages are the maintainer's own, so
 each match process plays them in-process (candidate_runtime.InlinePolicy) and
@@ -22,17 +25,14 @@ several tables at once, and model seats share the host's inference service.
 None of that changes a game's outcome, so these are per-host execution
 settings (EVAL_WORKERS, EVAL_TABLES), not part of the pool's identity.
 
-Usage (from projects/personal/firstprinciples; handbooks/common.md has the loop):
+Maintainer commands (from projects/personal/firstprinciples); iteration agents use harness.line:
   python -m harness.evaluate runtime                                    # freeze src/mahjong_ai as a runtime
   python -m harness.evaluate pool --model <weights-sha> --name <name> [--runtime <dir>]  # freeze the pool once
-  python -m harness.evaluate seal                                       # user-approved only
-  python -m harness.evaluate history rule|rl
-  python -m harness.evaluate restore rule|rl
-  python -m harness.evaluate rule "<what changed>" --design-start <epoch>
-  python -m harness.evaluate model <actor-dir> "<what changed>" --line rl --design-start <epoch> [--host 4070|4090|5070ti]
+  python -m harness.evaluate seal                                       # after any change to the conditions
   python -m harness.evaluate reference <research candidate | model name> [--host local|4070|4090|5070ti]
 """
 import argparse
+import contextlib
 import hashlib
 import itertools
 import json
@@ -53,8 +53,25 @@ from mahjong_ai.execution.remote import Dispatcher, RemoteHost  # noqa: E402
 from mahjong_ai.persistence.artifacts import atomic_json, read_json  # noqa: E402
 from mahjong_ai.research.service import Research  # noqa: E402
 
-# FP_LOCAL / FP_STAGES / FP_CONFIRM run a separate, shortened record for pipeline checks.
+class Refused(Exception):
+    """The harness will not do this; the message says why and who can change it."""
+
+
+# FP_LOCAL runs a separate record for pipeline checks; only there may settings be shortened.
 LOCAL = Path(os.environ.get("FP_LOCAL", HERE / ".local"))
+TEST = "FP_LOCAL" in os.environ
+
+
+def override(name, default, cast=int):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    if not TEST:
+        raise SystemExit(f"{name} 只能和 FP_LOCAL 一起用于流程检查，正式记录不接受缩短的设置")
+    return cast(value)
+
+
+
 RESEARCH = REPO / "projects/agent-research"
 MODELS = RESEARCH / ".local/research/models"
 # Each line evaluates where it already is: rules on this machine, RL on the GPU
@@ -68,8 +85,9 @@ EVAL_WORKERS = {"local": 12, "4070": 24, "4090": 20, "5070ti": 16}
 EVAL_TABLES = {"local": 3, "4070": 2, "4090": 2, "5070ti": 2}
 ISOLATION = "none"  # the pool's packages run in the match process (see module docstring)
 POLL_SECONDS = 5  # how often remote job results are checked; each stage ends on a poll
-STAGES = tuple(int(x) for x in os.environ.get("FP_STAGES", "1024,2048,4096").split(","))  # blocks; 4 games each
-CONFIRM_BLOCKS = int(os.environ.get("FP_CONFIRM", "2048"))
+STAGES = override("FP_STAGES", (1024, 2048, 4096), lambda v: tuple(int(x) for x in v.split(",")))  # blocks; 4 games each
+CONFIRM_BLOCKS = override("FP_CONFIRM", 2048)
+JOB_RETRIES = 3  # a job that fails this often (not a host fault) fails the attempt
 REFERENCE_BLOCKS = 1024  # a reference only needs a score with its error bar
 STOP_SE = 2.0
 CONFIRM_Z = 1.2816  # one-sided 90%
@@ -90,10 +108,6 @@ def log(message):
 
 def research_state():
     return Research(RESEARCH).read()
-
-
-def harness_hash():
-    return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 
 def with_timeouts(spec):
@@ -143,7 +157,6 @@ def freeze_pool(model_weights, model_name, runtime=None, replace=False):
             "resources": s["config"]["resources"], "timeouts": TIMEOUTS}
     pool["id"] = hashlib.sha256(json.dumps(pool, sort_keys=True).encode()).hexdigest()[:16]
     pool["dev_seed"] = int(pool["id"], 16)
-    pool["harness"] = harness_hash()
     if not replace and path.exists() and read_json(path)["id"] != pool["id"] and attempts(read_json(path)["id"]):
         raise SystemExit("the current pool already has attempts; a new pool starts a new record (--replace)")
     atomic_json(path, pool)
@@ -154,18 +167,39 @@ def load_pool():
     return read_json(LOCAL / "pool.json")
 
 
+def conditions():
+    """Digest of everything an attempt's score depends on besides the attempt itself.
+
+    The harness code (evaluation, training budget and execution, the loop),
+    the pool, and each RL host's frozen training framework and start Actor.
+    The iteration agent changes none of these; the maintainer reseals after
+    changing any of them.
+    """
+    h = hashlib.sha256()
+    for path in sorted((HERE / "harness").glob("*.py")):
+        h.update(path.name.encode() + b"\0" + path.read_bytes())
+    pool = {k: v for k, v in load_pool().items() if k != "harness"}
+    h.update(json.dumps(pool, sort_keys=True).encode())
+    for path in sorted((LOCAL / "rl").glob("setup-*.json")):
+        s = read_json(path)
+        h.update(json.dumps([path.name, s.get("source_id"), s.get("weights"), s.get("start_actor")]).encode())
+    return h.hexdigest()
+
+
 def seal():
-    """Record the current evaluation code as the pool's; only on the user's explicit approval."""
-    pool = load_pool()
-    pool["harness"] = harness_hash()
-    atomic_json(LOCAL / "pool.json", pool)
-    return pool["harness"]
+    """Accept the current conditions (the maintainer, after changing any of them)."""
+    value = {"conditions": conditions(), "at": time.time()}
+    atomic_json(LOCAL / "seal.json", value)
+    return value["conditions"]
 
 
-def check_harness(pool):
-    if pool.get("harness") != harness_hash():
-        raise SystemExit("评估代码（harness/evaluate.py）与冻结对手池时不一致，拒绝评估。"
-                         "撤回改动；只有用户明确同意时才运行 seal 重新冻结。")
+def check_seal():
+    path = LOCAL / "seal.json"
+    if not path.exists():
+        raise Refused("评估条件还没有封存：维护者确认条件后运行 python -m harness.evaluate seal。")
+    if read_json(path)["conditions"] != conditions():
+        raise Refused("评估条件（harness 代码、对手池或 RL 主机的训练框架与起点）与封存时不一致，拒绝运行。"
+                      "这些归维护者管：撤回改动，或由维护者确认后重新 seal。")
 
 
 def lineups(pool):
@@ -208,26 +242,45 @@ def running(line=None):
     return [r for r in rows if line is None or r["line"] == line]
 
 
-def reserve_attempt(line, host, description):
-    """Next attempt id of the line, under a lock so concurrent attempts never collide."""
+@contextlib.contextmanager
+def attempts_lock():
+    """Serializes attempt ids, host claims and the line leases (harness.line)."""
     import fcntl
 
     LOCAL.mkdir(parents=True, exist_ok=True)
     (LOCAL / "running").mkdir(exist_ok=True)
     with (LOCAL / "attempts.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        # Packages and training receipts are keyed by attempt id, so replacing
-        # a pool must not reuse the names of historical attempts.
-        taken = [r["id"] for r in attempts(line=line)] + [r["id"] for r in running(line)]
-        numbers = [int(i.rsplit("-", 1)[-1]) for i in taken if i.rsplit("-", 1)[-1].isdigit()]
-        attempt_id = f"fp-{line}-{max(numbers, default=-1) + 1:03d}"
+        yield
+
+
+def next_attempt_id(line):
+    """The line's next attempt id; call under attempts_lock().
+
+    Packages, training receipts and job directories are keyed by attempt id,
+    so no id is ever reused: not after a pool replacement, not after an
+    attempt whose record never got written.
+    """
+    taken = [r["id"] for r in attempts(line=line)] + [r["id"] for r in running(line)]
+    taken += [p.name for d in (LOCAL / "attempts", LOCAL / "rl" / "attempts") if d.is_dir() for p in d.iterdir()]
+    prefix = f"fp-{line}-"
+    numbers = [int(i[len(prefix):]) for i in taken if i.startswith(prefix) and i[len(prefix):].isdigit()]
+    return f"{prefix}{max(numbers, default=-1) + 1:03d}"
+
+
+def reserve_attempt(line, host, description, **state):
+    """Reserve the line's next attempt id with its state file (running/<id>.json)."""
+    with attempts_lock():
+        attempt_id = next_attempt_id(line)
         atomic_json(LOCAL / "running" / f"{attempt_id}.json",
-                    dict(id=attempt_id, line=line, host=host, description=description, started_at=time.time()))
+                    dict(id=attempt_id, line=line, host=host, description=description,
+                         started_at=time.time(), **state))
     return attempt_id
 
 
 def release_attempt(attempt_id):
     (LOCAL / "running" / f"{attempt_id}.json").unlink(missing_ok=True)
+    (LOCAL / "running" / f"{attempt_id}.lock").unlink(missing_ok=True)
 
 
 def freeze_rule(attempt_id):
@@ -251,15 +304,7 @@ def frozen_source(record):
     return LOCAL / "rl" / "attempts" / record["id"] / "recipe"
 
 
-def restore(line):
-    """Put the line's best version back in its source directory (after a failed attempt)."""
-    champion = best(load_pool()["id"], line)
-    if champion is None:
-        return None
-    target = SOURCES[line]
-    shutil.rmtree(target)
-    shutil.copytree(frozen_source(champion), target, ignore=shutil.ignore_patterns("__pycache__"))
-    return champion["id"]
+STAGE_NAMES = {"queued": "排队等主机", "training": "训练中", "evaluating": "评估中"}
 
 
 def history(line):
@@ -277,10 +322,16 @@ def history(line):
         lower = f" 确认下界{r['confirm']['lower90']:+.2f}" if r.get("confirm") else ""
         design = "" if r.get("design_seconds") is None else f" 设计{r['design_seconds'] / 60:.0f}分"
         host = f" @{r['host']}" if r.get("host") not in (None, "local") else ""
-        out.append(f"{r['id']} {STATUS[r['status']]}{host} {r['games']}场 {score}{diff}{lower}{design}｜{r['description']}")
+        base = f" 基于{r['base']}" if r.get("base") else ""
+        out.append(f"{r['id']} {STATUS[r['status']]}{host} {r['games']}场 {score}{diff}{lower}{design}{base}｜{r['description']}")
+        if r.get("why"):
+            out.append(f"    假设：{r['why']}")
+        if r.get("error"):
+            out.append(f"    原因：{r['error'][-300:]}")
     for r in running(line):
         minutes = (time.time() - r["started_at"]) / 60
-        out.append(f"{r['id']} 进行中 @{r['host']} {minutes:.0f}分｜{r['description']}")
+        where = f" @{r['host']}" if r.get("host") else ""
+        out.append(f"{r['id']} {STAGE_NAMES.get(r.get('stage'), '进行中')}{where} {minutes:.0f}分｜{r['description']}")
     return "\n".join(out)
 
 
@@ -415,7 +466,7 @@ def _play(pool, attempt_id, spec, blocks, seed, label, host):
         if not dispatcher(host).adopt(job, root):
             dispatcher(host).submit(job, root, task, pool["runtime_path"], env)
     scores, stats = {}, {"timeouts": 0, "fallback_actions": 0, "errors": 0}
-    pending = list(roots)
+    pending, failures = list(roots), {}
     while pending:
         time.sleep(POLL_SECONDS)
         for root in list(pending):
@@ -424,7 +475,17 @@ def _play(pool, attempt_id, spec, blocks, seed, label, host):
                 continue
             value = read_json(path)
             if value.get("status") != "completed":
-                log(f"{root.name} {value.get('status')}: {str(value.get('error'))[:200]}; relaunching")
+                if value.get("status") == "host_fault":
+                    # The host lost the job or cannot be reached: not the attempt's
+                    # fault. Relaunch once the host answers again, however long.
+                    log(f"{root.name} host_fault: {str(value.get('error'))[:200]}; waiting for {host}")
+                    while not dispatcher(host)._reachable():
+                        time.sleep(60)
+                else:
+                    failures[root] = failures.get(root, 0) + 1
+                    if failures[root] >= JOB_RETRIES:
+                        raise RuntimeError(f"评估任务 {root.name} 连续 {JOB_RETRIES} 次失败：{str(value.get('error'))[-1500:]}")
+                    log(f"{root.name} {value.get('status')}: {str(value.get('error'))[:200]}; relaunching")
                 path.unlink()
                 dispatcher(host).submit(f"{attempt_id}/{root.name}", root, read_json(root / "task.json"),
                                         pool["runtime_path"], env)
@@ -448,16 +509,21 @@ def mean_se(values):
     return mean, sd / math.sqrt(len(values))
 
 
-def evaluate(line, spec, description, attempt_id=None, design_seconds=None, host=None):
+def evaluate(line, spec, description, attempt_id=None, design_seconds=None, host=None,
+             confirm_seed=None, extra=None):
     """Play the ladder and, on success, the confirmation set; append the record.
 
     Attempts of a line may run on several hosts at once, so the best version
     is re-read whenever it is compared against: the development blocks are the
     same games for everyone, and a champion that changed during the
     confirmation set replays those fresh walls before the paired test.
+
+    Calling it again with the same attempt id and confirm_seed after an
+    interruption reuses every finished job (harness.line resumes attempts so).
+    ``extra`` joins the record (hypothesis, base version, training receipt).
     """
     pool = load_pool()
-    check_harness(pool)
+    check_seal()
     attempt_id = attempt_id or reserve_attempt(line, host or EVAL_HOST[line], description)
     # A reference (the version on the platform) plays a fixed set and is never compared.
     reference = line == "reference"
@@ -484,7 +550,7 @@ def evaluate(line, spec, description, attempt_id=None, design_seconds=None, host
     if champion is None:
         verdict = "reference" if reference else "keep"
     elif verdict is None:
-        seed = random.SystemRandom().getrandbits(62)
+        seed = confirm_seed or random.SystemRandom().getrandbits(62)
         mine, _ = play(pool, attempt_id, spec, range(CONFIRM_BLOCKS), seed, "confirm", host)
         while True:
             # The best version replays the same fresh walls under its own id.
@@ -507,15 +573,51 @@ def evaluate(line, spec, description, attempt_id=None, design_seconds=None, host
         diff=paired(scores, {int(k): v for k, v in champion["dev_blocks"].items()}, range(stage_blocks))[0] if champion else None,
         confirm=confirm, stats=stats, spec=spec, dev_blocks={str(k): scores[k] for k in sorted(scores)},
         design_seconds=design_seconds,
-    )
-    with records_path().open("a") as f:
-        f.write(json.dumps(record, ensure_ascii=False) + "\n")
-    release_attempt(attempt_id)
+    ) | (extra or {})
+    if verdict == "keep":
+        record["reference"] = against_platform(record)
+    append_record(record)
     return record
 
 
+def append_record(record):
+    """The attempt's one record; its reservation ends with it."""
+    with records_path().open("a") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    release_attempt(record["id"])
+
+
+def platform_entrant():
+    pin = REPO / ".local/competition/entrant.pin"
+    return pin.read_text().strip() if pin.exists() else None
+
+
+def against_platform(record):
+    """A new best version against the version in free play, on their common development blocks.
+
+    The free-play version's reference (or its own attempt record) played the
+    first development blocks; the paired difference there flags a version the
+    user may want to put on the platform. It was selected on these games, so
+    the flag is optimistic; the user decides.
+    """
+    entrant = platform_entrant()
+    if not entrant or entrant == record["id"]:
+        return None
+    rows = [r for r in attempts(record["pool"]) if r["id"] in (entrant, f"ref-{entrant}")
+            and r["status"] in ("keep", "reference")]
+    if not rows:
+        return {"against": entrant, "missing": True}
+    theirs = {int(k): v for k, v in rows[-1]["dev_blocks"].items()}
+    mine = {int(k): v for k, v in record["dev_blocks"].items()}
+    blocks = sorted(set(theirs) & set(mine))
+    diff, se = paired(mine, theirs, blocks)
+    lower = diff - CONFIRM_Z * se
+    return {"against": entrant, "games": len(blocks) * 4, "diff": diff, "se": se,
+            "lower90": lower, "above": lower > 0}
+
+
 STATUS = {"keep": "成功", "discard": "失败", "unconfirmed": "开发集高但未确认",
-          "reference": "参照", "crash": "崩溃"}
+          "reference": "参照", "crash": "崩溃", "invalid": "无效", "cancelled": "已取消"}
 LINE_NAMES = {"rule": "规则线", "rl": "RL 线", "reference": "参照"}
 
 
@@ -534,11 +636,16 @@ def report(record):
     name = LINE_NAMES[record["line"]]
     number = record["id"].rsplit("-", 1)[-1]
     head = f"尝试 {int(number)} · {name}（{record['id']}）" if number.isdigit() else f"{name}（{record['id']}）"
+    where = f"，{record['host']}" if record.get("host") not in (None, "local") else ""
+    training = record.get("training") or {}
+    trained = (f"训练：{training['hands']:,} 局，{training['training_seconds'] / 60:.0f} 分钟"
+               if training.get("hands") and training.get("training_seconds") else None)
     if record["score"] is None:
-        return "\n".join([f"{head}：{status}", f"改动：{record['description']}",
-                          f"原因：{(record.get('error') or '')[:300]}"])
-    lines = [f"{head}：{status}（开发集 {record['games']} 场）",
+        return "\n".join([f"{head}：{status}{f'（{where[1:]}）' if where else ''}", f"改动：{record['description']}",
+                          *([trained] if trained else []), f"原因：{(record.get('error') or '')[-300:]}"])
+    lines = [f"{head}：{status}（开发集 {record['games']} 场{where}）",
              f"改动：{record['description']}",
+             *([trained] if trained else []),
              f"得分：{record['score']:+.2f} ± {record['se']:.2f}"
              + (f"（此前最好 {record['best_before']:+.2f}，配对差 {record['diff']:+.2f}）" if record["best_before"] is not None else "（基线）")]
     if record["confirm"]:
@@ -546,6 +653,13 @@ def report(record):
         lines.append(f"确认集：{c['games']} 场配对差 {c['diff']:+.2f} ± {c['se']:.2f}，90% 下界 {c['lower90']:+.2f}")
     s = record["stats"]
     lines.append(f"超时 {s['timeouts']}，代打 {s['fallback_actions']}，报错 {s['errors']}")
+    ref = record.get("reference")
+    if ref and ref.get("missing"):
+        lines.append(f"自由对战上场版本 {ref['against']} 在当前对手池下没有参照成绩，无法比较")
+    elif ref:
+        verdict = "高于参照线，可以上场" if ref["above"] else "未确定高于参照线"
+        lines.append(f"对照上场版本 {ref['against']}：{ref['games']} 场配对差 {ref['diff']:+.2f} ± {ref['se']:.2f}，"
+                     f"90% 下界 {ref['lower90']:+.2f}，{verdict}")
     lines.append(f"排名：{ranking(record)}")
     return "\n".join(lines)
 
@@ -559,22 +673,11 @@ def main():
     p.add_argument("--name", default="pool-model")
     p.add_argument("--runtime", help="frozen runtime directory (default: the research experiment's)")
     p.add_argument("--replace", action="store_true", help="start a new record even though the current pool has attempts")
-    r = sub.add_parser("rule")
-    r.add_argument("description")
-    m = sub.add_parser("model")
-    m.add_argument("actor")
-    m.add_argument("description")
-    m.add_argument("--line", default="rl")
     ref = sub.add_parser("reference", help="score a research candidate or a pool model as a reference line")
     ref.add_argument("candidate")
     ref.add_argument("--host", default="local", choices=tuple(EVAL_WORKERS))
     ref.add_argument("--weights", help="score an exported model by its weights hash under this name")
-    for sp in (r, m):
-        sp.add_argument("--design-start", type=float, required=True, help="epoch when designing this attempt began")
-    m.add_argument("--host", default=None, choices=tuple(h for h in EVAL_WORKERS if h != "local"))
-    sub.add_parser("seal", help="accept the current evaluation code (only with the user's approval)")
-    for name in ("history", "restore"):
-        sub.add_parser(name).add_argument("line", choices=("rule", "rl"))
+    sub.add_parser("seal", help="accept the current evaluation conditions (maintainer)")
     args = parser.parse_args()
     if args.command == "runtime":
         print(freeze_runtime())
@@ -585,32 +688,19 @@ def main():
     if args.command == "seal":
         print(seal())
         return
-    if args.command == "history":
-        print(history(args.line))
-        return
-    if args.command == "restore":
-        restored = restore(args.line)
-        print(f"已恢复为 {restored}" if restored else "这条线还没有成功的版本，未改动")
-        return
     pool = load_pool()
-    if args.command == "reference":
-        if args.weights:
-            spec = {"family": "model", "version": args.candidate, "parameters": {"weights": args.weights}}
-        elif args.candidate in pool["members"]:
-            spec = {k: v for k, v in pool["members"][args.candidate].items()
-                    if k not in ("action_seconds", "response_seconds")}
-        else:
-            s = research_state()
-            spec = dict(s["candidates"][args.candidate]["spec"], runtime_path=s["candidate_runtime_path"])
+    if args.weights:
+        spec = {"family": "model", "version": args.candidate, "parameters": {"weights": args.weights}}
+    elif args.candidate in pool["members"]:
+        spec = {k: v for k, v in pool["members"][args.candidate].items()
+                if k not in ("action_seconds", "response_seconds")}
+    else:
+        s = research_state()
+        spec = dict(s["candidates"][args.candidate]["spec"], runtime_path=s["candidate_runtime_path"])
+    try:
         record = evaluate("reference", spec, args.candidate, f"ref-{args.candidate}", host=args.host)
-        print(report(record))
-        return
-    line = "rule" if args.command == "rule" else args.line
-    host = getattr(args, "host", None) or EVAL_HOST[line]
-    attempt_id = reserve_attempt(line, host, args.description)
-    design = time.time() - args.design_start
-    spec = freeze_rule(attempt_id) if args.command == "rule" else freeze_model(attempt_id, args.actor)
-    record = evaluate(line, spec, args.description, attempt_id, design, host=host)
+    except Refused as exc:
+        raise SystemExit(str(exc))
     print(report(record))
 
 

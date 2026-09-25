@@ -10,7 +10,7 @@
     rl: { name: "RL 线", color: "var(--blue)" },
     reference: { name: "参照", color: "var(--red)" },
   };
-  const STATUS = { keep: "成功", discard: "失败", unconfirmed: "开发集高但未确认", crash: "崩溃", reference: "参照" };
+  const STATUS = { keep: "成功", discard: "失败", unconfirmed: "开发集高但未确认", crash: "崩溃", invalid: "无效", cancelled: "已取消", reference: "参照" };
   const FULL_GAMES = 16384;
   const time = (s) => new Date(s * 1000).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
   const signed = (v, d = 2) => (v == null ? "—" : (v >= 0 ? "+" : "") + v.toFixed(d));

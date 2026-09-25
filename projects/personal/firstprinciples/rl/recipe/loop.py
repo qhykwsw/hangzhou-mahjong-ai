@@ -94,9 +94,8 @@ def kl_step(actor, params, direction, batches, goal):
 
 def train(ctx):
     cfg = dict(CONFIG)
+    # Workers, tables and batching are fixed per host by the line's harness.
     collect_cfg = {
-        "workers": max(1, int(ctx.resources["cpu_capacity"] * cfg["worker_fraction"])),
-        "tables": cfg["tables"],
         "history_probability": 0.0,
         "critic_features": "recipe.features:critic_features",
         "finish_game": "recipe.returns:finish_game",
@@ -105,8 +104,6 @@ def train(ctx):
     target_rows = cfg["smoke_rows"] if ctx.smoke else cfg["rows"]
     microbatch = int(cfg["microbatch"])
     reserve = 5 if ctx.smoke else 60
-    if ctx.smoke:
-        collect_cfg["tables"] = 1
     rng = np.random.default_rng(ctx.seed)
     actor = ctx.actor
     step, iteration, last = 0, 0, 0.0

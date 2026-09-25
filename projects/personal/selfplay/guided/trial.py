@@ -157,6 +157,7 @@ class Context:
         # budget still caps the trial.
         self.hand_budget = None if smoke else plan.get("hand_budget")
         self.hands = 0
+        self._rows = 0
 
     def time_left(self):
         return self.deadline - time.time()
@@ -200,12 +201,22 @@ class Context:
         known = {k: v for k, v in cfg.items() if k in configuration()}
         extra = {k: v for k, v in cfg.items() if k not in known}
         run_cfg = configuration(**known) | extra
+        # A harness may fix the execution per host (workers, tables, batching);
+        # the recipe's own choices of these are then ignored.
+        run_cfg |= self.plan.get("execution") or {}
+        samples = int(samples)
+        if self.hand_budget is not None:
+            # Near the end of the budget, ask only for the rows the hands left
+            # should yield (at the rows per hand seen so far), so one call
+            # cannot play far past the budget.
+            per_hand = self._rows / self.hands if self.hands else 12.0
+            samples = max(1, min(samples, int(self.hands_left() * per_hand) + 1))
         run_cfg |= {
             # More worker processes than cores only adds memory and contention.
             "workers": max(1, min(int(run_cfg["workers"]), os.cpu_count())),
             "rounds": 16,
             "lookahead": self.actor_config["lookahead"],
-            "samples": int(samples),
+            "samples": samples,
             "seed": self.seed,
             "bc_only": False,
             "deadline": self.deadline,
@@ -239,6 +250,7 @@ class Context:
         )
         # Every game started is played out, so the last collection may overrun the budget.
         self.hands += len(records) * run_cfg["rounds"]
+        self._rows += len(rows)
         with open(self.root / "collection.jsonl", "a") as stream:
             stream.write(json.dumps({"time": time.time(), "iteration": int(iteration), "workers": run_cfg["workers"],
                                      "tables": run_cfg["tables"], **{k: v for k, v in resources.items() if k != "workers"}},

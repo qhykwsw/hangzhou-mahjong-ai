@@ -304,6 +304,8 @@ def trial_train(task, progress, smoke=False):
         "seed": task["seed"],
         "line": task["line"],
         "limits": task.get("limits") or {},
+        # Per-host collection execution fixed by the harness (overrides the recipe's).
+        "execution": task.get("execution") or {},
         "snapshot_seconds": task.get("snapshot_seconds") or [],
         # Frozen evaluation opponents of the trial, with host-side paths.
         "opponents": task.get("opponents") or {},

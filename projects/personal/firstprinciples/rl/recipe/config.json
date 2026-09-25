@@ -5,8 +5,5 @@
   "kl_rows": 20000,
   "microbatch": 256,
   "critic_batch": 256,
-  "critic_learning_rate": 0.0003,
-  "worker_fraction": 0.8,
-  "tables": 32,
-  "gather_seconds": 0.002
+  "critic_learning_rate": 0.0003
 }
