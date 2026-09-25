@@ -4,7 +4,7 @@ Any session of any model drives a line with these commands; nothing depends
 on the conversation that started an attempt:
 
   python -m harness.line wait rule|rl [--minutes 9]   # results, notices, and the next step
-  python -m harness.line start rule|rl "<change>" --why "<hypothesis>" --design-start <epoch>
+  python -m harness.line start rule|rl "<change>" --why "<hypothesis>" --design-start <epoch> [--host <free host>]
   python -m harness.line status rule|rl               # every attempt, the hosts, the lease
   python -m harness.line stop rule|rl                 # leave the loop; attempts run on
 
@@ -115,19 +115,22 @@ def free_hosts(line, probe=True):
     return [h for h in hosts if up[h]]
 
 
-def design_slot(line, probe=True):
-    """(host, None) when a new attempt may start now, else (None, why not)."""
+def design_hosts(line, probe=True):
+    """(the hosts a new attempt may start on now, None), else ([], why not).
+
+    Attempts queued for a redo take the first free hosts.
+    """
     champion = E.best(E.load_pool()["id"], line)
     if champion is None and E.running(line):
-        return None, "第一次尝试（v0）还没有结果，它成为最好版本后才能设计新尝试"
+        return [], "第一次尝试（v0）还没有结果，它成为最好版本后才能设计新尝试"
     free, waiting = free_hosts(line, probe), queued(line)
     if len(free) > len(waiting):
-        return free[len(waiting)], None
+        return free[len(waiting):], None
     if line == "rule":
-        return None, "规则线的尝试还在评估"
+        return [], "规则线的尝试还在评估"
     if waiting:
-        return None, f"{len(waiting)} 个尝试在排队等主机重做，它们优先"
-    return None, "没有空闲的在线主机"
+        return [], f"{len(waiting)} 个尝试在排队等主机重做，它们优先"
+    return [], "没有空闲的在线主机"
 
 
 def host_states(line):
@@ -509,26 +512,30 @@ def wait(line, minutes):
         records = [r for r in E.attempts(pool_id, line) if r["id"] not in done]
         notices = host_notices(line)
         flagged = [r["id"] for r in records if (r.get("reference") or {}).get("above")]
-        host, why_not = design_slot(line)
+        free, why_not = design_hosts(line)
         if flagged:
             E.mark_reported(records)
             return emit(records, notices, f"停下：{'、'.join(flagged)} 高于自由对战的参照线。问用户是否换上；"
                                           "用户同意就运行 promote <编号>，然后继续循环。", line)
-        if host or records or notices or time.time() >= deadline:
+        if free or records or notices or time.time() >= deadline:
             E.mark_reported(records)
-            if host:
+            if free:
                 champion = restore(line)
                 base = (f"本线目录已恢复为最好版本 {champion['id']}" if champion
                         else "还没有最好版本，第一次尝试用本线目录原样（v0）")
-                where = f"空闲主机 {host}；" if line == "rl" else ""
-                step = f"设计：{where}{base}。先读 status 与迭代笔记 {notes_path(line)}，只改一处，然后运行 start。"
+                where, command = "", "start"
+                if line == "rl":
+                    where = (f"空闲主机 {free[0]}，按它的资源设计" if len(free) == 1
+                             else f"空闲主机 {'、'.join(free)}，选一台按它的资源设计") + "（见 status 的主机资源）；"
+                    command = "start 并用 --host 指定这台主机"
+                step = f"设计：{where}{base}。先读 status 与迭代笔记 {notes_path(line)}，只改一处，然后运行 {command}。"
             else:
                 step = f"等待：{why_not}。再次运行 wait。"
             return emit(records, notices, step, line)
         time.sleep(POLL_SECONDS)
 
 
-def start(line, change, why, design_start):
+def start(line, change, why, design_start, host=None):
     claim(line)
     preflight(line)
     champion = E.best(E.load_pool()["id"], line)
@@ -550,9 +557,12 @@ def start(line, change, why, design_start):
         raise E.Refused("不符合迭代线约定（进程、线程与资源归维护者），没有开跑：\n" + "\n".join(problems))
     online(LINE_HOSTS[line])
     with E.attempts_lock():
-        host, why_not = design_slot(line, probe=False)
-        if host is None:
+        free, why_not = design_hosts(line, probe=False)
+        if not free:
             raise E.Refused(f"现在不能开新尝试：{why_not}")
+        host = host or free[0]
+        if host not in free:
+            raise E.Refused(f"{host} 现在不能开新尝试（可用：{'、'.join(free)}）。运行 wait，按可用的主机调整设计。")
         attempt_id = E.next_attempt_id(line)
         now = time.time()
         state = dict(id=attempt_id, line=line, host=host, description=change, why=why,
@@ -573,6 +583,8 @@ def start(line, change, why, design_start):
 def status(line):
     print(E.history(line))
     print("\n".join(row for row in summary(line) if row.startswith("主机")))
+    if line == "rl":
+        print(rl.host_resources())
     path = E.LOCAL / f"lease-{line}.json"
     if path.exists():
         lease = E.read_json(path)
@@ -661,6 +673,7 @@ def main():
     s.add_argument("change", help="one line: what this attempt changes")
     s.add_argument("--why", required=True, help="one or two sentences: the hypothesis behind it")
     s.add_argument("--design-start", type=float, required=True, help="epoch when designing this attempt began")
+    s.add_argument("--host", help="RL: the free host this attempt was designed for (wait lists them)")
     for name in ("status", "stop", "takeover"):
         sub.add_parser(name).add_argument("line", choices=lines)
     h = sub.add_parser("hosts")
@@ -674,7 +687,7 @@ def main():
         if args.command == "wait":
             wait(args.line, args.minutes)
         elif args.command == "start":
-            start(args.line, args.change, args.why, args.design_start)
+            start(args.line, args.change, args.why, args.design_start, args.host)
         elif args.command == "status":
             status(args.line)
         elif args.command == "stop":

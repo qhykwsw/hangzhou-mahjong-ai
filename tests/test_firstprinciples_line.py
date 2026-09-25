@@ -82,19 +82,19 @@ def test_requeued_attempts_take_free_hosts_before_new_designs(harness):
     record(E, id="fp-rl-000")
     E.reserve_attempt("rl", "4070", "busy", stage="training")
     E.reserve_attempt("rl", None, "lost on a restart", stage="queued", next="training")
-    assert line.design_slot("rl") == ("5070ti", None)
+    assert line.design_hosts("rl") == (["5070ti"], None)
     E.reserve_attempt("rl", None, "lost too", stage="queued", next="training")
-    host, why = line.design_slot("rl")
-    assert host is None and "排队" in why
+    hosts, why = line.design_hosts("rl")
+    assert hosts == [] and "排队" in why
     line.hosts("off", "4090")
     assert line.free_hosts("rl") == ["5070ti"]
 
 
 def test_rule_line_starts_with_v0_alone(harness):
     E, _, line = harness
-    assert line.design_slot("rule") == ("local", None)
+    assert line.design_hosts("rule") == (["local"], None)
     E.reserve_attempt("rule", "local", "v0", stage="evaluating")
-    assert line.design_slot("rule")[0] is None
+    assert line.design_hosts("rule")[0] == []
 
 
 def test_rl_hosts_fork_from_the_start_at_once(harness):
@@ -107,7 +107,7 @@ def test_rl_hosts_fork_from_the_start_at_once(harness):
     record(E, id=rl.start_id(E.load_pool()))
     line.preflight("rl")
     E.reserve_attempt("rl", "4070", "one direction", stage="training")
-    assert line.design_slot("rl") == ("4090", None)
+    assert line.design_hosts("rl") == (["4090", "5070ti"], None)
 
 
 def test_source_rules_hold_for_rule_strategies(harness, tmp_path):

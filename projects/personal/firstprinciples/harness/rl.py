@@ -102,6 +102,41 @@ def baseline(host):
     return record
 
 
+def host_resources():
+    """Each host's fixed limits and what its latest training used there, for designing per host."""
+    latest = {}
+    for r in E.attempts(line="rl"):  # in finishing order
+        host = (r.get("training") or {}).get("host")
+        if host in LIMITS and (RL / "attempts" / r["id"] / "training.json").exists():
+            latest[host] = r
+    gib = 2**30
+    rows = ["主机资源（上限由维护者固定，方案运行时从 ctx.resources 读取；峰值取该主机最近一次训练）："]
+    for host in HOSTS:
+        limit, run = LIMITS[host], EXECUTION[host]
+        record = latest.get(host)
+        status = E.read_json(RL / "attempts" / record["id"] / "training.json")["status"] if record else {}
+        caps = status.get("limits") or {}
+        if caps:
+            row = (f"{host}：显存上限 {caps['gpu_limit_bytes'] / gib:.1f} GiB（整卡的 {limit['gpu_memory_fraction']:.0%}）、"
+                   f"内存上限 {caps['ram_limit_bytes'] / gib:.1f} GiB、CPU {limit['cpu_capacity']} 核")
+        else:
+            row = (f"{host}：显存上限为整卡的 {limit['gpu_memory_fraction']:.0%}、内存上限为本机的 {limit['ram_fraction']:.0%}、"
+                   f"CPU {limit['cpu_capacity']} 核")
+        row += f"，采集 {run['workers']} 进程 × {run['tables']} 桌"
+        if not record:
+            rows.append(f"  {row}｜还没有训练回执")
+            continue
+        used = (f"张量峰值 {status.get('gpu_peak_allocated_bytes', 0) / gib:.1f} GiB、"
+                f"分配器保留峰值 {status.get('gpu_peak_reserved_bytes', 0) / gib:.1f} GiB、"
+                f"内存峰值 {status.get('ram_peak_bytes', 0) / gib:.1f} GiB")
+        if status.get("state") == "complete":
+            used += f"，{status['hands'] / 1e4:.1f} 万局用时 {status['training_seconds'] / 60:.0f} 分"
+        else:
+            used += f"，训练{E.STATUS.get(record['status'], record['status'])}（{status.get('reason') or status.get('state')}）"
+        rows.append(f"  {row}｜最近 {record['id']}：{used}")
+    return "\n".join(rows)
+
+
 def setup_path(host):
     return RL / f"setup-{host}.json"
 
