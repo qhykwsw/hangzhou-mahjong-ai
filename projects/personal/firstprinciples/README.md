@@ -38,7 +38,7 @@ cd projects/personal/firstprinciples
 
 - 封存覆盖 `harness/` 全部代码（评估、训练预算与按主机的执行参数、循环）、对手池，以及每台 RL 主机的训练框架快照与起点。
 - 换了对手池就要在新池下重跑参照（上场版本、对手池里的模型）和 `harness.rl baseline`（RL 起点，它同时就是模仿小模型的参照）；没有起点成绩时 RL 线的迭代会停下。
-- 修改 `projects/personal/selfplay/guided/` 后：把 `.local/rl/source` 按其 `source-manifest.json` 的 id 归档到 `.local/rl/sources/<id>`，再对每台主机重新 `setup <起点 sha>`，最后 `seal`。
+- 修改 `projects/personal/selfplay/guided/` 后：把 `.local/rl/source` 按其 `source-manifest.json` 的 id 归档到 `.local/rl/sources/<id>`，再对每台主机重新 `setup <起点 sha>`，最后 `seal`。`setup` 从当前工作区冻结框架（`guided/` 与 `src/`）：工作区里有其他会话未提交的改动时，先用 `git worktree` 取一份干净的 HEAD，把 `recipe_jobs.REPO` 指向它冻结到 `.local/rl/source`，再 `setup`。
 - 往 4070 上传教师包时，清单里登记的文件要全部带上，包括 Mac 的 `.so`，否则 `read_bundle` 会拒绝；每个运行时目录都要在主机上单独编译 `_fast` 扩展。对手池里的大模型是 384/8/8，评估时由对局执行器从 Mac 的模型库自动同步，不要手动往主机拷贝模型。
 - 流程检查：把 `.local/pool.json`、`.local/seal.json` 和 `.local/rl/setup-*.json` 复制到仓库内一个单独的目录，设 `FP_LOCAL` 指向它，再用 `FP_DEV`（开发集局组数，每组 4 场）、`FP_CONFIRM`、`FP_RL_HANDS`、`FP_RL_BUDGET` 缩短场数与训练预算，跑一遍 wait/start。这些缩短的设置只在 `FP_LOCAL` 下被接受，流程检查不提交 Git、不改动自由对战，跑完删掉这个目录。
 
