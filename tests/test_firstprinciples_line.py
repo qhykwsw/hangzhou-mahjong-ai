@@ -163,3 +163,29 @@ def test_one_version_one_record(harness):
     ]
     shown = E.distinct(rows)
     assert [(r["id"], r["games"]) for r in shown] == [("fp-rl-start-x", 16384), ("ref-piao", 16384), ("fp-rl-003", 0)]
+
+
+@pytest.mark.parametrize("new_best_dev, verdict, replayed", [(2.0, "discard", []), (0.5, "keep", ["fp-rl-008"])])
+def test_new_best_during_confirmation_is_first_compared_on_dev(harness, monkeypatch, new_best_dev, verdict, replayed):
+    E, _, _ = harness
+    monkeypatch.setattr(E, "DEV_BLOCKS", 4)
+    monkeypatch.setattr(E, "CONFIRM_BLOCKS", 2)
+    monkeypatch.setattr(E, "check_seal", lambda: None)
+    monkeypatch.setattr(E, "platform_entrant", lambda: None)
+    (E.LOCAL / "pool.json").write_text(json.dumps({"id": "pool-a", "members": {}, "dev_seed": 1}))
+    model = {"family": "model", "parameters": {"weights": "old"}}
+    record(E, id="fp-rl-007", finished_at=1, games=16, spec=model, dev_blocks={str(b): 0.0 for b in range(4)})
+    calls = []
+
+    def play(pool, attempt_id, spec, blocks, seed, label, host):
+        calls.append((attempt_id, label))
+        if label == "confirm":  # another host's attempt becomes the best meanwhile
+            record(E, id="fp-rl-008", finished_at=2, games=16, spec={"parameters": {"weights": "new"}},
+                   dev_blocks={str(b): new_best_dev for b in range(4)})
+        score = 1.0 if attempt_id == "fp-rl-009" else 0.0
+        return {b: score for b in blocks}, {"timeouts": 0, "fallback_actions": 0, "errors": 0}
+
+    monkeypatch.setattr(E, "play", play)
+    result = E.evaluate("rl", {"parameters": {"weights": "mine"}}, "x", "fp-rl-009", host="4070", confirm_seed=5)
+    assert result["status"] == verdict
+    assert [a for a, label in calls if label.startswith("confirm-for-")] == replayed

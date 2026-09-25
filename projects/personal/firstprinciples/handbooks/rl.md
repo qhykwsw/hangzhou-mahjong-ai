@@ -11,6 +11,7 @@
 | 方案约定 | 训练局只通过 `ctx.collect` 打，方案不导入 `guided.collection`、`guided.environment` 这类会打局或跑任务的模块。start 先做静态检查，违规就不开跑 |
 | 主机 | 4070、4090、5070 Ti 各是一个尝试位，harness 分配在线且空闲的主机，训练与评估都在那台主机上完成。训练 100 万局约 40～70 分钟，开发集 16384 场约 12～20 分钟，进入确认集再加差不多的时间 |
 | 快照 | start 把 `rl/recipe/` 冻结到 `.local/rl/attempts/<编号>/recipe`，训练只用这份快照；wait 在设计前用最好版本的快照覆盖 `rl/recipe/` |
+| 训练曲线 | 每次尝试结束后，逐步的训练指标（KL、Critic 拟合度、各段用时等）在 `.local/rl/attempts/<编号>/metrics.jsonl` |
 
 ## 三个尝试位
 

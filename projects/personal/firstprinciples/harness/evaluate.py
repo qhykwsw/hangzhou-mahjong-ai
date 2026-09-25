@@ -11,7 +11,8 @@ Every version (attempt, reference, the RL start) plays the whole development
 set, 4096 blocks (16384 games), so one version has one score. An attempt above
 the best there goes to a fresh confirmation set, where it and the best each
 play 2048 blocks and the paired difference must have a one-sided 90% lower
-bound above zero.
+bound above zero. A best version that changes during the confirmation is
+first compared on the development set, where its scores are on record.
 
 The maintainer seals the evaluation conditions (conditions(): the harness
 code, the pool, and each RL host's frozen training framework and start); an
@@ -606,18 +607,27 @@ def evaluate(line, spec, description, attempt_id=None, design_seconds=None, host
         seed = confirm_seed or random.SystemRandom().getrandbits(62)
         mine, _ = play(pool, attempt_id, spec, range(CONFIRM_BLOCKS), seed, "confirm", host)
         while True:
+            current = best(pool["id"], line)
+            if current["id"] != champion["id"]:
+                # A new best version appeared meanwhile. Its development scores are
+                # on record: the attempt must lead it there before it is worth
+                # replaying the fresh walls for.
+                champion = current
+                diff, se = paired(scores, {int(k): v for k, v in champion["dev_blocks"].items()}, range(DEV_BLOCKS))
+                log(f"{attempt_id}: best version is now {champion['id']}; dev diff {diff:+.3f} ± {se:.3f}")
+                if diff <= 0:
+                    verdict = "discard"
+                    break
             # The best version replays the same fresh walls under its own id.
             theirs, _ = play(pool, champion["id"], champion["spec"], range(CONFIRM_BLOCKS), seed,
                              f"confirm-for-{attempt_id}", host)
-            current = best(pool["id"], line)
-            if current["id"] == champion["id"]:
+            if best(pool["id"], line)["id"] == champion["id"]:
                 break
-            log(f"{attempt_id}: best version changed to {current['id']} meanwhile; confirming against it")
-            champion = current
-        diff, se = paired(mine, theirs, range(CONFIRM_BLOCKS))
-        confirm = {"seed": seed, "games": CONFIRM_BLOCKS * 4, "diff": diff, "se": se,
-                   "lower90": diff - CONFIRM_Z * se, "against": champion["id"]}
-        verdict = "keep" if diff - CONFIRM_Z * se > 0 else "unconfirmed"
+        if verdict is None:
+            diff, se = paired(mine, theirs, range(CONFIRM_BLOCKS))
+            confirm = {"seed": seed, "games": CONFIRM_BLOCKS * 4, "diff": diff, "se": se,
+                       "lower90": diff - CONFIRM_Z * se, "against": champion["id"]}
+            verdict = "keep" if diff - CONFIRM_Z * se > 0 else "unconfirmed"
     score, se = mean_se(scores[k] for k in range(DEV_BLOCKS))
     record = dict(
         id=attempt_id, line=line, pool=pool["id"], status=verdict, description=description, host=host,
