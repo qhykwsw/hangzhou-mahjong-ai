@@ -7,5 +7,7 @@
   "critic_batch": 256,
   "critic_learning_rate": 0.0003,
   "resident_rows": true,
-  "gradient_graphs": true
+  "gradient_graphs": true,
+  "distill_steps": 5,
+  "distill_learning_rate": 0.0001
 }

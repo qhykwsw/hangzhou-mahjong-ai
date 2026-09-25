@@ -101,6 +101,37 @@ def kl_step(actor, params, direction, batches, goal):
     return {"kl": kl, "step_norm": eta * norm, "hu_before": before, "hu_after": after}
 
 
+def distill(actor, rows, opt, size, device, rng, *, batch_source=None):
+    """One epoch of cross entropy toward the teacher's label on the learner's own states.
+
+    DAgger: the learner played these rows with its own policy, so its mistakes
+    lead to states behaviour cloning never visited; the teacher labels them.
+    Each batch's loss is taken before that batch is trained on (fresh rows).
+    """
+    teacher = np.array([r["teacher"] for r in rows])
+    order = rng.permutation(np.flatnonzero(teacher >= 0))
+    actor.eval()
+    total_ce, agree = 0.0, 0.0
+    for s in range(0, len(order), size):
+        idx = order[s : s + size]
+        mb = (batch_source.batch(idx) if batch_source is not None
+              else make_batch([rows[i] for i in idx], device))
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            logits = actor(*actor_args(mb))
+        logp = masked_log_probs(logits, mb["mask"])
+        label = torch.as_tensor(teacher[idx], device=device)
+        loss = -logp.gather(1, label[:, None]).mean()
+        opt.zero_grad(set_to_none=True)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(actor.parameters(), 1.0)
+        opt.step()
+        total_ce += float(loss) * len(idx)
+        agree += float((logp.argmax(-1) == label).sum())
+    opt.zero_grad(set_to_none=True)
+    n = max(1, len(order))
+    return {"labeled": len(order), "fresh_ce": total_ce / n, "fresh_agreement": agree / n}
+
+
 def train(ctx):
     cfg = dict(CONFIG)
     # Workers, tables and batching are fixed per host by the line's harness.
@@ -115,17 +146,22 @@ def train(ctx):
     reserve = 5 if ctx.smoke else 60
     rng = np.random.default_rng(ctx.seed)
     actor = ctx.actor
+    # The first distill_steps rollouts only distil the teacher on the learner's
+    # own states (DAgger, where imitation gains fastest); the rest only take
+    # policy-gradient steps. Interleaving the two made each undo the other.
+    opt = torch.optim.Adam(actor.parameters(), lr=float(cfg["distill_learning_rate"]), eps=1e-5)
     step, iteration, last = 0, 0, 0.0
     hands = lambda: ctx.hands_left() is None or ctx.hands_left() > 0  # noqa: E731
     while hands() and ctx.time_left() > 1.15 * last + reserve:
         began = time.time()
         rows = []
+        distilling = step < int(cfg["distill_steps"])
         with InferenceSession(actor) as session:
             while len(rows) < target_rows and hands() and ctx.time_left() > reserve:
                 iteration += 1
                 got, _, _ = ctx.collect(
                     actor, collect_cfg, samples=min(40000, target_rows), iteration=iteration,
-                    inference_session=session,
+                    labels=distilling, inference_session=session,
                 )
                 rows += got
         if not rows or (len(rows) < target_rows and hands()):
@@ -136,6 +172,15 @@ def train(ctx):
         batch_source = (resident_rows(rows, ctx.device, ctx.resources["gpu_limit_bytes"])
                         if cfg.get("resident_rows", False) else None)
         packing_seconds = time.time() - packing_started
+        if distilling:
+            stats = distill(actor, rows, opt, microbatch, ctx.device, rng, batch_source=batch_source)
+            count = len(rows)
+            del rows, batch_source
+            ctx.save_actor(actor)
+            last = time.time() - began
+            ctx.log(step=step, rows=count, **stats, collect_seconds=collected, step_seconds=last,
+                    packing_seconds=packing_seconds)
+            continue
         weights, stats = advantages(
             rows, cfg, rng, ctx.device, ctx.seed + 7919 * step, batch_source=batch_source,
         )
