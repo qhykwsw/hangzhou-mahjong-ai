@@ -7,7 +7,8 @@ collecting e fan per draw on average, is worth e / (1 - (1 - p)(1 - Q)) just
 before my draw. One step from waiting, each improving draw leads to the best
 waiting hand it allows; further away a generic discount per step stands in.
 A win also cancels the payment I would owe to someone else's win, SAVED fan.
-When the hand is already baotou (every draw wins), a win now is traded for a
+Passing on a discard lets the opponents between its discarder and me draw
+before my turn, so a call or kong also takes their draws away. When the hand is already baotou (every draw wins), a win now is traded for a
 doubling that keeps the certain win: a kong whose replacement draw still wins,
 else a white discard that scores piao.
 """
@@ -20,6 +21,7 @@ from mahjong_ai.domain.rules import WHITE, is_baotou
 from mahjong_ai.sdk.shape import analyze, remaining_tiles
 
 Q = 0.15  # an opponent self-draws during the three draws between two of mine
+DRAW_RISK = 1 - (1 - Q) ** (1 / 3)  # the same, for one opponent's draw
 SAVED = 0.4  # my win cancels the payment to another winner, in fan units
 ONE_STEP = 0.22  # typical value of a hand one step from waiting
 FAR_STEP = 0.6  # discount for each further step
@@ -100,7 +102,12 @@ class Race:
         if action.action == "hu":
             return obs.hu_fan + SAVED
         if action.action == "pass":
-            return waiting_value(
+            # Passing lets everyone between the discarder and me draw first.
+            discarder = next(
+                e.seat for e in reversed(obs.public_events) if e.kind == "discard"
+            )
+            ahead = (obs.stage.seat - discarder - 1) % 4
+            return (1 - DRAW_RISK) ** ahead * waiting_value(
                 tuple(hand), opened, available, obs.chain_count, obs.piao_count
             )
         if action.action == "discard":
