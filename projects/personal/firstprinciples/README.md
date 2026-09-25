@@ -14,6 +14,11 @@
 - 开发集阶梯：4096 → 8192 → 16384 场，低于当前最好成绩两倍误差以上即停。
 - 确认集：开发集超过最好成绩后，换全新牌墙与最好版本各打 8192 场，配对差单侧 90% 下界大于 0 才算成功。
 
+训练采集的推理批次按主机校准，设置在 `harness/rl.py` 的
+`COLLECTION_EXECUTION`，随训练计划冻结。历史长度分组只减少 padding，
+细化批次大小只减少空行；两者都保留完整观察、训练量和原有进程／桌数。
+CPU 瓶颈与 GPU 瓶颈的主机使用各自实测的配置。
+
 ```bash
 cd projects/personal/firstprinciples
 ../../../.venv/bin/python -m harness.evaluate runtime                                       # 把 src/mahjong_ai 冻结为运行时

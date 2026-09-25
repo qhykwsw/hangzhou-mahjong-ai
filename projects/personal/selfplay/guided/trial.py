@@ -200,6 +200,10 @@ class Context:
         known = {k: v for k, v in cfg.items() if k in configuration()}
         extra = {k: v for k, v in cfg.items() if k not in known}
         run_cfg = configuration(**known) | extra
+        execution = self.plan.get("collection_execution") or {}
+        if set(execution) - {"inference_history_band", "fine_graph_batches"}:
+            raise ValueError("unknown collection execution option")
+        run_cfg.update(execution)
         run_cfg |= {
             # More worker processes than cores only adds memory and contention.
             "workers": max(1, min(int(run_cfg["workers"]), os.cpu_count())),

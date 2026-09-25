@@ -51,6 +51,11 @@
 | `critic_features` | `"模块:函数"`，在对局进程里对每个学习决策调用 `f(state, seat)`，返回的数组并入该行；`state` 是完整的 HandState，可读对手手牌和按摸牌顺序排列的牌墙 |
 | `finish_game` | `"模块:函数"`，每整场结束时在对局进程里调用 `f(rows, cfg)`，必须给每行写入 `adv` 和 `ret` |
 
+训练计划可通过 `collection_execution` 固定按主机校准的推理执行参数：
+`inference_history_band` 按完整历史长度分组，`fine_graph_batches` 细化 CUDA
+Graph 的批次大小。它们覆盖同名 `cfg` 项，只减少 padding，不截断历史、
+缩减训练量或改变并发资源。自定义采样／价值 hook 保持原有的批次组合。
+
 `hooks` 在主进程里对学习座位生效：
 
 - `hooks["values"](rows) -> 数组`：给出每行的价值估计，写入 `value`。采集时 Critic 为空，所以使用 PPO 的方案必须提供它。

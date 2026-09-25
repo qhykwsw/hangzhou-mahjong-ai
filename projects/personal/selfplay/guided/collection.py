@@ -10,6 +10,19 @@ import numpy as np
 from .environment import worker
 
 
+def request_groups(pending, history_band=0):
+    """Group independent Actor requests without trimming or copying their rows."""
+    if not isinstance(history_band, int) or history_band < 0:
+        raise ValueError("history band must be a nonnegative integer")
+    groups = {}
+    for item in pending:
+        request = item[2]
+        length = max(1, len(request["row"]["events"]))
+        band = (length + history_band - 1) // history_band if history_band else 0
+        groups.setdefault((request["slot"], band), []).append(item)
+    return [(slot, group) for (slot, _), group in sorted(groups.items())]
+
+
 def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None):
     """Play games in CPU workers; the parent runs every network.
 
@@ -32,10 +45,15 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
     # ops; every other path is the fixed decision, which the graphs replay
     # straight from the rows.
     graphs = (
-        ActorGraphs()
+        ActorGraphs(
+            fine_batches=cfg.get("fine_graph_batches", False),
+            history_band=cfg.get("inference_history_band", 0) if not hooks else 0,
+        )
         if device.type == "cuda" and cfg.get("cuda_graphs", True) and not cfg["bc_only"]
         and "sample" not in hooks and (critic is None or "values" in hooks) else None
     )
+    # Custom hooks keep their original batches; they may couple their rows.
+    history_band = graphs.history_band if graphs else 0
     inference_actor = actor
     if graphs is not None and command["kind"] != "evaluate" and cfg.get("precast_collection", True):
         import copy
@@ -145,8 +163,7 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
                     conn.send(response)
                 continue
             groups = []
-            for slot in sorted({item[2]["slot"] for item in pending}):
-                group = [item for item in pending if item[2]["slot"] == slot]
+            for slot, group in request_groups(pending, history_band):
                 batch_sizes.append(len(group))
                 mark = time.perf_counter()
                 model = inference_actor if slot == "model:current" else history[slot]
@@ -219,6 +236,8 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
                 "inference_batches": len(inference_sizes) or len(batch_sizes),
                 "inference_requests": sum(inference_sizes) or sum(batch_sizes),
                 "inference_batch_max": max(inference_sizes or batch_sizes, default=0),
+                "inference_history_band": history_band,
+                "inference_batch_buckets": None if graphs is None else graphs.batch_buckets,
                 "parent_seconds": {k: round(v, 2) for k, v in timers.items()},
                 "graphs": None if graphs is None else len(graphs.graphs),
             },

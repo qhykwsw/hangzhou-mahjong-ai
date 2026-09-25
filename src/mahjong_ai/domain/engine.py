@@ -24,6 +24,26 @@ ENGINE_VERSION = "hangzhou-local-v7"
 POLICY_EVENT_KINDS = frozenset(("draw", "discard", "chi", "peng", "gang", "hand_ended"))
 
 
+_PASS_ACTION = Action("pass")
+_HU_ACTION = Action("hu")
+_DISCARD_ACTIONS = tuple(Action("discard", tile) for tile in range(34))
+_PENG_ACTIONS = tuple(Action("peng", tile) for tile in range(34))
+_GANG_ACTIONS = {
+    kind: tuple(Action("gang", tile, kind=kind) for tile in range(34))
+    for kind in ("concealed", "added", "exposed")
+}
+_CHI_ACTIONS = tuple(
+    tuple(
+        (used, Action("chi", tile, used))
+        for start in range(
+            max(tile // 9 * 9, tile - 2), min(tile, tile // 9 * 9 + 6) + 1
+        )
+        for used in (tuple(x for x in range(start, start + 3) if x != tile),)
+    )
+    for tile in range(27)
+)
+
+
 def derive_seed(*parts) -> int:
     raw = ":".join(map(str, parts)).encode()
     return int.from_bytes(hashlib.sha256(raw).digest()[:8], "big")
@@ -151,55 +171,54 @@ class HandState:
             return ()
         s = self.turn
         h = self.hands[s]
-        c = counts(h)
         catch_restricted = self.catch_owner is not None and self.catch_owner != s
         if self.phase == "draw":
+            c = counts(h)
             result = []
             if self.current_fan():
-                result.append(Action("hu"))
+                result.append(_HU_ACTION)
             if catch_restricted:
                 if self.drawn is not None:
-                    result.append(Action("discard", self.drawn))
+                    result.append(_DISCARD_ACTIONS[self.drawn])
             else:
-                result.extend(Action("discard", t) for t in sorted(set(h)))
+                result.extend(_DISCARD_ACTIONS[t] for t in sorted(set(h)))
             if len(self.wall) > 20:
                 result.extend(
-                    Action("gang", t, kind="concealed") for t in range(33) if c[t] == 4
+                    _GANG_ACTIONS["concealed"][t] for t in range(33) if c[t] == 4
                 )
                 if not catch_restricted:
                     result.extend(
-                        Action("gang", m.tiles[0], kind="added")
+                        _GANG_ACTIONS["added"][m.tiles[0]]
                         for m in self.melds[s]
                         if m.kind == "peng" and c[m.tiles[0]]
                     )
             return tuple(result)
-        result = [Action("pass")]
+        result = [_PASS_ACTION]
         t = self.discarded
         if t is None or t == WHITE or catch_restricted:
             return tuple(result)
         if self.phase == "response_peng":
-            if c[t] >= 2:
-                result.append(Action("peng", t))
-            if c[t] == 3 and len(self.wall) > 20:
-                result.append(Action("gang", t, kind="exposed"))
+            copies = h.count(t)
+            if copies >= 2:
+                result.append(_PENG_ACTIONS[t])
+            if copies == 3 and len(self.wall) > 20:
+                result.append(_GANG_ACTIONS["exposed"][t])
         elif (
             self.phase == "response_chi"
             and t < 27
             and sum(m.kind == "chi" for m in self.melds[s]) < 2
         ):
-            suit = t // 9 * 9
-            for start in range(max(suit, t - 2), min(t, suit + 6) + 1):
-                used = tuple(x for x in range(start, start + 3) if x != t)
-                if all(c[x] for x in used):
-                    result.append(Action("chi", t, used))
+            c = counts(h)
+            for used, action in _CHI_ACTIONS[t]:
+                if c[used[0]] and c[used[1]]:
+                    result.append(action)
         return tuple(result)
 
     def _sync_views(self):
         events = self.events
-        if (
-            getattr(self, "_views_source", None) is not events
-            or getattr(self, "_views_len", 0) > len(events)
-        ):
+        if getattr(self, "_views_source", None) is not events or getattr(
+            self, "_views_len", 0
+        ) > len(events):
             self._views = [[], [], [], []]
             self._views_source = events
             self._views_len = 0
@@ -217,7 +236,9 @@ class HandState:
             scores = tuple(event.scores)
             visible = (
                 event
-                if tile == event.tile and tiles == event.tiles and scores == event.scores
+                if tile == event.tile
+                and tiles == event.tiles
+                and scores == event.scores
                 else replace(event, tile=tile, tiles=tiles, scores=scores)
             )
             hidden = None

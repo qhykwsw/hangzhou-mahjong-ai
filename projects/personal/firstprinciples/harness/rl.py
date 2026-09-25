@@ -45,6 +45,13 @@ LIMITS = {
     "4090": {"gpu_memory_fraction": 0.85, "ram_fraction": 0.7, "cpu_capacity": 20},
     "5070ti": {"gpu_memory_fraction": 0.65, "ram_fraction": 0.6, "cpu_capacity": 16},
 }
+# Inference scheduling only; each host keeps the same training workload and
+# worker/table counts. CPU-bound hosts retain the coarser batches.
+COLLECTION_EXECUTION = {
+    "4070": {"inference_history_band": 64, "fine_graph_batches": True},
+    "4090": {},
+    "5070ti": {},
+}
 
 
 def setup_path(host):
@@ -166,7 +173,8 @@ def attempt(description, design_start=None, host="4070"):
                 source_id=setup_["source_id"], recipe=str(job / "recipe"), bundle=remote.root(host) + BUNDLE, runtime=runtime,
                 start_actor=setup_["start_actor"], budget_seconds=BUDGET, hand_budget=HANDS,
                 seed=random.SystemRandom().getrandbits(31), line="rl", limits=LIMITS[host],
-                opponents=opponents, fetch_actor=False)
+                opponents=opponents, fetch_actor=False,
+                collection_execution=COLLECTION_EXECUTION[host])
     E.log(f"{attempt_id}: training {f'{HANDS} hands' if HANDS else f'{BUDGET // 60} min'} on {host}")
     try:
         result = recipe_jobs.trial_train(task, lambda message: None)

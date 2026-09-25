@@ -304,6 +304,7 @@ def trial_train(task, progress, smoke=False):
         "seed": task["seed"],
         "line": task["line"],
         "limits": task.get("limits") or {},
+        "collection_execution": task.get("collection_execution") or {},
         "snapshot_seconds": task.get("snapshot_seconds") or [],
         # Frozen evaluation opponents of the trial, with host-side paths.
         "opponents": task.get("opponents") or {},
