@@ -46,6 +46,8 @@ def env(code, extra=None):
         "MKL_NUM_THREADS": "1",
         "OPENBLAS_NUM_THREADS": "1",
         "PYTHONUNBUFFERED": "1",
+        # torch.compile compiles in-process instead of in a pool of workers.
+        "TORCHINDUCTOR_COMPILE_THREADS": "1",
     }
 
 
