@@ -8,7 +8,8 @@ before my draw. One step from waiting, each improving draw leads to the best
 waiting hand it allows; further away a generic discount per step stands in.
 A win also cancels the payment I would owe to someone else's win, SAVED fan.
 Passing on a discard lets the opponents between its discarder and me draw
-before my turn, so a call or kong also takes their draws away. When the hand is already baotou (every draw wins), a win now is traded for a
+before my turn, so a call or kong also takes their draws away. Discards of
+equal value keep the hand whose tiles connect to more live tiles. When the hand is already baotou (every draw wins), a win now is traded for a
 doubling that keeps the certain win: a kong whose replacement draw still wins,
 else a white discard that scores piao.
 """
@@ -24,8 +25,9 @@ Q = 0.15  # an opponent self-draws during the three draws between two of mine
 DRAW_RISK = 1 - (1 - Q) ** (1 / 3)  # the same, for one opponent's draw
 SAVED = 0.4  # my win cancels the payment to another winner, in fan units
 ONE_STEP = 0.22  # typical value of a hand one step from waiting
-FAR_STEP = 0.6  # discount for each further step
+FAR_STEP = 0.45  # discount for each further step
 KONG_TILES = {"concealed": 4, "exposed": 3, "added": 1}
+TIE = 1e-7  # weight of shape potential, which only separates equal values
 
 
 def race(p, e):
@@ -64,6 +66,18 @@ def tenpai_value(hand, opened, available):
     if row["shanten"] > 0:
         return 0.0
     return waiting_value(hand, opened, available)
+
+
+def potential(hand, available):
+    """Live tiles that pair with or sit within two of each kept tile."""
+    total = 0
+    for tile in hand:
+        if tile >= 27:
+            total += available[tile]
+            continue
+        low, high = tile - tile % 9, tile - tile % 9 + 8
+        total += sum(available[t] for t in range(max(low, tile - 2), min(high, tile + 2) + 1))
+    return total
 
 
 def best_discard_value(hand, opened, available):
@@ -116,7 +130,9 @@ class Race:
                 chain, piao = obs.chain_count + 1, obs.piao_count + 1
             else:
                 chain, piao = 0, 0
-            return (1 - Q) * waiting_value(rest, opened, available, chain, piao)
+            return (1 - Q) * waiting_value(
+                rest, opened, available, chain, piao
+            ) + TIE * potential(rest, available)
         if action.action in ("peng", "chi"):
             used = action.tiles if action.action == "chi" else (action.tile,) * 2
             for tile in used:
