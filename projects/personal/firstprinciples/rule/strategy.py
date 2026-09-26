@@ -4,7 +4,9 @@ Only self-draws win, so a hand is worth the fan it can collect times its chance
 of drawing it before an opponent does. Between two of my draws the three
 opponents win with chance Q. A waiting hand that wins on a fraction p of draws,
 collecting e fan per draw on average, is worth e / (1 - (1 - p)(1 - Q)) just
-before my draw; a wait holding a white also counts the draws that let a discard
+before my draw, where Q for a waiting hand rises as the wall runs down (the
+others close in; measured waits are worth more early and less late than a
+fixed Q says); a wait holding a white also counts the draws that let a discard
 turn it into baotou, when that beats winning on them at once. One step from waiting, each improving draw leads to the best
 waiting hand it allows; further away a generic discount per step stands in.
 A win also cancels the payment I would owe to someone else's win, SAVED fan.
@@ -31,6 +33,8 @@ ONE_STEP = 0.22  # typical value of a hand one step from waiting
 FAR_STEP = 0.45  # discount for each further step
 KONG_TILES = {"concealed": 4, "exposed": 3, "added": 1}
 LAST_WALL = 20  # the hand is drawn once the wall is down to this
+Q_EARLY = 0.10
+Q_LATE = 0.30
 TIE = 1e-7  # weight of shape potential, which only separates equal values
 
 
@@ -42,8 +46,13 @@ def repeat(stay, draws):
     return (1 - stay**draws) / (1 - stay)
 
 
+def tenpai_hazard(draws):
+    """Opponents close in as the wall runs down: the race gets harder late."""
+    return min(Q_LATE, max(Q_EARLY, 0.35 - 0.018 * draws))
+
+
 def race(p, e, draws=LONG):
-    return e * repeat((1 - p) * (1 - Q), draws)
+    return e * repeat((1 - p) * (1 - tenpai_hazard(draws)), draws)
 
 
 @lru_cache(maxsize=200000)
@@ -77,7 +86,7 @@ def waiting_value(hand, opened, available, chain=0, piao=0, draws=LONG):
             elif best:
                 gain += available[tile] * (1 - Q) * best
                 reach += available[tile]
-        stay = (1 - Q) * (1 - (copies + reach) / unseen)
+        stay = (1 - tenpai_hazard(draws)) * (1 - (copies + reach) / unseen)
         return gain / unseen * repeat(stay, draws)
     u = row["ukeire"] / unseen
     if row["shanten"] == 1:
