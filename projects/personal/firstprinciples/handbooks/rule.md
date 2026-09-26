@@ -14,4 +14,4 @@
 
 ## 自由对战上场版本
 
-自由对战由常驻脚本 `.local/competition/free_play_strongest.py` 负责，上场版本写在 `.local/competition/entrant.pin`。两条线的每个新的最好版本，都会在汇报里对照当前上场版本（开发集上的配对差）。标出「高于参照线，可以上场」时，wait 会让你停下问用户；用户同意后运行 `promote <编号>`，常驻脚本在下一房开始时换上。
+自由对战由常驻脚本 `.local/competition/free_play_strongest.py` 负责，上场版本写在 `.local/competition/entrant.pin`。两条线的每个新的最好版本，都会在汇报里对照当前上场版本（开发集上的配对差）。标出「高于参照线，可以上场」时，wait 在【待用户决定】里问用户，你发出后照常循环；用户同意后运行 `promote <编号>`，常驻脚本在下一房开始时换上。

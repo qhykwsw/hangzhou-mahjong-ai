@@ -475,12 +475,14 @@ def notes_path(line):
     return E.LOCAL / "notes" / f"{line}.md"
 
 
-def emit(records, notices, step, line):
+def emit(records, notices, step, line, ask=None):
     blocks = []
     if records:
         blocks.append("【汇报】（原样发给用户）\n" + "\n\n".join(E.report(r) for r in records))
     if notices:
         blocks.append("【通知】（原样发给用户）\n" + "\n".join(notices))
+    if ask:
+        blocks.append("【待用户决定】（原样发给用户，然后照常循环）\n" + ask)
     blocks.append(f"【下一步】{step}")
     try:
         blocks.append("【状态】\n" + "\n".join(summary(line)))
@@ -512,11 +514,10 @@ def wait(line, minutes):
         records = [r for r in E.attempts(pool_id, line) if r["id"] not in done]
         notices = host_notices(line)
         flagged = [r["id"] for r in records if (r.get("reference") or {}).get("above")]
+        # The user decides whether it goes on the platform; the line does not wait for the answer.
+        ask = (f"{flagged[-1]} 高于自由对战现在的上场版本，可以换上。要换上吗？同意的话回复，"
+               f"我运行 promote {int(flagged[-1].rsplit('-', 1)[-1])}。" if flagged else None)
         free, why_not = design_hosts(line)
-        if flagged:
-            E.mark_reported(records)
-            return emit(records, notices, f"停下：{'、'.join(flagged)} 高于自由对战的参照线。问用户是否换上；"
-                                          "用户同意就运行 promote <编号>，然后继续循环。", line)
         if free or records or notices or time.time() >= deadline:
             E.mark_reported(records)
             if free:
@@ -531,7 +532,7 @@ def wait(line, minutes):
                 step = f"设计：{where}{base}。先读 status 与迭代笔记 {notes_path(line)}，只改一处，然后运行 {command}。"
             else:
                 step = f"等待：{why_not}。再次运行 wait。"
-            return emit(records, notices, step, line)
+            return emit(records, notices, step, line, ask)
         time.sleep(POLL_SECONDS)
 
 
