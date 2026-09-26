@@ -17,7 +17,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import quote
 
@@ -156,9 +156,12 @@ class PlatformClient:
                 )
             return json.loads(data) if data else {}
 
-    def request(self, method, path, body=None, priority=0):
+    def request(self, method, path, body=None, priority=0, retries=None):
+        """``retries`` overrides the client's own backoff for one call; 0 hands
+        every failure straight back to a caller that polls on its own clock."""
+        retries = self.retries if retries is None else retries
         self.local.throttled = 0
-        for attempt in range(self.retries + 1):
+        for attempt in range(retries + 1):
             # 只有 /state 轮询计入本地预算：官方额度也是按轮询算的，动作提交笔数少、
             # 卡着窗口，排进同一队列会让每次拉取都慢一档——实测错过率反而涨到 7%。
             if "/state?" in path:
@@ -176,7 +179,7 @@ class PlatformClient:
                     },
                 )
             except urllib.error.HTTPError as exc:
-                if exc.code == 429 and attempt < self.retries:
+                if exc.code == 429 and attempt < retries:
                     self.local.throttled += 1
                     try:
                         delay = float(exc.headers.get("Retry-After", 2**attempt))
@@ -194,7 +197,7 @@ class PlatformClient:
                     )
                 except (ValueError, TypeError, AttributeError):
                     code = ""
-                if exc.code == 404 and code == "TOURNAMENT_GONE" and attempt < self.retries:
+                if exc.code == 404 and code == "TOURNAMENT_GONE" and attempt < retries:
                     # Guide v35: the room exists but did not answer in time (busy at
                     # start or settlement); the endpoints concerned are idempotent,
                     # so retry. TOURNAMENT_NOT_FOUND (or no code) is permanent.
@@ -203,7 +206,7 @@ class PlatformClient:
                 raise ApiError(exc.code, code) from None
             except (urllib.error.URLError, TimeoutError, ConnectionError):
                 # A POST may have been accepted: caller must resync, never replay it blindly.
-                if method != "GET" or attempt == self.retries:
+                if method != "GET" or attempt == retries:
                     raise ConnectionError(
                         "platform connection failed; action outcome may be unknown"
                     ) from None
@@ -553,6 +556,12 @@ DIAG_COUNTERS = (
 )
 # Seconds between two warm-up connections, so the warm-up is not itself a burst.
 WARM_SPACING = 0.03
+# Seconds between room polls while the deal may come any moment (from START_LEAD
+# seconds before the scheduled start; an auto room starts when its fourth seat
+# fills).  The deal opens the dealer's 3 s discard window on every table at once
+# and the client only learns of it on its next poll.
+START_POLL = 0.25
+START_LEAD = 10.0
 # Seconds after the peng deadline at which the silent chi window is looked for.
 CHI_CHECK_DELAYS = (0.12, 0.4)
 # Seconds a lone pre-deadline frame waits for the discard that follows a peng.
@@ -699,10 +708,14 @@ class TournamentRunner:
         if not 1 <= workers <= 16:
             raise ValueError("workers must be 1..16")
         self.client, self.policy, self.adapter = client, policy, adapter
+        # identity hashes the frozen package and runtime trees (35 ms; half a
+        # second per table when ten tables compute it at the deal): once per run.
+        self.identity = policy.identity
         self.root, self.workers, self.join = Path(output), workers, join
         self.stop = threading.Event()
         self.lock = threading.Lock()
         self.tournament = None
+        self.discovered = {}  # game id -> time the room poll first listed it
 
     def _warm_workers(self, pool):
         """Open every worker thread's connection before the deal.
@@ -727,8 +740,28 @@ class TournamentRunner:
             pool.submit(warm, index)
 
     def _play(self, gid):
-        policy = self.policy.build()
-        policy.reset(derive_seed(gid, self.policy.identity))
+        # A sandboxed policy starts a process first (0.1-0.5 s when ten tables
+        # are dealt together); it starts beside the first fetch, not before it.
+        starting = Future()
+
+        def start_policy():
+            try:
+                built = self.policy.build()
+                built.reset(derive_seed(gid, self.identity))
+            except BaseException as exc:
+                starting.set_exception(exc)
+            else:
+                starting.set_result(built)
+
+        threading.Thread(target=start_policy, name=f"policy-{gid}", daemon=True).start()
+        policy = None
+
+        def ready_policy():
+            nonlocal policy
+            if policy is None:
+                policy = starting.result()  # a failed start fails this table
+            return policy
+
         path = self.root / ("game-" + digest(gid)[:24] + ".json")
         path.parent.mkdir(parents=True, exist_ok=True)
         state = (
@@ -736,9 +769,9 @@ class TournamentRunner:
             if path.exists()
             else {"responses": [], "status": "running", "events": []}
         )
-        if state.get("policy_id", self.policy.identity) != self.policy.identity:
+        if state.get("policy_id", self.identity) != self.identity:
             raise ValueError("cannot switch policy while resuming a game")
-        state.update(policy_id=self.policy.identity, game_id=gid)
+        state.update(policy_id=self.identity, game_id=gid)
         seen = set(state["responses"])
         seq = state.get("event_seq", 0)
         events = state.setdefault("events", [])
@@ -748,6 +781,8 @@ class TournamentRunner:
         diag = state.setdefault("client", {})
         for name in DIAG_COUNTERS:
             diag.setdefault(name, 0)
+        if gid in self.discovered:
+            diag.setdefault("discovered_at", round(self.discovered[gid], 3))
 
         def ingest(payload):
             nonlocal seq, hand_no
@@ -862,6 +897,15 @@ class TournamentRunner:
           while not self.stop.is_set():
             if notify_thread is not None and not frames.get("unavailable"):
                 priority = None
+                if force_snapshot:
+                    # A forced look has nothing to wait for: not the stream's
+                    # first frame on a newly dealt table (its connection is still
+                    # being set up while the dealer's window runs), nor the next
+                    # frame after a claim, a rejection or a retry.
+                    wake.clear()
+                    woke_at = time.perf_counter()
+                    priority, why = "high", "force"
+                    last_jump = max(0, frames["seq"] - fetched_seq)
                 while priority is None and not self.stop.is_set():
                     acted = last_key is not None and last_key == acted_key
                     settled = last_snap is not None and last_snap.get("phase") == "settled"
@@ -1002,7 +1046,7 @@ class TournamentRunner:
             ingest(res)
             if res.get("finished"):
                 log_fetch("finished", priority, res, res.get("snapshot"), fetch_ms, time.time())
-                diag["policy"] = _policy_stats(policy)
+                diag["policy"] = _policy_stats(ready_policy())
                 diag["clock_offset_s"] = round(sorted(offsets)[len(offsets) // 2], 3) if offsets else None
                 state.update(status="finished", final=_redact(res), event_seq=seq)
                 atomic_json(path, state)
@@ -1150,6 +1194,7 @@ class TournamentRunner:
                 log_fetch("seen", priority, res, snap, fetch_ms, time.time())
                 continue
             log_fetch("act", priority, res, snap, fetch_ms, time.time())
+            ready_policy()
             begin = time.perf_counter()
             from mahjong_ai.execution.candidate_runtime import (
                 ActionUnavailable,
@@ -1279,7 +1324,7 @@ class TournamentRunner:
                     stream.write(json.dumps(record, ensure_ascii=False) + "\n")
             state["event_seq"] = seq
             atomic_json(path, state)
-          diag["policy"] = _policy_stats(policy)
+          diag["policy"] = _policy_stats(ready_policy())
           state["status"] = "paused"
           atomic_json(path, state)
         finally:
@@ -1407,6 +1452,8 @@ class TournamentRunner:
         futures, completed = {}, set()
         failing_since = None
         last_join = 0.0
+        waiting = True  # no table dealt yet: the next poll is what sees the deal
+        accepts_retries = "retries" in inspect.signature(self.client.request).parameters
         with (
             exclusive_lock(self.root / ".online.lock"),
             ThreadPoolExecutor(max_workers=self.workers) as pool,
@@ -1415,14 +1462,21 @@ class TournamentRunner:
             try:
                 while time.monotonic() < deadline:
                     try:
-                        t = self.client.request("GET", f"/api/tournaments/{_id(tid)}")
+                        t = self.client.request(
+                            "GET",
+                            f"/api/tournaments/{_id(tid)}",
+                            **({"retries": 0} if waiting and accepts_retries else {}),
+                        )
                     except (ApiError, ConnectionError) as exc:
                         if not transient(exc):
                             raise
                         failing_since = failing_since or time.monotonic()
                         if time.monotonic() - failing_since > 300:
                             raise
-                        self.stop.wait(2)
+                        # TOURNAMENT_GONE is most common while the room deals: ask
+                        # again at once instead of sitting out the 1-2-4 s backoff.
+                        gone = getattr(exc, "code", "") == "TOURNAMENT_GONE"
+                        self.stop.wait(START_POLL if waiting and gone else 2)
                         continue
                     failing_since = None
                     with self.lock:
@@ -1469,10 +1523,20 @@ class TournamentRunner:
                             )
                         for gid in games:
                             if gid not in futures and gid not in completed:
+                                self.discovered.setdefault(gid, time.time())
                                 futures[gid] = pool.submit(self._play, gid)
                     elif status not in ("registering", "stage_open", "stage_done"):
                         raise SnapshotError("unknown tournament status")
-                    self.stop.wait(1)
+                    start_at = (t.get("config") or {}).get("StartAt")
+                    if not isinstance(start_at, (int, float)):
+                        start_at = 0
+                    waiting = (
+                        not futures
+                        and not completed
+                        and status in ("registering", "running")
+                        and time.time() >= start_at - START_LEAD
+                    )
+                    self.stop.wait(START_POLL if waiting else 1)
             finally:
                 self.stop.set()
             for future in futures.values():

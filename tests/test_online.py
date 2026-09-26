@@ -344,6 +344,51 @@ def test_connections_warm_up_only_before_the_room_starts(tmp_path, monkeypatch):
         assert len(warmed) == expected
 
 
+def test_the_deal_is_seen_within_a_quarter_second_even_through_tournament_gone(
+    tmp_path, monkeypatch
+):
+    # 2026-09-26 02:42 的房：十桌同时发牌，各桌首次拉取晚于发牌 8.8-10.2 s，九桌的
+    # 开局出牌超时。发牌只能靠下一次房间轮询发现，而发牌那一刻房间最常答
+    # TOURNAMENT_GONE；开局前改为每 0.25 s 看一次，GONE 也立即重看。
+    polls, started = [], {}
+
+    class Client:
+        def discover(self, tid=None):
+            return "t", False, {}
+
+        def request(self, method, path, body=None, priority=0, retries=None):
+            if path == "/api/me":
+                return {"active_games": [{"game_id": "g0"}, {"game_id": "g1"}]}
+            polls.append(time.monotonic())
+            room = {"config": {"StartAt": time.time() - 30}, "my_games": ["g0", "g1"]}
+            if len(polls) <= 2:
+                return room | {"status": "registering", "my_games": []}
+            if len(polls) == 3:
+                raise ApiError(404, "TOURNAMENT_GONE")  # the room is dealing
+            return room | {"status": "finished" if len(started) == 2 else "running"}
+
+    runner = TournamentRunner(Client(), PolicySpec(), adapter(), tmp_path, workers=2)
+    monkeypatch.setattr(runner, "_warm_workers", lambda pool: None)
+    monkeypatch.setattr(runner, "_play", lambda gid: started.setdefault(gid, time.monotonic()))
+    runner.run(seconds=5)
+    assert sorted(started) == ["g0", "g1"]
+    assert polls[1] - polls[0] < 0.5
+    assert max(started.values()) - polls[2] < 0.6  # was a 1 s poll plus a 2 s pause
+
+    # A scheduled tournament is not polled at that pace an hour before its start.
+    polls.clear()
+
+    class Early(Client):
+        def request(self, method, path, body=None, priority=0, retries=None):
+            polls.append(time.monotonic())
+            return {"status": "registering", "config": {"StartAt": time.time() + 3600}}
+
+    runner = TournamentRunner(Early(), PolicySpec(), adapter(), tmp_path / "early", workers=2)
+    monkeypatch.setattr(runner, "_warm_workers", lambda pool: None)
+    runner.run(seconds=1.2)
+    assert len(polls) <= 2
+
+
 def test_official_chi_window_can_open_without_a_new_event(tmp_path):
     from mahjong_ai.platform.official import OfficialAdapter
 
@@ -980,3 +1025,83 @@ def test_next_seat_without_a_chi_window_still_plays_its_own_draw(tmp_path):
     _run_fixture(tmp_path, client)
     assert [p["action"] for p in client.posts] == ["pass", "discard"]
     assert time.monotonic() - started < 2.5
+
+
+def test_a_newly_dealt_table_is_looked_at_before_its_stream_and_policy_are_up(tmp_path):
+    # The dealer's first discard window runs 3 s from the deal.  The first look
+    # must not wait for the notify stream's first frame (a fresh connection per
+    # table, ten at once), and a sandboxed policy's process start runs beside
+    # that look instead of before it.
+    from mahjong_ai.platform.official import OfficialAdapter
+
+    class Stub:
+        def reset(self, seed):
+            pass
+
+        def act(self, obs):
+            return next(a for a in obs.legal_actions if a.action == "discard")
+
+    built = []
+
+    class SlowSpec:
+        identity = "stub"
+        action_seconds = 3.0
+        response_seconds = 1.0
+
+        def build(self):
+            time.sleep(0.3)  # a sandbox process start with ten tables dealt together
+            built.append(time.monotonic())
+            return Stub()
+
+    dealer = {
+        "game_id": "fixture",
+        "seat": 0,
+        "phase": "draw",
+        "round_no": 1,
+        "dealer": 0,
+        "turn": 0,
+        "responding_seats": [],
+        "wall_remaining": 60,
+        "window_deadline_ms": time.time() * 1000 + 3000,
+        "discards": [[], [], [], []],
+        "melds": [[], [], [], []],
+        "hand_counts": [14, 13, 13, 13],
+        "my_hand": ["1w", "2w", "3w", "4w", "5w", "6w", "7w", "8w", "9w", "1t", "2t", "3t", "东", "南"],
+        "last_discard": "",
+        "drawn_tile": "南",
+        "scores": [0, 0, 0, 0],
+        "god": {"chain_count": 0, "baotou": False, "catch_play": False},
+    }
+
+    class Client:
+        def __init__(self):
+            self.gets, self.posts = [], []
+            self.posted = threading.Event()
+
+        def request(self, method, path, body=None):
+            if method == "POST":
+                self.posts.append(time.monotonic())
+                self.posted.set()
+                return {"ok": True}
+            self.gets.append(time.monotonic())
+            if self.posts:
+                return {"finished": True, "seq": 2, "snapshot": None}
+            return {"seq": 0, "snapshot": dealer}
+
+        def notify(self, path, on_frame, stop):
+            # The stream is still connecting until after our discard.
+            while not self.posted.wait(0.01):
+                if stop.is_set():
+                    return True
+            on_frame(2, True)
+            return True
+
+    client = Client()
+    runner = TournamentRunner(client, SlowSpec(), OfficialAdapter(), tmp_path)
+    runner.tournament = {
+        "config": {"Kind": "test", "Rounds": 2, "BaseScore": 1, "YouCaiBiKao": False}
+    }
+    begin = time.monotonic()
+    runner._play("fixture")
+    assert client.gets[0] < built[0]  # looked before the policy was even up
+    assert client.posts[0] - begin < 0.9  # was 0.3 s start + 1 s frame wait + fetch
