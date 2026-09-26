@@ -1226,3 +1226,76 @@ def test_a_candidate_process_closed_by_an_error_is_started_again(tmp_path):
     assert client.posts == [{"action": "pass"}]
     diag = json.loads(next(tmp_path.glob("game-*.json")).read_text())["client"]
     assert diag["policy_restarts"] == 1 and not built
+
+
+def _plain_round():
+    """Seat 1 drew and discarded 7t; seat 2 has since drawn and discarded 3w."""
+    known = [
+        {"seq": 9, "type": "tile_drawn", "seat": 1, "tile": "", "data": None, "_round_no": 1},
+        {"seq": 10, "type": "tile_discarded", "seat": 1, "tile": "7t", "data": {}, "_round_no": 1},
+    ]
+    snap = _peng_window(0, 2, "3w", responders=(0, 1, 3))
+    snap["discards"][1], snap["discards"][2] = ["7t"], ["3w"]
+    snap["wall_remaining"] = 81  # the deal leaves 83; two draws since
+    return known, snap
+
+
+def test_draws_and_discards_since_the_history_are_rebuilt_from_the_snapshot():
+    from mahjong_ai.platform.online import rebuild_gap
+
+    known, snap = _plain_round()
+    rebuilt = rebuild_gap(known, snap)
+    assert [(e["type"], e["seat"], e["tile"]) for e in rebuilt] == [("tile_drawn", 2, ""), ("tile_discarded", 2, "3w")]
+    assert rebuild_gap(known + [dict(e, seq=11 + i) for i, e in enumerate(rebuilt)], snap) == []
+    # Seat 2 pengs the 7t instead: a claim is not rebuilt, the caller fetches.
+    claimed = dict(snap, melds=[[], [], [{"kind": "peng", "tiles": ["7t"] * 3, "from_seat": 1}], []])
+    claimed["discards"] = [[], [], ["3w"], []]
+    assert rebuild_gap(known, claimed) is None
+    # A wall that does not match the draws is not trusted either.
+    assert rebuild_gap(known, dict(snap, wall_remaining=80)) is None
+
+
+def test_a_response_after_plain_draws_and_discards_costs_no_history_request(tmp_path):
+    from mahjong_ai.platform.official import OfficialAdapter
+
+    now = time.time() * 1000 + 1000
+    known, second = _plain_round()
+    second["window_deadline_ms"] = now + 60
+    first = _peng_window(now, 1, "7t", responders=(0, 2, 3))
+    first["wall_remaining"] = 82
+
+    def states(client):
+        if len(client.posts) >= 2:
+            return {"finished": True, "seq": 14, "snapshot": None}
+        if client.posts:
+            return {"seq": 13, "snapshot": second}
+        return {"seq": 10, "snapshot": first}
+
+    class Client(_NotifyClient):
+        history_requests = 0
+
+        def request(self, method, path, body=None):
+            if method == "GET" and "seq=0" not in path:
+                self.history_requests += 1
+                return {"seq": 10, "events": known}
+            return super().request(method, path, body)
+
+    def after_first_post(client, stop):
+        client.posted.wait(5)
+        client.posted.clear()
+        for seq in (11, 12):
+            client.on_frame(seq, False)
+            time.sleep(0.03)
+        client.on_frame(13, False)
+        client.posted.wait(5)
+        client.on_frame(14, True)
+
+    client = Client(states)
+    client.frames = [after_first_post]
+    recorder = _Recorder()
+    runner = TournamentRunner(client, recorder, OfficialAdapter(), tmp_path)
+    runner.tournament = {"config": {"Kind": "test", "Rounds": 2, "BaseScore": 1, "YouCaiBiKao": False}}
+    runner._play("fixture")
+    assert len(client.posts) == 2 and recorder.discarders == [1, 2]
+    diag = json.loads(next(tmp_path.glob("game-*.json")).read_text())["client"]
+    assert client.history_requests == 1 and diag["history_rebuilt"] == 1  # only the round's first look

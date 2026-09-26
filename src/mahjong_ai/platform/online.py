@@ -554,8 +554,94 @@ DIAG_COUNTERS = (
     "timeline_fetches",
     "throttled",
     "history_fetches",
+    "history_rebuilt",
     "policy_restarts",
 )
+# Wall tiles left after the deal and the dealer's first draw; every draw takes one.
+WALL_AFTER_DEAL = 83
+
+
+def rebuild_gap(events, snap):
+    """The draws and discards ``snap`` implies since the local history, or None.
+
+    A decision must see every event up to it, but fetching the history costs a
+    request inside a 1 s window, and the history of a round's first turns cannot
+    be fetched at all once the round has moved on.  When the missing events are
+    only draws and discards, the snapshot pins them down: the rivers give each
+    discard, the turn order each draw, and they must also reproduce the wall
+    count, the turn and the last discard.  Any claim, kong, or mismatch returns
+    None and the caller fetches.  Returns the missing wire events (possibly none).
+    """
+    seat, round_no = snap["seat"], snap["round_no"]
+    mine = [e for e in events if e.get("_round_no") == round_no]
+    if any(e["type"] == "round_ended" for e in mine):
+        return None
+    rivers, melds, kongs, draws, last = [[], [], [], []], [0] * 4, [0] * 4, 0, None
+    for e in mine:
+        kind, who = e["type"], e.get("seat")
+        if kind == "tile_drawn":
+            draws += 1
+        elif kind == "tile_discarded":
+            rivers[who].append(e["tile"])
+        elif kind in ("chi", "peng", "gang"):
+            gang = (e.get("data") or {}).get("kind")
+            melds[who] += kind != "gang" or gang != "bu"
+            kongs[who] += kind == "gang"
+            if kind != "gang" or gang == "ming":  # the claimed discard leaves its river
+                if last is None or last["type"] != "tile_discarded":
+                    return None
+                rivers[last["seat"]].pop()
+        else:
+            continue
+        last = e
+    target = snap["discards"]
+    shown = [[m["kind"] for m in row] for row in snap["melds"]]
+    if [len(row) for row in shown] != melds or [sum(k.startswith("gang") for k in row) for row in shown] != kongs:
+        return None  # a claim or kong since the local history
+    if any(target[s][: len(rivers[s])] != rivers[s] for s in range(4)):
+        return None
+
+    def reached(actor, tile):
+        """Whether the rebuilt events end where the snapshot stands."""
+        if [len(r) for r in rivers] != [len(r) for r in target] or WALL_AFTER_DEAL - draws != snap["wall_remaining"]:
+            return False
+        if tile is None:
+            return snap["phase"] == "draw" and snap["turn"] == actor
+        return snap["phase"].startswith("response") and snap["turn"] == actor and snap["last_discard"] == tile
+
+    if last is None:  # the dealer's first draw is not an event
+        actor, mode, tile = snap["dealer"], "act", None
+    elif last["type"] in ("tile_drawn", "chi", "peng"):
+        actor, mode, tile = last["seat"], "act", None
+    elif last["type"] == "tile_discarded":
+        actor, mode, tile = last["seat"], "discarded", last["tile"]
+    else:  # a kong: its replacement draw is next
+        actor, mode, tile = last["seat"], "kong", None
+    added = []
+    for _ in range(128):
+        if mode != "kong" and reached(actor, tile):
+            return added
+        if mode == "act":
+            if len(rivers[actor]) >= len(target[actor]):
+                return None
+            tile = target[actor][len(rivers[actor])]
+            rivers[actor].append(tile)
+            added.append({"type": "tile_discarded", "seat": actor, "tile": tile, "data": {}, "_round_no": round_no})
+            mode = "discarded"
+            continue
+        drawer = actor if mode == "kong" else (actor + 1) % 4
+        draws += 1
+        drawn = ""
+        if drawer == seat:
+            # Our own draw shows its tile, and only the snapshot of our turn holds it.
+            if not (snap["phase"] == "draw" and snap["turn"] == seat and snap.get("drawn_tile")):
+                return None
+            drawn = snap["drawn_tile"]
+        added.append({"type": "tile_drawn", "seat": drawer, "tile": drawn, "data": None, "_round_no": round_no})
+        actor, mode, tile = drawer, "act", None
+    return None
+
+
 # A sandboxed candidate closes its process on an error; it is started again this
 # many times per game at most, so a candidate failing on every decision still ends.
 MAX_POLICY_RESTARTS = 5
@@ -1131,15 +1217,33 @@ class TournamentRunner:
                 if phase.startswith("response")
                 else snap.get("turn") == snap.get("seat") and phase not in ("settled", "finished")
             )
-            history_due = (
-                deciding
-                or notify_thread is None
+            routine = (
+                notify_thread is None
                 or frames.get("unavailable")
                 or snap.get("phase") in ("settled", "finished")
                 or snap["round_no"] != last_round
                 or own_actions < int((snap.get("god") or {}).get("chain_count") or 0)
                 or time.monotonic() - last_history >= HISTORY_INTERVAL
             )
+            def fill_gap():
+                """Rebuild the missing draws and discards from the snapshot; False when they are not only that.
+
+                The history fetched later replaces them (ingest drops matching
+                reconstructed events).
+                """
+                rebuilt = rebuild_gap(sorted(events, key=lambda e: e["seq"]), snap)
+                if rebuilt is None:
+                    return False
+                if rebuilt:
+                    diag["history_rebuilt"] += 1
+                    top = res.get("seq", 0)
+                    for i, event in enumerate(rebuilt, 1):
+                        # Between the last real event and this snapshot, in order.
+                        events.append(dict(event, seq=top - 1 + i / (len(rebuilt) + 1), reconstructed=True))
+                return True
+
+            # Rebuilt from the snapshot, the usual gap costs no request inside the window.
+            history_due = routine or (deciding and res.get("seq", 0) > seq and not fill_gap())
             last_round = snap["round_no"]
             if res.get("seq", 0) > seq and history_due:
                 last_history = time.monotonic()
@@ -1158,6 +1262,10 @@ class TournamentRunner:
                     )
                     if res.get("snapshot"):
                         snap = res["snapshot"]
+                if deciding:
+                    # Once a round has moved on, the server answers its first turns
+                    # with a snapshot instead of their events; rebuild what it can.
+                    fill_gap()
             # A history refresh can advance the decision (even the hand).
             # Keep its snapshot, logged sequence and timeline watermark from
             # the same response; an old envelope mislabels otherwise valid play.
