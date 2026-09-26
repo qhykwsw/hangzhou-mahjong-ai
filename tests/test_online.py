@@ -736,7 +736,7 @@ def test_silent_chi_window_is_looked_for_at_the_peng_deadline(tmp_path):
     # when we are the next seat, our chi window opens at that deadline with no
     # event on the notify stream.  Fast opponents answer within milliseconds,
     # so no frame arrives in between: the client must look on its own timer.
-    deadline = time.time() * 1000 + 300
+    deadline = time.time() * 1000 + 700  # our pass needs LATE_PASS_SECONDS to spare
 
     def states(client):
         if len(client.posts) >= 2:
@@ -956,7 +956,7 @@ def test_timeout_burst_pass_and_draw_cost_no_request_until_the_discard(tmp_path)
     # at the deadline, the next seat's chi-window pass, its timed draw and
     # its discard.  Only the discard can open a window for us, so the client
     # must look exactly once more, on that frame.
-    end = time.time() * 1000 + 500
+    end = time.time() * 1000 + 800  # our pass needs LATE_PASS_SECONDS to spare
 
     def states(client):
         if len(client.posts) >= 2:
@@ -995,7 +995,7 @@ def test_next_seat_without_a_chi_window_still_plays_its_own_draw(tmp_path):
     # We pass a peng window as the next seat, but no chi window follows (the
     # server gives us none): our draw one second after the deadline must be
     # fetched and discarded, not taken for the next seat's timed draw.
-    end = time.time() * 1000 + 400
+    end = time.time() * 1000 + 700  # our pass needs LATE_PASS_SECONDS to spare
 
     def states(client):
         if len(client.posts) >= 2:
@@ -1299,3 +1299,30 @@ def test_a_response_after_plain_draws_and_discards_costs_no_history_request(tmp_
     assert len(client.posts) == 2 and recorder.discarders == [1, 2]
     diag = json.loads(next(tmp_path.glob("game-*.json")).read_text())["client"]
     assert client.history_requests == 1 and diag["history_rebuilt"] == 1  # only the round's first look
+
+
+def test_a_pass_too_late_for_its_window_is_not_sent(tmp_path):
+    # Sent with 68 ms left, a pass landed after the peng window closed and the
+    # server counted it in our chi window, refusing the chi we then sent.
+    from mahjong_ai.platform.official import OfficialAdapter
+
+    closing = time.time() * 1000 + 100
+
+    def states(client):
+        if client.gets > 1:
+            return {"finished": True, "seq": 11, "snapshot": None}
+        return {"seq": 10, "snapshot": _peng_window(closing, 1, "7t", responders=(0, 2, 3))}
+
+    def close(client, stop):
+        time.sleep(0.3)
+        client.on_frame(11, True)
+
+    client = _NotifyClient(states)
+    client.frames = [close]
+    recorder = _Recorder()
+    runner = TournamentRunner(client, recorder, OfficialAdapter(), tmp_path)
+    runner.tournament = {"config": {"Kind": "test", "Rounds": 2, "BaseScore": 1, "YouCaiBiKao": False}}
+    runner._play("fixture")
+    assert recorder.discarders and client.posts == []
+    diag = json.loads(next(tmp_path.glob("game-*.json")).read_text())["client"]
+    assert diag["late_passes_skipped"] == 1

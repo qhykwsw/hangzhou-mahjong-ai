@@ -555,8 +555,13 @@ DIAG_COUNTERS = (
     "throttled",
     "history_fetches",
     "history_rebuilt",
+    "late_passes_skipped",
     "policy_restarts",
 )
+# A pass posted with less time than this left may land after its window closed,
+# and the server then counts it in our next window (the chi window after a peng
+# window), refusing the claim we meant there.  Timing out passes just the same.
+LATE_PASS_SECONDS = 0.25
 # Wall tiles left after the deal and the dealer's first draw; every draw takes one.
 WALL_AFTER_DEAL = 83
 
@@ -1248,8 +1253,10 @@ class TournamentRunner:
             if res.get("seq", 0) > seq and history_due:
                 last_history = time.monotonic()
                 diag["history_fetches"] += 1
+                # A decision waits on it; the routine refresh can wait for everyone else.
+                urgency = levels["high"] if deciding else levels["low"]
                 delta = self.client.request(
-                    "GET", f"/api/games/{_id(gid)}/state?seq={seq}", **({"priority": levels.get(priority, 2)} if accepts_priority else {})
+                    "GET", f"/api/games/{_id(gid)}/state?seq={seq}", **({"priority": urgency} if accepts_priority else {})
                 )
                 ingest(delta)
                 if delta.get("snapshot"):
@@ -1375,6 +1382,10 @@ class TournamentRunner:
                     else None
                 ),
             }
+            deadline_ms = snap.get("window_deadline_ms")
+            if action.action == "pass" and deadline_ms and to_local(deadline_ms / 1000) - time.time() < LATE_PASS_SECONDS:
+                diag["late_passes_skipped"] += 1
+                continue
             begin = time.perf_counter()
             try:
                 response = self.client.request(
