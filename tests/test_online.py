@@ -1105,3 +1105,124 @@ def test_a_newly_dealt_table_is_looked_at_before_its_stream_and_policy_are_up(tm
     runner._play("fixture")
     assert client.gets[0] < built[0]  # looked before the policy was even up
     assert client.posts[0] - begin < 0.9  # was 0.3 s start + 1 s frame wait + fetch
+
+
+class _Recorder:
+    """A policy that passes every window and remembers the discarders it was shown."""
+
+    identity = "recorder"
+    action_seconds = 3.0
+    response_seconds = 1.0
+
+    def __init__(self):
+        self.discarders = []
+
+    def build(self):
+        return self
+
+    def reset(self, seed):
+        pass
+
+    def act(self, obs):
+        self.discarders.append(next((e.seat for e in reversed(obs.public_events) if e.kind == "discard"), None))
+        return next(a for a in obs.legal_actions if a.action == "pass")
+
+
+def test_a_response_is_decided_with_the_discard_that_opened_it(tmp_path):
+    # The policy's chronology comes from the event history, which is otherwise
+    # refreshed only every few seconds.  Seat 2's discard opens our second
+    # window; answering it with seat 1's discard as the latest misjudges the pass.
+    from mahjong_ai.platform.official import OfficialAdapter
+
+    now = time.time() * 1000 + 1000
+    events = [
+        {"seq": 10, "type": "tile_discarded", "seat": 1, "tile": "7t", "data": {}},
+        {"seq": 11, "type": "pass", "seat": 0, "data": {}},
+        {"seq": 12, "type": "tile_drawn", "seat": 2, "data": {}},
+        {"seq": 13, "type": "tile_discarded", "seat": 2, "tile": "3w", "data": {}},
+    ]
+
+    def states(client):
+        if len(client.posts) >= 2:
+            return {"finished": True, "seq": 14, "snapshot": None}
+        if client.posts:
+            snap = _peng_window(now + 60, 2, "3w", responders=(0, 1, 3))
+            snap["discards"][1], snap["discards"][2] = ["7t"], ["3w"]
+            return {"seq": 13, "snapshot": snap}
+        return {"seq": 10, "snapshot": _peng_window(now, 1, "7t", responders=(0, 2, 3))}
+
+    class Client(_NotifyClient):
+        def request(self, method, path, body=None):
+            if method == "GET" and "seq=0" not in path:
+                after = int(path.rsplit("seq=", 1)[1])
+                return {"seq": 13, "events": [e for e in events if after < e["seq"] <= self.watermark]}
+            return super().request(method, path, body)
+
+    def after_first_post(client, stop):
+        client.posted.wait(5)
+        client.posted.clear()
+        client.watermark = 13
+        for seq in (11, 12):
+            client.on_frame(seq, False)
+            time.sleep(0.03)
+        client.on_frame(13, False)
+        client.posted.wait(5)
+        client.on_frame(14, True)
+
+    client = Client(states)
+    client.watermark = 10
+    client.frames = [after_first_post]
+    recorder = _Recorder()
+    runner = TournamentRunner(client, recorder, OfficialAdapter(), tmp_path)
+    runner.tournament = {"config": {"Kind": "test", "Rounds": 2, "BaseScore": 1, "YouCaiBiKao": False}}
+    runner._play("fixture")
+    assert len(client.posts) == 2
+    assert recorder.discarders == [1, 2]
+
+
+def test_a_candidate_process_closed_by_an_error_is_started_again(tmp_path):
+    from mahjong_ai.execution.candidate_runtime import ActionUnavailable
+    from mahjong_ai.platform.official import OfficialAdapter
+
+    class Crashing:
+        worker = object()
+
+        def reset(self, seed):
+            pass
+
+        def act(self, obs):
+            self.worker = None  # what RemotePolicy does after the candidate raised
+            raise ActionUnavailable("候选未在时限内给出合法动作")
+
+    class Healthy(_Recorder):
+        worker = object()
+
+    built = [Crashing(), Healthy()]
+
+    class Spec:
+        identity = "spec"
+        action_seconds = 3.0
+        response_seconds = 1.0
+
+        def build(self):
+            return built.pop(0)
+
+    now = time.time() * 1000 + 2000
+
+    def states(client):
+        if client.posts or client.gets > 3:  # without a new process the window just runs out
+            return {"finished": True, "seq": 11, "snapshot": None}
+        return {"seq": 10, "snapshot": _peng_window(now, 1, "7t", responders=(0, 2, 3))}
+
+    def after_post(client, stop):
+        client.posted.wait(5)
+        client.on_frame(11, True)
+
+    client = _NotifyClient(states)
+    client.frames = [after_post]
+    runner = TournamentRunner(client, Spec(), OfficialAdapter(), tmp_path)
+    runner.tournament = {"config": {"Kind": "test", "Rounds": 2, "BaseScore": 1, "YouCaiBiKao": False}}
+    runner._play("fixture")
+    assert client.posts == [{"action": "pass"}]
+    diag = json.loads(next(tmp_path.glob("game-*.json")).read_text())["client"]
+    assert diag["policy_restarts"] == 1 and not built

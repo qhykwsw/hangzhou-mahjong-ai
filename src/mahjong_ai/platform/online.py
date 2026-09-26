@@ -553,7 +553,12 @@ DIAG_COUNTERS = (
     "timeline_skips",
     "timeline_fetches",
     "throttled",
+    "history_fetches",
+    "policy_restarts",
 )
+# A sandboxed candidate closes its process on an error; it is started again this
+# many times per game at most, so a candidate failing on every decision still ends.
+MAX_POLICY_RESTARTS = 5
 # Seconds between two warm-up connections, so the warm-up is not itself a burst.
 WARM_SPACING = 0.03
 # Seconds between room polls while the deal may come any moment (from START_LEAD
@@ -1117,8 +1122,18 @@ class TournamentRunner:
                 and e.get("_round_no", snap["round_no"]) == snap["round_no"]
                 and e.get("type") in ("tile_discarded", "gang")
             )
+            # A decision of ours must see every event up to it, as in the engine:
+            # the policy reads who discarded, claimed or drew from this history,
+            # so a response to a discard without that discard misjudges the pass.
+            phase = snap.get("phase") or ""
+            deciding = (
+                snap.get("seat") in (snap.get("responding_seats") or ())
+                if phase.startswith("response")
+                else snap.get("turn") == snap.get("seat") and phase not in ("settled", "finished")
+            )
             history_due = (
-                notify_thread is None
+                deciding
+                or notify_thread is None
                 or frames.get("unavailable")
                 or snap.get("phase") in ("settled", "finished")
                 or snap["round_no"] != last_round
@@ -1128,6 +1143,7 @@ class TournamentRunner:
             last_round = snap["round_no"]
             if res.get("seq", 0) > seq and history_due:
                 last_history = time.monotonic()
+                diag["history_fetches"] += 1
                 delta = self.client.request(
                     "GET", f"/api/games/{_id(gid)}/state?seq={seq}", **({"priority": levels.get(priority, 2)} if accepts_priority else {})
                 )
@@ -1208,6 +1224,13 @@ class TournamentRunner:
             try:
                 action = policy.act(obs)
             except ActionUnavailable:
+                if getattr(policy, "worker", False) is None and diag["policy_restarts"] < MAX_POLICY_RESTARTS:
+                    # Its process was closed on an error: without a new one every
+                    # later decision of this game would fall to the server's timeout.
+                    diag["policy_restarts"] += 1
+                    diag.setdefault("policy_errors", []).append(getattr(policy, "last_error", None))
+                    policy = self.policy.build()
+                    policy.reset(derive_seed(gid, self.identity))
                 # The server owns timeout fallback.  Never submit a stale
                 # action, but look again while the window leaves time to retry.
                 diag["action_unavailable"] += 1
