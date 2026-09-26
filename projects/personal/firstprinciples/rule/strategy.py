@@ -26,7 +26,7 @@ from mahjong_ai.sdk.shape import analyze, remaining_tiles
 
 Q = 0.15  # an opponent self-draws during the three draws between two of mine
 DRAW_RISK = 1 - (1 - Q) ** (1 / 3)  # the same, for one opponent's draw
-SAVED = 0.4  # my win cancels the payment to another winner, in fan units
+SAVED = 0.467  # my win cancels the payment to another winner, in fan units
 ONE_STEP = 0.22  # typical value of a hand one step from waiting
 FAR_STEP = 0.45  # discount for each further step
 KONG_TILES = {"concealed": 4, "exposed": 3, "added": 1}
