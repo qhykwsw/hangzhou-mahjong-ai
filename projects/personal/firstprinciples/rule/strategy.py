@@ -13,7 +13,8 @@ Passing on a discard lets the opponents between its discarder and me draw
 before my turn, so a call or kong also takes their draws away. Discards of
 equal value keep the hand whose tiles connect to more live tiles. When the hand is already baotou (every draw wins), a win now is traded for a
 doubling that keeps the certain win: a kong whose replacement draw still wins,
-else a white discard that scores piao.
+else a white discard that scores piao. A call from a baotou wait is priced with
+the piao its white discard scores when the wait stays baotou.
 """
 COMBINATION = "firstprinciples-rule"
 
@@ -177,7 +178,20 @@ class Race:
             used = action.tiles if action.action == "chi" else (action.tile,) * 2
             for tile in used:
                 hand.remove(tile)
-            return (1 - Q) * best_discard_value(hand, opened + 1, available, draws)
+            value = best_discard_value(hand, opened + 1, available, draws)
+            # Called from a baotou wait, a white discard that keeps baotou
+            # scores piao without waiting for my own draw.
+            if WHITE in hand and is_baotou(obs.hand, opened):
+                rest = tuple(sorted(without(hand, WHITE)))
+                if is_baotou(rest, opened + 1):
+                    owner = obs.god_discarder_seat == obs.stage.seat
+                    chain = (obs.chain_count if owner else 0) + 1
+                    piao = (obs.piao_count if owner else 0) + 1
+                    value = max(
+                        value,
+                        waiting_value(rest, opened + 1, available, chain, piao, draws),
+                    )
+            return (1 - Q) * value
         if action.action == "gang":
             for _ in range(KONG_TILES[action.kind]):
                 hand.remove(action.tile)
