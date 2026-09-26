@@ -1,7 +1,7 @@
 {
   "rows": 600000,
   "smoke_rows": 3000,
-  "step_kl": 0.03,
+  "step_kl": 0.01,
   "kl_rows": 20000,
   "microbatch": 256,
   "critic_batch": 256,
