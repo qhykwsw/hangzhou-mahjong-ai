@@ -189,3 +189,21 @@ def test_new_best_during_confirmation_is_first_compared_on_dev(harness, monkeypa
     result = E.evaluate("rl", {"parameters": {"weights": "mine"}}, "x", "fp-rl-009", host="4070", confirm_seed=5)
     assert result["status"] == verdict
     assert [a for a, label in calls if label.startswith("confirm-for-")] == replayed
+
+
+def test_catalog_offers_every_version_that_became_a_line_best(harness):
+    E, rl, _ = harness
+    pool = {"id": "pool-a", "members": {"piao": {"family": "code"}}, "runtime_path": "/pool-runtime"}
+    (E.LOCAL / "pool.json").write_text(json.dumps(pool))
+    rule = {"family": "code", "version": "fp-rule-002", "package_hash": "p2"}
+    model = {"family": "model", "version": "fp-rl-001", "parameters": {"weights": "w1"}}
+    record(E, id="fp-rule-002", line="rule", spec=rule, games=1, finished_at=1)
+    record(E, id="fp-rule-003", line="rule", status="discard", spec=dict(rule, package_hash="p3"), games=1, finished_at=2)
+    record(E, id="fp-rl-001", spec=model, games=1, finished_at=3)
+    record(E, id="fp-rl-002", status="unconfirmed", spec=dict(model, parameters={"weights": "w2"}), games=1,
+           finished_at=4)
+    record(E, id="ref-piao", line="reference", status="reference", spec={"package_hash": "pp"}, games=1, finished_at=5)
+    offered = rl.catalog()
+    assert set(offered) == {"fp-rule-002", "fp-rl-001"}
+    assert offered["fp-rule-002"]["spec"]["runtime_path"] == "/pool-runtime"  # rule versions play under the pool's runtime
+    assert "runtime_path" not in offered["fp-rl-001"]["spec"]

@@ -311,6 +311,8 @@ def trial_train(task, progress, smoke=False):
         "snapshot_seconds": task.get("snapshot_seconds") or [],
         # Frozen evaluation opponents of the trial, with host-side paths.
         "opponents": task.get("opponents") or {},
+        # Further frozen versions the recipe may train against or learn from.
+        "catalog": task.get("catalog") or {},
         # Host path of the runtime the games run under (default: the bundle's copy).
         "runtime": task.get("runtime"),
     }

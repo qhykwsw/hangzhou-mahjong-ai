@@ -62,8 +62,15 @@ class Game:
                     policy = build_policy(entries[spec], spec)
                 policy.reset(seed_for(seed, "policy", seat))
                 self.policies[seat] = policy
-        self.teacher = build_policy(bundle, teacher) if teacher else None
-        if self.teacher:
+        self.teacher = None
+        if teacher:
+            # A teacher outside the bundle (a frozen version the trial offers) is borrowed like an opponent.
+            bundled = bundle is not None and any(e["id"] == teacher for e in bundle["entries"])
+            if not bundled and external is not None and teacher in external.specs:
+                self.teacher = external.acquire(teacher)
+                self.borrowed.append((teacher, self.teacher))
+            else:
+                self.teacher = build_policy(bundle, teacher)
             self.teacher.reset(seed_for(seed, "teacher", focal))
         self.teacher_id = teacher or ""
         self.scores, self.dealer, self.hand_no = [0] * 4, seed % 4, 0
@@ -309,7 +316,7 @@ def worker(conn, cfg, bundle_path, panel_path, worker_index, command):
                         next_id,
                     ),
                     focal=focal,
-                    teacher=bundle["teacher"] if command["labels"] else None,
+                    teacher=(command.get("teacher") or bundle["teacher"]) if command["labels"] else None,
                     train=True,
                     bc=cfg["bc_only"],
                     external=external,

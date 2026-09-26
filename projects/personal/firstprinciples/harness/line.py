@@ -586,6 +586,7 @@ def status(line):
     print("\n".join(row for row in summary(line) if row.startswith("主机")))
     if line == "rl":
         print(rl.host_resources())
+        print(rl.catalog_report())
     path = E.LOCAL / f"lease-{line}.json"
     if path.exists():
         lease = E.read_json(path)

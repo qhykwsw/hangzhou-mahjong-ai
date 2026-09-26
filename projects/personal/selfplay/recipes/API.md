@@ -6,8 +6,8 @@
 
 - Actor 的网络结构和观察编码。`ctx.actor` 从本方案线的固定起点加载；返回的权重必须能严格载入同一结构，否则本次尝试记为崩溃。
 - 游戏环境、规则和奖励：每局结束时，学习座位得到该局桌面分（除以底分）。
-- 教师：冻结规则包里的规则冠军。训练对手由方案通过 `cfg["opponents"]` 选择，默认是本次迭代冻结的评估对手（最近一次共同大乱斗前三名，可能包含 RL 模型）；没有评估对手时用规则包里的规则代表。
-- 时间预算：从 `train` 被调用开始计时，到 `ctx.deadline` 截止；超过宽限期，进程被强制结束。
+- 教师：默认是冻结规则包里的规则冠军（`ctx.teacher`），方案可以用 `cfg["teacher"]` 换成 `ctx.teachers` 里的任一规则。训练对手由方案通过 `cfg["opponents"]` 选择，默认是本次迭代冻结的评估对手（最近一次共同大乱斗前三名，可能包含 RL 模型）；harness 可以在 `ctx.catalog` 里另外提供冻结版本供方案选作对手或教师；没有评估对手时用规则包里的规则代表。
+- 时间预算：从 `train` 被调用开始计时，到 `ctx.deadline` 截止；超过宽限期，进程被强制结束。只按局数限额的 harness（例如迭代线）把截止时刻设得很远，只用来防卡死。
 - 局数预算（可选，方案线配置 `hand_budget`）：学习座位累计打过的训练局数（每整场 16 局）。用完后 `ctx.collect` 报错；接近用完时，`samples` 会被压到剩余局数按已见每局行数折算的行数；在途的整场照常打完，所以最后一次采集可能略超，超出部分如实记入训练回执。自检运行不设局数预算。
 - 资源上限：显存按方案线配置的比例封顶，超出时在进程内抛出 CUDA out of memory，不会溢出到共享内存；训练进程组（含对局进程）的常驻内存超过上限时整组被强制结束。两种情况都记为训练失败并消耗额度，上限见 `ctx.resources`，训练回执里有实际峰值。
 - 评估和晋级：由研究框架做分段配对评估。训练后的 Actor 和现役 Actor 面对同一组评估对手，在同样的牌墙和座位上对局，每边 4096 → 8192 → 16384 场，累计计数；前两段 99% 区间下界 > 0 提前晋级、上界 < 0 提前淘汰，最后一段 95% 区间下界 > 0 才晋级。晋级的模型参加下一次共同大乱斗。
@@ -25,8 +25,9 @@
 | `hand_budget`、`hands`、`hands_left()` | 局数预算、已打局数、剩余局数；未设局数预算时为 `None` |
 | `smoke` | 自检运行时为真，此时时限只有约 90 秒 |
 | `resources` | `cpu_capacity`、`cpu_count`、`gpu_total_bytes`、`gpu_limit_bytes`、`ram_limit_bytes`、建议的 `workers` 与 `tables` |
-| `teacher`、`rules`、`bundle` | 教师 ID、规则包里的规则代表 ID、冻结包路径 |
-| `opponents` | 本次迭代冻结的评估对手 ID（规则版本按各自运行时运行，`model:` 开头的是模型） |
+| `teacher`、`teachers`、`rules`、`bundle` | 默认教师 ID、可以当教师的规则 ID（规则包里的规则与 harness 提供的规则版本）、规则包里的规则代表 ID、冻结包路径 |
+| `opponents` | 本次迭代冻结的评估对手 ID，也是默认训练对手（规则版本按各自运行时运行，其余是模型） |
+| `catalog` | harness 另外提供的冻结版本 ID，可以选作对手，规则版本也可以当教师；没有时为空 |
 | `new_actor()` | 同结构的新 Actor，例如用作自身历史快照对手 |
 | `collect(actor, cfg, samples=, iteration=, labels=False, history=None, hooks=None, inference_session=None)` | 采集训练对局，见下文 |
 | `log(**metrics)` | 写一行训练诊断，评估报告和下一轮交接都会引用 |
@@ -46,7 +47,8 @@
 | --- | --- |
 | `workers`、`tables` | 对局进程数（不超过 CPU 核数）和每个进程同时打的桌数。达到 `samples` 后不再开新局，但在途的整场要打完，实际样本约多出 `workers × tables` 场。计划里带 `execution` 时（迭代线按主机固定），`workers`、`tables`、`gather_seconds` 以它为准，方案给的值被覆盖 |
 | `gather_seconds` | 父进程有一轮推理在设备上时，再等这么久收齐其他 worker 的请求合成一批（默认 0，只收已到达的） |
-| `opponents` | 对手座位均匀抽取的 ID 列表，取自 `ctx.opponents` 或 `ctx.rules`；缺省为全部 `ctx.opponents` |
+| `opponents` | 对手座位均匀抽取的 ID 列表，取自 `ctx.opponents`、`ctx.catalog` 或 `ctx.rules`；缺省为全部 `ctx.opponents` |
+| `teacher` | `labels=True` 时给学习座位打标签的规则，取自 `ctx.teachers`；缺省为 `ctx.teacher` |
 | `history_probability` | 对手座位从 `history`（`{"model:名字": Actor}`）抽取的概率，其余按 `opponents` 抽取 |
 | `critic_features` | `"模块:函数"`，在对局进程里对每个学习决策调用 `f(state, seat)`，返回的数组并入该行；`state` 是完整的 HandState，可读对手手牌和按摸牌顺序排列的牌墙 |
 | `finish_game` | `"模块:函数"`，每整场结束时在对局进程里调用 `f(rows, cfg)`，必须给每行写入 `adv` 和 `ret` |

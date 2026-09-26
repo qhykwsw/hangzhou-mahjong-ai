@@ -197,6 +197,33 @@ def test_illegal_teacher_and_student_actions_fail_explicitly(policies, monkeypat
     assert not game.rows
 
 
+def test_teacher_outside_the_bundle_is_borrowed_from_the_trial_versions(policies):
+    from guided.environment import External
+
+    bundle, entries, _ = policies
+    external = External({"frozen-rule": {}})
+    lent = HeuristicPolicy(style="balanced")
+    external.free["frozen-rule"].append(lent)
+    game = Game(
+        configuration(rounds=1, lookahead=False),
+        bundle,
+        entries,
+        ["model:current", "teacher", "teacher", "teacher"],
+        seed_for(14, "outside-teacher"),
+        focal=0,
+        teacher="frozen-rule",
+        train=True,
+        external=external,
+    )
+    assert game.teacher is lent and ("frozen-rule", lent) in game.borrowed
+    assert game.advance() is not None
+    row, legal, _ = game.pending
+    assert row["label_version"] == "frozen-rule"
+    assert row["teacher"] in {action_index(a) for a in legal}
+    external.release(game.borrowed)
+    assert external.free["frozen-rule"] == [lent]
+
+
 def test_teacher_can_be_focal_against_three_independent_copies_of_itself(policies):
     bundle, entries, created = policies
     game = Game(
