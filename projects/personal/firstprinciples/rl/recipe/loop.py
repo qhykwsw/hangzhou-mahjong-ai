@@ -143,7 +143,11 @@ def train(ctx):
         "history_probability": 0.0,
         "critic_features": "recipe.features:critic_features",
         "finish_game": "recipe.returns:finish_game",
+        # The strongest rule on the fixed pool labels the distillation.
+        "teacher": cfg["teacher"],
     }
+    if cfg["teacher"] not in ctx.teachers:
+        raise ValueError(f"teacher {cfg['teacher']} is not in ctx.teachers: {ctx.teachers}")
     # The smoke run (about a minute) must still exercise one whole step.
     target_rows = cfg["smoke_rows"] if ctx.smoke else cfg["rows"]
     microbatch = int(cfg["microbatch"])
@@ -185,6 +189,7 @@ def train(ctx):
             last = time.time() - began
             ctx.log(step=step, rows=count, **stats, collect_seconds=collected, step_seconds=last,
                     packing_seconds=packing_seconds)
+            torch.cuda.empty_cache()
             continue
         weights, stats = advantages(
             rows, cfg, rng, ctx.device, ctx.seed + 7919 * step, batch_source=batch_source,
@@ -209,4 +214,5 @@ def train(ctx):
             critic_seconds=fitted, step_seconds=last,
             packing_seconds=packing_seconds, resident_rows=used_resident,
         )
+        torch.cuda.empty_cache()
     return actor
