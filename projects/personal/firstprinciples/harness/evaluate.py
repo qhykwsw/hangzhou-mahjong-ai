@@ -87,11 +87,12 @@ MODELS = RESEARCH / ".local/research/models"
 # host that trained it (no transfer); an attempt names its host explicitly.
 EVAL_HOST = {"rule": "local", "reference": "local", "rl": "4070"}
 # Match processes per host and tables (games played at once, one thread each)
-# per process. Measured throughput knees with headroom for the desktop: on the
-# Mac the inference service is the limit and tables keep the cores busy while
-# model seats wait; too many tables add interpreter contention.
-EVAL_WORKERS = {"local": 12, "4070": 24, "4090": 20, "5070ti": 16}
-EVAL_TABLES = {"local": 3, "4070": 8, "4090": 2, "5070ti": 4}
+# per process. The pool's seats are all rules that cost milliseconds, so a
+# process is CPU-bound and a second table only makes seats wait on the
+# interpreter lock (timeouts doubled in calibration); one process per core
+# the host can spare for its desktop.
+EVAL_WORKERS = {"local": 12, "4070": 24, "4090": 14, "5070ti": 12}
+EVAL_TABLES = {"local": 1, "4070": 1, "4090": 1, "5070ti": 1}
 ISOLATION = "none"  # the pool's packages run in the match process (see module docstring)
 POLL_SECONDS = 5  # how often remote job results are checked
 DEV_BLOCKS = override("FP_DEV", 4096)  # 4 games each
@@ -169,8 +170,10 @@ def freeze_pool(model_weights, model_name, runtime=None, replace=False, rules=No
     """
     path = LOCAL / "pool.json"
     s = research_state()
-    runtime = runtime or s["candidate_runtime_path"]
     old = read_json(path) if path.exists() else {}
+    # A new pool keeps the current one's runtime unless told otherwise: the
+    # research experiment's may be older than what the pool was built on.
+    runtime = runtime or old.get("runtime_path") or s["candidate_runtime_path"]
     members = {}
     for entry in rules or RULE_OPPONENTS:
         cid, spec = member_spec(entry, s, runtime)
@@ -928,7 +931,7 @@ def main():
     p = sub.add_parser("pool")
     p.add_argument("--model", help="weights SHA-256 under the research model store (omit for a pool of rules only)")
     p.add_argument("--name", default="pool-model")
-    p.add_argument("--runtime", help="frozen runtime directory (default: the research experiment's)")
+    p.add_argument("--runtime", help="frozen runtime directory (default: the current pool's, else the research experiment's)")
     p.add_argument("--replace", action="store_true", help="start a new record even though the current pool has attempts")
     p.add_argument("--rules", help="comma-separated rule members: research candidate ids or package directories")
     dr = sub.add_parser("drain", help="hold new attempts back while the pool is replaced (maintainer)")
