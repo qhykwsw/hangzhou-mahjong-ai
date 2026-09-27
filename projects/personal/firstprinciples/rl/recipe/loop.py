@@ -27,6 +27,7 @@ from selfplay_core.actions import HU
 from guided.collection_session import InferenceSession
 
 from .batch import actor_args, make_batch, masked_log_probs, resident_rows
+from .symmetry import SuitPermuter
 from .targets import advantages
 
 CONFIG = json.loads(Path(__file__).with_name("config.json").read_text())
@@ -101,12 +102,14 @@ def kl_step(actor, params, direction, batches, goal):
     return {"kl": kl, "step_norm": eta * norm, "hu_before": before, "hu_after": after}
 
 
-def distill(actor, rows, opt, size, device, rng, epochs, *, batch_source=None):
+def distill(actor, rows, opt, size, device, rng, epochs, *, batch_source=None, permuter=None):
     """Epochs of cross entropy toward the teacher's label on the learner's own states.
 
     DAgger: the learner played these rows with its own policy, so its mistakes
     lead to states behaviour cloning never visited; the teacher labels them.
     The first epoch's loss is taken before each batch is trained on (fresh rows).
+    Later epochs relabel the suits of each batch at random (symmetry.py): the
+    data, not the optimisation, limits imitation, and the suits are symmetric.
     """
     teacher = np.array([r["teacher"] for r in rows])
     labeled = np.flatnonzero(teacher >= 0)
@@ -119,10 +122,12 @@ def distill(actor, rows, opt, size, device, rng, epochs, *, batch_source=None):
             idx = order[s : s + size]
             mb = (batch_source.batch(idx) if batch_source is not None
                   else make_batch([rows[i] for i in idx], device))
+            label = torch.as_tensor(teacher[idx], device=device)
+            if epoch > 0 and permuter is not None:
+                mb, label = permuter(mb, label, int(rng.integers(6)))
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 logits = actor(*actor_args(mb))
             logp = masked_log_probs(logits, mb["mask"])
-            label = torch.as_tensor(teacher[idx], device=device)
             loss = -logp.gather(1, label[:, None]).mean()
             opt.zero_grad(set_to_none=True)
             loss.backward()
@@ -158,6 +163,7 @@ def train(ctx):
     # own states (DAgger, where imitation gains fastest); the rest only take
     # policy-gradient steps. Interleaving the two made each undo the other.
     opt = torch.optim.Adam(actor.parameters(), lr=float(cfg["distill_learning_rate"]), eps=1e-5)
+    permuter = SuitPermuter(ctx.device)
     step, iteration, last = 0, 0, 0.0
     hands = lambda: ctx.hands_left() is None or ctx.hands_left() > 0  # noqa: E731
     while hands() and ctx.time_left() > 1.15 * last + reserve:
@@ -182,7 +188,7 @@ def train(ctx):
         packing_seconds = time.time() - packing_started
         if distilling:
             stats = distill(actor, rows, opt, microbatch, ctx.device, rng, int(cfg["distill_epochs"]),
-                            batch_source=batch_source)
+                            batch_source=batch_source, permuter=permuter)
             count = len(rows)
             del rows, batch_source
             ctx.save_actor(actor)
