@@ -25,7 +25,8 @@ COMBINATION = "firstprinciples-rule"
 from functools import lru_cache
 
 from mahjong_ai.domain.observations import can_discard_piao
-from mahjong_ai.domain.rules import WHITE, is_baotou
+from mahjong_ai import _fast
+from mahjong_ai.domain.rules import WHITE, counts, is_baotou
 from mahjong_ai.sdk.shape import analyze, remaining_tiles, shanten
 
 Q = 0.15  # an opponent self-draws during the three draws between two of mine
@@ -61,28 +62,41 @@ def race(p, e, draws=LONG):
 def waiting_value(hand, opened, available, chain=0, piao=0, draws=LONG):
     """Expected fan of a 13-tile hand just before my next draw."""
     unseen = max(1, sum(available))
-    row = analyze(hand, opened, available, chain, piao)
+    if is_baotou(hand, opened):
+        copies, fan = baotou_draw_fans(hand, opened, available, chain, piao)
+        return race(copies / unseen, (fan + SAVED * copies) / unseen, draws)
+    row = examined(hand, opened, available, chain, piao)
     if row["shanten"] <= 0:
         copies = row["winning_copies"]
         gain = row["fan_value"] + SAVED * copies
-        if WHITE not in hand or is_baotou(hand, opened):
+        if WHITE not in hand:
             return race(copies / unseen, gain / unseen, draws)
         # A draw that frees a white lets a discard turn the wait into baotou,
         # which may beat winning on it at once.
         fans = row["fans"]
         gain, reach = 0.0, 0
+        outs = baotou_draws(hand, opened)
+        held = list(counts(hand))
+        kinds = [t for t in range(34) if held[t]]
         for tile in range(34):
-            if available[tile] <= 0 or hand.count(tile) >= 4:
+            if available[tile] <= 0 or held[tile] >= 4:
                 continue
-            drawn = list(hand)
-            drawn.append(tile)
             best = 0.0
-            for drop in set(drawn):
-                rest = tuple(sorted(without(drawn, drop)))
-                if is_baotou(rest, opened):
-                    best = max(
-                        best, waiting_value(rest, opened, available, draws=draws - 1)
-                    )
+            if tile in outs:
+                held[tile] += 1
+                for drop in kinds:
+                    if drop == tile:
+                        continue
+                    held[drop] -= 1
+                    if _fast.baotou(held, opened):
+                        rest = sorted((*hand, tile))
+                        rest.remove(drop)
+                        best = max(
+                            best,
+                            waiting_value(tuple(rest), opened, available, draws=draws - 1),
+                        )
+                    held[drop] += 1
+                held[tile] -= 1
             if tile in fans:
                 gain += available[tile] * max(fans[tile] + SAVED, (1 - Q) * best)
             elif best:
@@ -110,9 +124,47 @@ def waiting_value(hand, opened, available, chain=0, piao=0, draws=LONG):
     return step * ONE_STEP * FAR_STEP ** (row["shanten"] - 2)
 
 
+# Tile weights whose sums spell out, bit by bit, which draws allow a baotou
+# discard: one C call for each half of the tiles.
+LOW_BITS = tuple(1 << t if t < 17 else 0 for t in range(34))
+HIGH_BITS = tuple(1 << (t - 17) if t >= 17 else 0 for t in range(34))
+
+
+@lru_cache(maxsize=200000)
+def baotou_draws(hand, opened):
+    """The tiles whose draw lets a discard leave baotou."""
+    held = counts(hand)
+    low = _fast.baotou_outs(held, opened, LOW_BITS)
+    high = _fast.baotou_outs(held, opened, HIGH_BITS) << 17
+    return frozenset(t for t in range(34) if (low | high) >> t & 1)
+
+
+@lru_cache(maxsize=200000)
+def baotou_draw_fans(hand, opened, available, chain, piao):
+    """Copies and fan-weighted copies of the draws a baotou wait wins on."""
+    held = list(counts(hand))
+    copies = fan = 0
+    for tile in range(34):
+        if available[tile] <= 0 or held[tile] >= 4:
+            continue
+        held[tile] += 1
+        value = _fast.fan_value(held, tile, opened, chain, piao, False, False)
+        held[tile] -= 1
+        if value:
+            copies += available[tile]
+            fan += available[tile] * value
+    return copies, fan
+
+
+@lru_cache(maxsize=100000)
+def examined(hand, opened, available, chain=0, piao=0):
+    """The SDK analysis of a hand, computed once (callers only read it)."""
+    return analyze(hand, opened, available, chain, piao)
+
+
 @lru_cache(maxsize=200000)
 def tenpai_value(hand, opened, available, draws=LONG):
-    row = analyze(hand, opened, available)
+    row = examined(hand, opened, available)
     if row["shanten"] > 0 or draws < 1:
         return 0.0
     return waiting_value(hand, opened, available, draws=draws)
@@ -129,17 +181,25 @@ def reshaped_value(hand, opened, available, draws):
     wins = set(row["winning_tiles"])
     stay = waiting_value(hand, opened, available, draws=draws - 1)
     gain, reach = 0.0, 0
+    held = list(counts(hand))
+    kinds = [t for t in range(34) if held[t]]
     for tile in range(34):
-        if tile in wins or available[tile] <= 0 or hand.count(tile) >= 4:
+        if tile in wins or available[tile] <= 0 or held[tile] >= 4:
             continue
-        drawn = sorted((*hand, tile))
+        held[tile] += 1
         best = stay
-        for drop in set(drawn):
-            rest = list(drawn)
-            rest.remove(drop)
-            rest = tuple(rest)
-            if rest != hand and shanten(rest, opened) <= 0:
-                best = max(best, waiting_value(rest, opened, available, draws=draws - 1))
+        for drop in kinds:
+            if drop == tile:
+                continue
+            held[drop] -= 1
+            if _fast.shanten_raw(held, opened) <= 0:
+                rest = sorted((*hand, tile))
+                rest.remove(drop)
+                best = max(
+                    best, waiting_value(tuple(rest), opened, available, draws=draws - 1)
+                )
+            held[drop] += 1
+        held[tile] -= 1
         if best > stay:
             gain += available[tile] * (best - stay)
             reach += available[tile]
