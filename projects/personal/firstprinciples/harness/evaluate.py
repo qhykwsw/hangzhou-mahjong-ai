@@ -394,7 +394,10 @@ def history(line):
         base = f" 基于{r['base']}" if r.get("base") else ""
         cost = f" 每决策{r['decision_ms']['mine']:.2g}ms" if r.get("decision_ms") else ""
         kind = f" 等价替换（沿用{r['equivalent']['to']}的成绩）" if r.get("equivalent") else ""
-        out.append(f"{r['id']} {STATUS[r['status']]}{kind}{host} {r['games']}场 {score}{diff}{lower}{cost}{design}{base}"
+        t = r.get("training") or {}
+        trained = (f" 训练{t['hands'] / 10000:.0f}万局" + (f"（续训自{t['from']}，累计{t['lineage_hands'] / 10000:.0f}万局）"
+                                                         if t.get("from") else "")) if t.get("hands") else ""
+        out.append(f"{r['id']} {STATUS[r['status']]}{kind}{host}{trained} {r['games']}场 {score}{diff}{lower}{cost}{design}{base}"
                    f"｜{r['description']}")
         if r.get("why"):
             out.append(f"    假设：{r['why']}")
@@ -405,7 +408,9 @@ def history(line):
     for r in running(line):
         minutes = (time.time() - r["started_at"]) / 60
         where = f" @{r['host']}" if r.get("host") else ""
-        out.append(f"{r['id']} {STAGE_NAMES.get(r.get('stage'), '进行中')}{where} {minutes:.0f}分｜{r['description']}")
+        plan = (f" {r['hands'] / 10000:g}万局" + (f" 续训自{r['base']}" if r.get("from") == "best" else "")
+                if r.get("hands") else "")
+        out.append(f"{r['id']} {STAGE_NAMES.get(r.get('stage'), '进行中')}{where}{plan} {minutes:.0f}分｜{r['description']}")
     return "\n".join(out)
 
 
@@ -722,6 +727,7 @@ def report(record):
     where = f"，{record['host']}" if record.get("host") not in (None, "local") else ""
     training = record.get("training") or {}
     trained = (f"训练：{training['hands']:,} 局，{training['training_seconds'] / 60:.0f} 分钟"
+               + (f"，从 {training['from']} 继续（这条路径累计 {training['lineage_hands']:,} 局）" if training.get("from") else "")
                if training.get("hands") and training.get("training_seconds") else None)
     cost = record.get("decision_ms")
     cost = cost and (f"每决策 {cost['mine']:.2g} ms" + (f"（此前最好 {cost['base']:.2g} ms）" if cost.get("base") else "")

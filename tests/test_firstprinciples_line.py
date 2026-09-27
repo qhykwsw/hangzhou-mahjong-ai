@@ -238,3 +238,40 @@ def test_equivalent_code_takes_over_the_best_versions_scores(harness, monkeypatc
     else:
         assert (mine["dev_blocks"], mine["score"], mine["equivalent"]["time_ratio"]) == ({"0": 1.5, "1": -0.5}, 0.5, 0.25)
     assert not E.running("rule")
+
+
+def test_rl_attempts_choose_their_hands_and_may_continue_the_best(harness, monkeypatch):
+    import shutil
+
+    E, rl, line = harness
+    monkeypatch.setattr(line, "spawn", lambda attempt_id: None)
+    for host in rl.HOSTS:
+        (rl.RL / f"setup-{host}.json").write_text(json.dumps({"start_actor": "/start"}))
+    E.seal()
+    record(E, id=rl.start_id(E.load_pool()), finished_at=1, games=16)
+    record(E, id="fp-rl-003", finished_at=2, games=16, spec={"parameters": {"weights": "w3"}},
+           training={"hands": 1_000_000, "budget": 1_000_000, "lineage_hands": 1_000_000})
+    shutil.copytree(E.SOURCES["rl"], rl.RL / "attempts" / "fp-rl-003" / "recipe")
+    E.atomic_json(E.LOCAL / "workdir-rl.json", {"base": "fp-rl-003"})
+    start = lambda host, **kw: line.start("rl", "x", "y", 0, host, **kw)  # noqa: E731
+    with pytest.raises(E.Refused, match="完全相同"):
+        start("4070")
+    with pytest.raises(E.Refused, match="训练局数"):
+        start("4070", hands=rl.MAX_HANDS + 1)
+    start("4070", start_from="best")  # the same recipe, trained on from the best version
+    start("4090", hands=3_000_000)  # the same recipe for more hands
+    states = {s["host"]: s for s in E.running("rl")}
+    assert (states["4070"]["from"], states["4070"]["hands"]) == ("best", rl.HANDS)
+    assert (states["4090"]["from"], states["4090"]["hands"]) == ("start", 3_000_000)
+
+    class Host:
+        def sync(self, paths):
+            self.synced = paths
+
+        def remote_path(self, path):
+            return "/host" + str(path)
+
+    monkeypatch.setattr(E, "remote_host", lambda name: Host())
+    path, behind = rl.start_actor(states["4070"], "4070", {"start_actor": "/start"})
+    assert path.endswith("/w3") and behind == 1_000_000  # training adds up along the line
+    assert rl.start_actor(states["4090"], "4090", {"start_actor": "/start"}) == ("/start", 0)

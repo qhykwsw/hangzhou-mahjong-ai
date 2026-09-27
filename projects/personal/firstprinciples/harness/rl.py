@@ -33,11 +33,14 @@ from guided import recipe_jobs, remote  # noqa: E402
 from mahjong_ai.execution.remote import opponent_specs  # noqa: E402
 
 # The budget is training hands (16 per game), so an attempt trains the same
-# amount on each host; it shows the trend of a change, not a finished model.
-# A recipe that spends more per hand only takes longer. The deadline is not a
-# budget: it only stops a training that hangs.
+# amount on any host. The agent chooses it per attempt up to MAX_HANDS (start
+# --hands): more hands per attempt mean fewer results a day, so the cap keeps
+# the three slots exploring. A recipe that spends more per hand only takes
+# longer. The deadline is not a budget: it only stops a training that hangs
+# (the slowest full budget, a slow teacher labelling every step, takes about a day).
 HANDS = E.override("FP_RL_HANDS", 1_000_000)
-BUDGET = E.override("FP_RL_BUDGET", 86400)
+MAX_HANDS = 5_000_000
+BUDGET = E.override("FP_RL_BUDGET", 2 * 86400)
 # A collection plays out every game it started, so the last one may pass the
 # budget a little; past this allowance the attempt is invalid.
 HAND_ALLOWANCE = 25_000
@@ -350,6 +353,24 @@ def training_opponents(host_name):
             host.remote_path(pool["runtime_path"]))
 
 
+def start_actor(state, host_name, setup_):
+    """Where the attempt's training starts on the host, and the training hands already behind it.
+
+    By default the fixed start (setup); with ``from: best`` the Actor of the
+    best version the attempt was designed on, so training adds up along the
+    line (every step of it still had to beat the best version).
+    """
+    pool = E.load_pool()
+    if state.get("from") != "best":
+        return setup_["start_actor"], 0
+    base = next(r for r in reversed(E.attempts(pool["id"], "rl")) if r["id"] == state["base"])
+    weights = E.MODELS / base["spec"]["parameters"]["weights"]
+    host = E.remote_host(host_name)
+    host.sync([weights])
+    training = base.get("training") or {}
+    return host.remote_path(weights), training.get("lineage_hands") or training.get("hands") or 0
+
+
 def snapshot(attempt_id):
     """Freeze the working recipe for a new attempt; training only ever sees this copy."""
     job = RL / "attempts" / attempt_id
@@ -378,22 +399,26 @@ def train(state):
     opponents, offered, runtime = training_opponents(host)
     # What this attempt could choose from, as the agent saw it.
     E.atomic_json(job / "catalog.json", catalog_facts())
+    hands = state.get("hands") or HANDS
+    start, behind = start_actor(state, host, setup_)
     task = dict(host=host, remote_dir=remote_job, job_dir=str(job), code=setup_["code"],
                 source_id=setup_["source_id"], recipe=str(job / "recipe"), bundle=remote.root(host) + BUNDLE,
-                runtime=runtime, start_actor=setup_["start_actor"], budget_seconds=BUDGET, hand_budget=HANDS,
+                runtime=runtime, start_actor=start, budget_seconds=BUDGET, hand_budget=hands,
                 seed=state["seed"], line="rl", limits=LIMITS[host], execution=EXECUTION[host],
                 opponents=opponents, catalog=offered, fetch_actor=False)
-    E.log(f"{attempt_id}: training {HANDS} hands on {host}")
+    E.log(f"{attempt_id}: training {hands} hands on {host} from {start}")
     result = recipe_jobs.trial_train(task, lambda message: None)
     E.atomic_json(job / "training.json", {k: v for k, v in result.items() if k != "metrics"})
     status = result["status"]
     training = {"host": host, "state": status.get("state"), "hands": status.get("hands"),
-                "training_seconds": status.get("training_seconds")}
+                "training_seconds": status.get("training_seconds"), "budget": hands,
+                "from": state["base"] if state.get("from") == "best" else None,
+                "lineage_hands": behind + (status.get("hands") or 0)}
     if not result["ok"]:
         return "crash", None, training | {"error": str(status.get("error") or status)[-2000:]}
-    if HANDS and (status.get("hands") or 0) > HANDS + HAND_ALLOWANCE:
+    if (status.get("hands") or 0) > hands + HAND_ALLOWANCE:
         return "invalid", None, training | {
-            "error": f"训练了 {status['hands']:,} 局，超过预算 {HANDS:,} 局加余量 {HAND_ALLOWANCE:,} 局"}
+            "error": f"训练了 {status['hands']:,} 局，超过预算 {hands:,} 局加余量 {HAND_ALLOWANCE:,} 局"}
     spec = dict(place_on_host(result["actor"], host), version=attempt_id)
     return "ok", spec, training
 

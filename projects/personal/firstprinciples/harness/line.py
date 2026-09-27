@@ -5,6 +5,7 @@ on the conversation that started an attempt:
 
   python -m harness.line wait rule|rl [--minutes 9]   # results, notices, and the next step
   python -m harness.line start rule|rl "<change>" --why "<hypothesis>" --design-start <epoch> [--host <free host>]
+      RL also [--hands <training hands, default 1M, at most 5M>] [--from start|best]
   python -m harness.line start rule "<change>" --why "<why faster>" --design-start <epoch> --equivalent
   python -m harness.line status rule|rl               # every attempt, the hosts, the lease
   python -m harness.line stop rule|rl                 # leave the loop; attempts run on
@@ -600,12 +601,20 @@ def wait(line, minutes):
         time.sleep(POLL_SECONDS)
 
 
-def start(line, change, why, design_start, host=None, equivalent=False):
+def start(line, change, why, design_start, host=None, equivalent=False, hands=None, start_from="start"):
     claim(line)
     preflight(line)
-    champion = E.best(E.load_pool()["id"], line)
+    pool = E.load_pool()
+    champion = E.best(pool["id"], line)
     if equivalent and (line != "rule" or champion is None):
         raise E.Refused("等价替换只用于规则线已有最好版本之后：它要与最好版本逐个决策比较。")
+    if line == "rule" and (hands is not None or start_from != "start"):
+        raise E.Refused("--hands 与 --from 只用于 RL 线。")
+    hands = rl.HANDS if hands is None else int(hands)
+    if line == "rl" and not 0 < hands <= rl.MAX_HANDS:
+        raise E.Refused(f"训练局数要在 1 到 {rl.MAX_HANDS:,} 局之间。")
+    # Continuing the start itself is training from the start.
+    warm = line == "rl" and start_from == "best" and champion["id"] != rl.start_id(pool)
     source = E.SOURCES[line]
     rel = source.relative_to(E.REPO).as_posix()
     workdir = E.LOCAL / f"workdir-{line}.json"
@@ -614,9 +623,12 @@ def start(line, change, why, design_start, host=None, equivalent=False):
         if base != champion["id"]:
             raise E.Refused(f"最好版本现在是 {champion['id']}，本线目录不是从它恢复来的。"
                             "运行 wait 恢复后，把这处改动重新做在它上面。")
-        # The start was never trained with its recipe, so training that recipe unchanged is an attempt too.
-        if champion["id"] != rl.start_id(E.load_pool()) and E.tree_hash(source) == E.tree_hash(E.frozen_source(champion)):
-            raise E.Refused("本线目录与最好版本完全相同，没有可评估的改动。")
+        # The start was never trained with its recipe, so training that recipe unchanged is an attempt too;
+        # so is the same recipe for another number of hands, or continued from the best version.
+        same_training = not warm and hands == ((champion.get("training") or {}).get("budget") or rl.HANDS)
+        if (champion["id"] != rl.start_id(pool) and same_training
+                and E.tree_hash(source) == E.tree_hash(E.frozen_source(champion))):
+            raise E.Refused("本线目录与最好版本完全相同，训练局数和起点也相同，没有可评估的改动。")
     elif git("status", "--porcelain", "--", rel).stdout.strip():
         raise E.Refused("还没有最好版本：第一次尝试必须是本线目录原样（v0）。运行 wait 恢复后再开跑。")
     problems = rl.check_recipe(source) if line == "rl" else E.check_source(source)
@@ -637,6 +649,8 @@ def start(line, change, why, design_start, host=None, equivalent=False):
                      design_seconds=now - design_start,
                      stage="training" if line == "rl" else "equivalence" if equivalent else "evaluating",
                      seed=random.SystemRandom().getrandbits(31), confirm_seed=random.SystemRandom().getrandbits(62))
+        if line == "rl":
+            state |= {"hands": hands, "from": "best" if warm else "start"}
         save(state)
     if line == "rule":
         state["spec"] = E.freeze_rule(attempt_id)
@@ -645,7 +659,8 @@ def start(line, change, why, design_start, host=None, equivalent=False):
     save(state)
     spawn(attempt_id)
     number = int(attempt_id.rsplit("-", 1)[-1])
-    print(f"尝试 {number} · {E.LINE_NAMES[line]}：{change}" + (f"（{host}）" if line == "rl" else "")
+    trained = f"（{host}，{hands / 10000:g} 万局，" + (f"从 {champion['id']} 继续）" if warm else "从起点）")
+    print(f"尝试 {number} · {E.LINE_NAMES[line]}：{change}" + (trained if line == "rl" else "")
           + ("（等价替换）" if equivalent else ""))
 
 
@@ -744,6 +759,9 @@ def main():
     s.add_argument("--why", required=True, help="one or two sentences: the hypothesis behind it")
     s.add_argument("--design-start", type=float, required=True, help="epoch when designing this attempt began")
     s.add_argument("--host", help="RL: the free host this attempt was designed for (wait lists them)")
+    s.add_argument("--hands", type=int, help=f"RL: training hands for this attempt (default {rl.HANDS:,}, at most {rl.MAX_HANDS:,})")
+    s.add_argument("--from", dest="start_from", choices=("start", "best"), default="start",
+                   help="RL: train from the fixed start, or continue the best version this attempt is designed on")
     s.add_argument("--equivalent", action="store_true",
                    help="rule: decides exactly as the best version, only faster or simpler; checked move by move")
     for name in ("status", "stop", "takeover"):
@@ -759,7 +777,8 @@ def main():
         if args.command == "wait":
             wait(args.line, args.minutes)
         elif args.command == "start":
-            start(args.line, args.change, args.why, args.design_start, args.host, args.equivalent)
+            start(args.line, args.change, args.why, args.design_start, args.host, args.equivalent,
+                  args.hands, args.start_from)
         elif args.command == "status":
             status(args.line)
         elif args.command == "stop":
