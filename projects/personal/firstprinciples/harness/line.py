@@ -192,6 +192,9 @@ def design_hosts(line, probe=True):
 
     Attempts queued for a redo take the first free hosts.
     """
+    drained = E.drain_reason()
+    if drained:
+        return [], f"{drained}：在途尝试照常跑完，之后暂不开新尝试，等维护者完成"
     champion = E.best(E.load_pool()["id"], line)
     if champion is None and E.running(line):
         return [], "第一次尝试（v0）还没有结果，它成为最好版本后才能设计新尝试"

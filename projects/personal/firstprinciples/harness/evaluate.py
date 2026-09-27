@@ -28,7 +28,10 @@ settings (EVAL_WORKERS, EVAL_TABLES), not part of the pool's identity.
 
 Maintainer commands (from projects/personal/firstprinciples); iteration agents use harness.line:
   python -m harness.evaluate runtime                                    # freeze src/mahjong_ai as a runtime
-  python -m harness.evaluate pool --model <weights-sha> --name <name> [--runtime <dir>]  # freeze the pool once
+  python -m harness.evaluate pool --model <weights-sha> --name <name> [--rules <ids or package dirs>] [--runtime <dir>] [--replace]
+  python -m harness.evaluate drain on "<why>" | off                    # stop new attempts while the pool is replaced
+  python -m harness.evaluate rebase <attempt> ... [--host <host>]       # replay earlier versions on the new pool
+  python -m harness.evaluate rebase-finish rule|rl                      # record them; the highest is the line's best
   python -m harness.evaluate seal                                       # after any change to the conditions
   python -m harness.evaluate reference <research candidate | model name> [--host local|4070|4090|5070ti]
   python -m harness.evaluate implement <pool member> <package dir>      # an equivalent, faster implementation
@@ -140,18 +143,38 @@ def freeze_runtime():
     return str(target)
 
 
-def freeze_pool(model_weights, model_name, runtime=None, replace=False):
+def member_spec(entry, s, runtime):
+    """A rule member: a research candidate by id, or a package directory frozen under .local/pool-members."""
+    if entry in s["candidates"]:
+        return entry, dict(s["candidates"][entry]["spec"], runtime_path=runtime)
+    package = Path(entry)
+    if not (package / "strategy.py").is_file():
+        raise SystemExit(f"{entry} is neither a research candidate nor a package directory")
+    name = package.name
+    target = LOCAL / "pool-members" / name / f"package-{tree_hash(package)[:16]}"
+    if not target.exists():
+        shutil.copytree(package, target, ignore=shutil.ignore_patterns("__pycache__"))
+    return name, {"family": "code", "version": name, "parameters": {}, "model_path": None, "program": None,
+                  "package_path": str(target), "package_hash": tree_hash(target),
+                  "python_path": str(REPO / ".venv/bin/python"), "runtime_path": runtime}
+
+
+def freeze_pool(model_weights, model_name, runtime=None, replace=False, rules=None):
     """Fix the seven opponents and the development seed; refuses to change a pool in use.
 
-    ``replace`` starts a new record on purpose (a new runtime): earlier attempts
-    stay in attempts.jsonl under the old pool id and drop out of history.
+    ``replace`` starts a new record on purpose (a new runtime or new members):
+    earlier attempts stay in attempts.jsonl under the old pool id and drop out
+    of history until rebase() replays the versions worth keeping. A member
+    kept from the old pool keeps its registered equivalent implementation.
     """
     path = LOCAL / "pool.json"
     s = research_state()
     runtime = runtime or s["candidate_runtime_path"]
+    old = read_json(path) if path.exists() else {}
     members = {}
-    for cid in RULE_OPPONENTS:
-        members[cid] = with_timeouts(dict(s["candidates"][cid]["spec"], runtime_path=runtime))
+    for entry in rules or RULE_OPPONENTS:
+        cid, spec = member_spec(entry, s, runtime)
+        members[cid] = with_timeouts(spec)
     if not (MODELS / model_weights).is_dir():
         raise SystemExit(f"model weights {model_weights} are not under {MODELS}")
     members[model_name] = with_timeouts(
@@ -161,8 +184,12 @@ def freeze_pool(model_weights, model_name, runtime=None, replace=False):
             "resources": s["config"]["resources"], "timeouts": TIMEOUTS}
     pool["id"] = hashlib.sha256(json.dumps(pool, sort_keys=True).encode()).hexdigest()[:16]
     pool["dev_seed"] = int(pool["id"], 16)
-    if not replace and path.exists() and read_json(path)["id"] != pool["id"] and attempts(read_json(path)["id"]):
+    if not replace and old and old["id"] != pool["id"] and attempts(old["id"]):
         raise SystemExit("the current pool already has attempts; a new pool starts a new record (--replace)")
+    kept = {cid: impl for cid, impl in (old.get("implementations") or {}).items()
+            if old["members"].get(cid) == members.get(cid)}
+    if kept:
+        pool["implementations"] = kept
     atomic_json(path, pool)
     return pool
 
@@ -432,6 +459,73 @@ def frozen_source(record):
 STAGE_NAMES = {"queued": "排队等主机", "training": "训练中", "evaluating": "评估中", "equivalence": "等价检查中"}
 
 
+# -- replacing the pool -------------------------------------------------------------
+def drain_reason():
+    """Why the maintainer holds new attempts back (drain on), or None."""
+    path = LOCAL / "drain.json"
+    return read_json(path)["why"] if path.exists() else None
+
+
+def set_drain(why):
+    path = LOCAL / "drain.json"
+    if why:
+        atomic_json(path, {"why": why, "at": time.time()})
+    else:
+        path.unlink(missing_ok=True)
+
+
+def rebased_path(pool):
+    return LOCAL / "rebase" / pool["id"]
+
+
+def rebase(ids, host="local"):
+    """Play earlier versions on the current pool's development set; rebase_finish records them.
+
+    For a new pool: each line's earlier best versions (and the free-play
+    entrant) keep their ids, so recipes that name a teacher or an opponent
+    still find it. Resumable; hosts may run disjoint ids at once.
+    """
+    pool = load_pool()
+    check_seal()
+    done = []
+    for cid in ids:
+        out = rebased_path(pool) / f"{cid}.json"
+        if out.exists():
+            continue
+        rows = [r for r in attempts() if r["id"] == cid and r.get("spec") and r["pool"] != pool["id"]
+                and r["status"] in ("keep", "reference")]
+        if not rows:
+            raise Refused(f"{cid} 在之前的对手池下没有成功或参照记录")
+        old = rows[-1]
+        started = time.time()
+        scores, stats = play(pool, cid, old["spec"], range(DEV_BLOCKS), pool["dev_seed"], "dev", host)
+        score, se = mean_se(scores[k] for k in range(DEV_BLOCKS))
+        atomic_json(out, dict(old, pool=pool["id"], host=host, started_at=started, finished_at=time.time(),
+                              games=DEV_BLOCKS * 4, score=score, se=se, stats=stats, best_before=None, diff=None,
+                              confirm=None, reference=None, dev_blocks={str(k): scores[k] for k in sorted(scores)},
+                              rebased={"from_pool": old["pool"], "old_score": old["score"], "old_status": old["status"]}))
+        done.append(cid)
+        log(f"{cid} rebased on {pool['id']}: {score:+.2f} ± {se:.2f}")
+    return done
+
+
+def rebase_finish(line):
+    """Record the replayed versions of a line, lowest score first: the highest becomes its best.
+
+    Run after the RL start's baseline, whose record would otherwise come last.
+    They are not news for the iteration agents, so they are marked reported.
+    """
+    pool = load_pool()
+    rows = [read_json(p) for p in sorted(rebased_path(pool).glob("*.json"))]
+    rows = [r for r in rows if r["line"] == line and r["id"] not in {x["id"] for x in attempts(pool["id"])}]
+    rows.sort(key=lambda r: r["score"])
+    for r in rows:
+        with records_path().open("a") as f:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    mark_reported(rows)
+    return rows
+
+
 def history(line):
     """Every attempt of the line, its best version and the reference, for designing the next one."""
     pool = load_pool()
@@ -450,7 +544,8 @@ def history(line):
         host = f" @{r['host']}" if r.get("host") not in (None, "local") else ""
         base = f" 基于{r['base']}" if r.get("base") else ""
         cost = f" 每决策{r['decision_ms']['mine']:.2g}ms" if r.get("decision_ms") else ""
-        kind = f" 等价替换（沿用{r['equivalent']['to']}的成绩）" if r.get("equivalent") else ""
+        kind = (f" 等价替换（沿用{r['equivalent']['to']}的成绩）" if r.get("equivalent")
+                else f" 换池重算（旧池 {r['rebased']['old_score']:+.2f}）" if r.get("rebased") else "")
         t = r.get("training") or {}
         trained = (f" 训练{t['hands'] / 10000:.0f}万局" + (f"（续训自{t['from']}，累计{t['lineage_hands'] / 10000:.0f}万局）"
                                                          if t.get("from") else "")) if t.get("hands") else ""
@@ -834,6 +929,15 @@ def main():
     p.add_argument("--name", default="pool-model")
     p.add_argument("--runtime", help="frozen runtime directory (default: the research experiment's)")
     p.add_argument("--replace", action="store_true", help="start a new record even though the current pool has attempts")
+    p.add_argument("--rules", help="comma-separated rule members: research candidate ids or package directories")
+    dr = sub.add_parser("drain", help="hold new attempts back while the pool is replaced (maintainer)")
+    dr.add_argument("state", choices=("on", "off"))
+    dr.add_argument("why", nargs="?", default="维护者正在更换固定对手池")
+    rb = sub.add_parser("rebase", help="replay earlier versions on the current pool's development set")
+    rb.add_argument("attempts", nargs="+")
+    rb.add_argument("--host", default="local", choices=tuple(EVAL_WORKERS))
+    sub.add_parser("rebase-finish", help="record a line's replayed versions; the highest is its best").add_argument(
+        "line", choices=("rule", "rl"))
     ref = sub.add_parser("reference", help="score a research candidate or a pool model as a reference line")
     ref.add_argument("candidate")
     ref.add_argument("--host", default="local", choices=tuple(EVAL_WORKERS))
@@ -847,7 +951,22 @@ def main():
         print(freeze_runtime())
         return
     if args.command == "pool":
-        print(json.dumps(freeze_pool(args.model, args.name, args.runtime, args.replace)["id"]))
+        rules = [x.strip() for x in args.rules.split(",")] if args.rules else None
+        print(json.dumps(freeze_pool(args.model, args.name, args.runtime, args.replace, rules)["id"]))
+        return
+    if args.command == "drain":
+        set_drain(args.why if args.state == "on" else None)
+        print(f"排空：{args.state}")
+        return
+    if args.command == "rebase":
+        try:
+            print(rebase(args.attempts, args.host))
+        except Refused as exc:
+            raise SystemExit(str(exc))
+        return
+    if args.command == "rebase-finish":
+        rows = rebase_finish(args.line)
+        print("\n".join(f"{r['id']} {r['score']:+.2f}（旧池 {r['rebased']['old_score']:+.2f}）" for r in rows))
         return
     if args.command == "seal":
         print(seal())

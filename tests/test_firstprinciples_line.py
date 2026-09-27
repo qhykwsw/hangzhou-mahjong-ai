@@ -322,3 +322,27 @@ def test_a_pool_member_runs_its_registered_equivalent_implementation(harness, mo
     assert running["package_path"] != "/frozen" and running["package_hash"] == E.tree_hash(running["package_path"])
     with pytest.raises(E.Refused):
         E.implement("m", package)
+
+
+def test_a_new_pool_takes_the_replayed_versions_and_their_best(harness, monkeypatch):
+    E, rl, line = harness
+    for host in rl.HOSTS:
+        (rl.RL / f"setup-{host}.json").write_text("{}")
+    record(E, id="fp-rule-005", line="rule", pool="old", score=4.0, games=16, finished_at=1, spec={"package_hash": "a"})
+    record(E, id="fp-rule-009", line="rule", pool="old", score=5.0, games=16, finished_at=2, spec={"package_hash": "b"})
+    (E.LOCAL / "pool.json").write_text(json.dumps({"id": "pool-b", "members": {}, "dev_seed": 3}))
+    E.seal()
+    E.set_drain("换对手池")
+    assert line.design_hosts("rule") == ([], "换对手池：在途尝试照常跑完，之后暂不开新尝试，等维护者完成")
+    monkeypatch.setattr(E, "DEV_BLOCKS", 2)
+    new = {"fp-rule-005": 1.0, "fp-rule-009": 0.5}  # the old order need not hold against new opponents
+    monkeypatch.setattr(E, "play", lambda pool, cid, spec, blocks, seed, label, host: (
+        {b: new[cid] + b for b in blocks}, {"timeouts": 0, "fallback_actions": 0, "errors": 0}))
+    assert E.rebase(["fp-rule-005", "fp-rule-009"]) == ["fp-rule-005", "fp-rule-009"]
+    assert E.rebase(["fp-rule-005"]) == []  # resumable
+    E.rebase_finish("rule")
+    best = E.best("pool-b", "rule")
+    assert best["id"] == "fp-rule-005" and best["rebased"]["old_score"] == 4.0
+    assert {"fp-rule-005", "fp-rule-009"} <= E.reported()
+    E.set_drain(None)
+    assert line.design_hosts("rule") == (["local"], None)

@@ -31,7 +31,7 @@ RL 线最初的最好版本就是模仿起点本身，三台主机从一开始�
 ```bash
 cd projects/personal/firstprinciples
 ../../../.venv/bin/python -m harness.evaluate runtime                                       # 把 src/mahjong_ai 冻结为运行时
-../../../.venv/bin/python -m harness.evaluate pool --model <weights-sha> --name <模型名> [--runtime <目录>] [--replace]  # 冻结对手池
+../../../.venv/bin/python -m harness.evaluate pool --model <weights-sha> --name <模型名> [--rules <研究候选 ID 或代码包目录，逗号分隔>] [--runtime <目录>] [--replace]  # 冻结对手池
 ../../../.venv/bin/python -m harness.evaluate reference <研究候选 ID | 池内模型名> [--weights <sha>] [--host local|4070|4090|5070ti]  # 参照线
 ../../../.venv/bin/python -m harness.rl export <远端 checkpoint> --name <模型名> --host <主机>  # 导出别处训练的模型（如对手池成员）
 ../../../.venv/bin/python -m harness.rl setup <主机上的 checkpoint | 权重 sha> --name <起点名> --host 4070|4090|5070ti  # RL 起点（每台主机一次）
@@ -44,7 +44,12 @@ cd projects/personal/firstprinciples
 
 - 封存覆盖 `harness/` 全部代码（评估、训练预算与按主机的执行参数、循环）、对手池，以及每台 RL 主机的训练框架快照与起点。
 - 条件变了还没重新封存时，harness 不开始新尝试；正在循环的迭代 Agent 的 wait 继续等，一次 wait 结束（最多 9 分钟）仍不一致才让它停下。所以改完随即 `seal`，迭代不会中断。
-- 换了对手池就要在新池下重跑参照（上场版本、对手池里的模型）和 `harness.rl baseline`（RL 起点，它同时就是模仿小模型的参照）；没有起点成绩时 RL 线的迭代会停下。
+- 换对手池（新成员或新运行时）按这个顺序：
+  1. `harness.evaluate drain on "<原因>"`：两条线不再开新尝试，在途尝试照常跑完，迭代 Agent 继续等待；
+  2. 在途尝试全部结束后，`pool ... --replace` 冻结新池并 `seal`；
+  3. 在新池下补齐成绩：每个成员的参照（`reference`）、`harness.rl baseline`（RL 起点），以及两条线每个成为过最好版本的版本与自由对战上场版本（`rebase <编号> ... --host <主机>`，可分到几台主机并行，中断后重跑会跳过已完成的）；
+  4. `rebase-finish rule` 与 `rebase-finish rl`（在 baseline 之后）：重算的版本沿用原编号记入新池，分数从低到高写入，所以每条线重算分最高的成为它在新池下的最好版本；这些记录不作为新结果汇报；
+  5. `drain off`，告诉两条线新旧分数不可比。
 - 修改 `projects/personal/selfplay/guided/` 后：把 `.local/rl/source` 按其 `source-manifest.json` 的 id 归档到 `.local/rl/sources/<id>`，再对每台主机重新 `setup <起点 sha>`，最后 `seal`。`setup` 从当前工作区冻结框架（`guided/` 与 `src/`）：工作区里有其他会话未提交的改动时，先用 `git worktree` 取一份干净的 HEAD，把 `recipe_jobs.REPO` 指向它冻结到 `.local/rl/source`，再 `setup`。
 - 往 4070 上传教师包时，清单里登记的文件要全部带上，包括 Mac 的 `.so`，否则 `read_bundle` 会拒绝；每个运行时目录都要在主机上单独编译 `_fast` 扩展。对手池里的大模型是 384/8/8，评估时由对局执行器从 Mac 的模型库自动同步，不要手动往主机拷贝模型。
 - 流程检查：把 `.local/pool.json`、`.local/seal.json` 和 `.local/rl/setup-*.json` 复制到仓库内一个单独的目录，设 `FP_LOCAL` 指向它，再用 `FP_DEV`（开发集局组数，每组 4 场）、`FP_CONFIRM`、`FP_EQUIVALENCE_HANDS`、`FP_RL_HANDS`、`FP_RL_BUDGET` 缩短场数与训练预算，跑一遍 wait/start。这些缩短的设置只在 `FP_LOCAL` 下被接受，流程检查不提交 Git、不改动自由对战，跑完删掉这个目录。
