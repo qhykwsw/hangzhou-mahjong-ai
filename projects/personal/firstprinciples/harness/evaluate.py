@@ -28,7 +28,7 @@ settings (EVAL_WORKERS, EVAL_TABLES), not part of the pool's identity.
 
 Maintainer commands (from projects/personal/firstprinciples); iteration agents use harness.line:
   python -m harness.evaluate runtime                                    # freeze src/mahjong_ai as a runtime
-  python -m harness.evaluate pool --model <weights-sha> --name <name> [--rules <ids or package dirs>] [--runtime <dir>] [--replace]
+  python -m harness.evaluate pool [--model <weights-sha> --name <name>] [--rules <ids or package dirs>] [--runtime <dir>] [--replace]
   python -m harness.evaluate drain on "<why>" | off                    # stop new attempts while the pool is replaced
   python -m harness.evaluate rebase <attempt> ... [--host <host>]       # replay earlier versions on the new pool
   python -m harness.evaluate rebase-finish rule|rl                      # record them; the highest is the line's best
@@ -175,11 +175,12 @@ def freeze_pool(model_weights, model_name, runtime=None, replace=False, rules=No
     for entry in rules or RULE_OPPONENTS:
         cid, spec = member_spec(entry, s, runtime)
         members[cid] = with_timeouts(spec)
-    if not (MODELS / model_weights).is_dir():
-        raise SystemExit(f"model weights {model_weights} are not under {MODELS}")
-    members[model_name] = with_timeouts(
-        {"family": "model", "version": model_name, "parameters": {"weights": model_weights}}
-    )
+    if model_weights:  # the pool may be rules only
+        if not (MODELS / model_weights).is_dir():
+            raise SystemExit(f"model weights {model_weights} are not under {MODELS}")
+        members[model_name] = with_timeouts(
+            {"family": "model", "version": model_name, "parameters": {"weights": model_weights}}
+        )
     pool = {"members": members, "runtime_path": runtime, "config": s["config"]["game"],
             "resources": s["config"]["resources"], "timeouts": TIMEOUTS}
     pool["id"] = hashlib.sha256(json.dumps(pool, sort_keys=True).encode()).hexdigest()[:16]
@@ -925,7 +926,7 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("runtime", help="freeze src/mahjong_ai into the research runtime store")
     p = sub.add_parser("pool")
-    p.add_argument("--model", required=True, help="weights SHA-256 under the research model store")
+    p.add_argument("--model", help="weights SHA-256 under the research model store (omit for a pool of rules only)")
     p.add_argument("--name", default="pool-model")
     p.add_argument("--runtime", help="frozen runtime directory (default: the research experiment's)")
     p.add_argument("--replace", action="store_true", help="start a new record even though the current pool has attempts")

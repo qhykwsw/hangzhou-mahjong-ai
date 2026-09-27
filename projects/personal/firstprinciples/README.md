@@ -31,7 +31,7 @@ RL 线最初的最好版本就是模仿起点本身，三台主机从一开始�
 ```bash
 cd projects/personal/firstprinciples
 ../../../.venv/bin/python -m harness.evaluate runtime                                       # 把 src/mahjong_ai 冻结为运行时
-../../../.venv/bin/python -m harness.evaluate pool --model <weights-sha> --name <模型名> [--rules <研究候选 ID 或代码包目录，逗号分隔>] [--runtime <目录>] [--replace]  # 冻结对手池
+../../../.venv/bin/python -m harness.evaluate pool [--model <weights-sha> --name <模型名>] [--rules <研究候选 ID 或代码包目录，逗号分隔>] [--runtime <目录>] [--replace]  # 冻结对手池
 ../../../.venv/bin/python -m harness.evaluate reference <研究候选 ID | 池内模型名> [--weights <sha>] [--host local|4070|4090|5070ti]  # 参照线
 ../../../.venv/bin/python -m harness.rl export <远端 checkpoint> --name <模型名> --host <主机>  # 导出别处训练的模型（如对手池成员）
 ../../../.venv/bin/python -m harness.rl setup <主机上的 checkpoint | 权重 sha> --name <起点名> --host 4070|4090|5070ti  # RL 起点（每台主机一次）
