@@ -36,8 +36,11 @@ cd projects/personal/firstprinciples
 ../../../.venv/bin/python -m harness.rl export <远端 checkpoint> --name <模型名> --host <主机>  # 导出别处训练的模型（如对手池成员）
 ../../../.venv/bin/python -m harness.rl setup <主机上的 checkpoint | 权重 sha> --name <起点名> --host 4070|4090|5070ti  # RL 起点（每台主机一次）
 ../../../.venv/bin/python -m harness.rl baseline [--host 4070]                                   # 起点的完整开发集成绩，作为 RL 线最初的最好版本（每个对手池一次）
+../../../.venv/bin/python -m harness.evaluate implement <对手池规则成员> <代码包目录>          # 登记成员的等价实现（更快、决策一致）
 ../../../.venv/bin/python -m harness.evaluate seal                                          # 接受当前的评估条件
 ```
+
+- 对手池成员的等价实现：成员的冻结代码包太慢时，写一份决策完全相同的快版，用 `implement` 登记。它在 16384 局新牌局里逐个决策与冻结版本比较，全部一致才登记到 `pool.json` 的 `implementations`，之后评估、等价检查与 RL 训练对手都运行快版；对手池 id 与已有成绩不变。登记改变了封存的条件，随后 `seal`。
 
 - 封存覆盖 `harness/` 全部代码（评估、训练预算与按主机的执行参数、循环）、对手池，以及每台 RL 主机的训练框架快照与起点。
 - 条件变了还没重新封存时，harness 不开始新尝试；正在循环的迭代 Agent 的 wait 继续等，一次 wait 结束（最多 9 分钟）仍不一致才让它停下。所以改完随即 `seal`，迭代不会中断。

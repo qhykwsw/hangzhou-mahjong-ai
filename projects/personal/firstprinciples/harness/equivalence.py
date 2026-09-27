@@ -131,7 +131,7 @@ Path(sys.argv[3]).write_text(json.dumps({
 """
 
 
-def check(best_package, new_package, seed, root, workers=None):
+def check(best_package, new_package, seed, root, workers=None, hands=None):
     """Both packages on the same fresh positions; returns the counts and the first mismatches.
 
     Mismatching positions (Observation, both actions) are pickled to
@@ -140,8 +140,8 @@ def check(best_package, new_package, seed, root, workers=None):
     import pickle
 
     pool = E.load_pool()
-    opponents = {cid: spec for cid, spec in pool["members"].items() if spec.get("family") != "model"}
-    games = list(range(max(1, HANDS // HANDS_PER_GAME)))
+    opponents = {cid: spec for cid, spec in E.playing(pool).items() if spec.get("family") != "model"}
+    games = list(range(max(1, (hands or HANDS) // HANDS_PER_GAME)))
     workers = min(workers or E.EVAL_WORKERS["local"], len(games))
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)

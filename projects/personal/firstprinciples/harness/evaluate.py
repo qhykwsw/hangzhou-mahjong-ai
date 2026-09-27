@@ -31,6 +31,7 @@ Maintainer commands (from projects/personal/firstprinciples); iteration agents u
   python -m harness.evaluate pool --model <weights-sha> --name <name> [--runtime <dir>]  # freeze the pool once
   python -m harness.evaluate seal                                       # after any change to the conditions
   python -m harness.evaluate reference <research candidate | model name> [--host local|4070|4090|5070ti]
+  python -m harness.evaluate implement <pool member> <package dir>      # an equivalent, faster implementation
 """
 import argparse
 import contextlib
@@ -168,6 +169,62 @@ def freeze_pool(model_weights, model_name, runtime=None, replace=False):
 
 def load_pool():
     return read_json(LOCAL / "pool.json")
+
+
+def playing(pool):
+    """The pool's members as games run them.
+
+    A member with a registered equivalent implementation (implement(): the
+    same decision in every position checked, only faster) runs that package.
+    The pool's identity, and so every score under it, stays the frozen
+    members'; the registration is part of the sealed conditions.
+    """
+    implementations = pool.get("implementations") or {}
+    return {cid: dict(spec, package_path=implementations[cid]["package_path"],
+                      package_hash=implementations[cid]["package_hash"]) if cid in implementations else spec
+            for cid, spec in pool["members"].items()}
+
+
+IMPLEMENTATION_HANDS = override("FP_IMPLEMENTATION_HANDS", 16384)  # it plays in every game from now on
+
+
+def implement(member, package):
+    """Register ``package`` as the equivalent implementation of a rule member of the pool.
+
+    It must choose what the frozen member chooses in every position of fresh
+    games (harness/equivalence.py, on more hands than an attempt, since it
+    plays in every evaluation and training game from now on). The maintainer
+    reseals afterwards.
+    """
+    import fcntl
+
+    from . import equivalence
+
+    pool = load_pool()
+    spec = pool["members"].get(member)
+    if spec is None or spec.get("family") == "model":
+        raise Refused(f"{member} 不是对手池里的规则成员")
+    problems = check_source(package)
+    if problems:
+        raise Refused("不符合迭代线约定：\n" + "\n".join(problems))
+    root = LOCAL / "pool-implementations" / member
+    target = root / f"package-{tree_hash(package)[:16]}"
+    if not target.exists():
+        shutil.copytree(package, target, ignore=shutil.ignore_patterns("__pycache__"))
+    seed = random.SystemRandom().getrandbits(62)
+    with (LOCAL / "evaluation-local.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)  # alone on the Mac, like an evaluation
+        result = equivalence.check(spec["package_path"], target, seed, root / "check", hands=IMPLEMENTATION_HANDS)
+    if result["mismatches"]:
+        raise Refused(f"{result['decisions']} 个决策里 {result['mismatches']} 个与 {member} 不同：\n"
+                      + "\n".join(result["examples"]))
+    summary = {"package_path": str(target), "package_hash": tree_hash(target), "seed": seed,
+               "hands": result["hands"], "decisions": result["decisions"],
+               "time_ratio": result["seconds"][1] / max(result["seconds"][0], 1e-9), "at": time.time()}
+    pool = load_pool()
+    pool.setdefault("implementations", {})[member] = summary
+    atomic_json(LOCAL / "pool.json", pool)
+    return summary
 
 
 def conditions():
@@ -461,7 +518,7 @@ def _tasks(pool, attempt_id, spec, blocks, seed, label, host):
     """Job directories and tasks: one job per worker over contiguous blocks."""
     blocks = list(blocks)
     size = -(-len(blocks) // EVAL_WORKERS[host])
-    policies = dict(pool["members"], **{attempt_id: with_timeouts(spec)})
+    policies = dict(playing(pool), **{attempt_id: with_timeouts(spec)})
     resources = dict(pool["resources"], isolation=ISOLATION, tables=EVAL_TABLES[host])
     for n in range(0, len(blocks), size):
         # Under the pool id: a finished job is reused on restart, and a job of
@@ -782,6 +839,9 @@ def main():
     ref.add_argument("--host", default="local", choices=tuple(EVAL_WORKERS))
     ref.add_argument("--weights", help="score an exported model by its weights hash under this name")
     sub.add_parser("seal", help="accept the current evaluation conditions (maintainer)")
+    imp = sub.add_parser("implement", help="register an equivalent, faster implementation of a rule member of the pool")
+    imp.add_argument("member")
+    imp.add_argument("package")
     args = parser.parse_args()
     if args.command == "runtime":
         print(freeze_runtime())
@@ -792,11 +852,19 @@ def main():
     if args.command == "seal":
         print(seal())
         return
+    if args.command == "implement":
+        try:
+            summary = implement(args.member, args.package)
+        except Refused as exc:
+            raise SystemExit(str(exc))
+        print(f"{args.member}：{summary['hands']} 局新牌局的 {summary['decisions']} 个决策逐个一致，"
+              f"用时为原来的 {summary['time_ratio']:.0%}；已登记，确认后运行 seal")
+        return
     pool = load_pool()
     if args.weights:
         spec = {"family": "model", "version": args.candidate, "parameters": {"weights": args.weights}}
     elif args.candidate in pool["members"]:
-        spec = {k: v for k, v in pool["members"][args.candidate].items()
+        spec = {k: v for k, v in playing(pool)[args.candidate].items()
                 if k not in ("action_seconds", "response_seconds")}
     else:
         s = research_state()

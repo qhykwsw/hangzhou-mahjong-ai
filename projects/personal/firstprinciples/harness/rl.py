@@ -219,7 +219,7 @@ def catalog_facts():
     offered = catalog(pool)
     records = {r["id"]: r for r in E.distinct(E.attempts(pool["id"]))}
     teacher = "heuristic-efficiency--01--piao-call-channel"  # the teacher bundle's champion
-    specs = dict(pool["members"]) | {cid: e["spec"] for cid, e in offered.items()}
+    specs = E.playing(pool) | {cid: e["spec"] for cid, e in offered.items()}
     costs = decision_costs(specs, pool["runtime_path"])
     facts = []
     for cid, spec in specs.items():
@@ -345,7 +345,7 @@ def training_opponents(host_name):
     pool = E.load_pool()
     host = E.remote_host(host_name)
     offered = catalog(pool)
-    specs = opponent_specs(host, {cid: {"spec": spec} for cid, spec in pool["members"].items()}
+    specs = opponent_specs(host, {cid: {"spec": spec} for cid, spec in E.playing(pool).items()}
                            | {cid: {"spec": e["spec"]} for cid, e in offered.items()}, E.MODELS, pool["timeouts"])
     specs = {cid: (dict(spec, isolation=E.ISOLATION) if spec.get("family") != "model" else spec)
              for cid, spec in specs.items()}

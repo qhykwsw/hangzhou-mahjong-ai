@@ -299,3 +299,26 @@ def test_a_host_lent_until_a_time_closes_then_and_its_attempt_moves(harness, mon
     assert line.design_hosts("rl") == (["4090"], None)  # the redo takes the first free host
     line.hosts("on", "5070ti")
     assert line.enabled("5070ti") and not line.closing("5070ti")
+
+
+def test_a_pool_member_runs_its_registered_equivalent_implementation(harness, monkeypatch, tmp_path):
+    E, _, _ = harness
+    equivalence = importlib.import_module("harness.equivalence")
+    member = {"family": "code", "package_path": "/frozen", "package_hash": "f"}
+    (E.LOCAL / "pool.json").write_text(json.dumps({"id": "pool-a", "members": {"piao": member, "m": {"family": "model"}}}))
+    package = tmp_path / "fast"
+    package.mkdir()
+    (package / "strategy.py").write_text("x = 1\n")
+    result = {"hands": 64, "decisions": 700, "mismatches": 1, "seconds": [4.0, 1.0], "examples": ["a"]}
+    monkeypatch.setattr(equivalence, "check", lambda *args, **kwargs: result)
+    with pytest.raises(E.Refused, match="不同"):
+        E.implement("piao", package)
+    assert E.playing(E.load_pool())["piao"] == member
+    result["mismatches"] = 0
+    E.implement("piao", package)
+    pool = E.load_pool()
+    assert pool["id"] == "pool-a" and pool["members"]["piao"] == member  # the pool's identity stays
+    running = E.playing(pool)["piao"]
+    assert running["package_path"] != "/frozen" and running["package_hash"] == E.tree_hash(running["package_path"])
+    with pytest.raises(E.Refused):
+        E.implement("m", package)
