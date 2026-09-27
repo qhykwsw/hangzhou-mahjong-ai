@@ -5,6 +5,7 @@ on the conversation that started an attempt:
 
   python -m harness.line wait rule|rl [--minutes 9]   # results, notices, and the next step
   python -m harness.line start rule|rl "<change>" --why "<hypothesis>" --design-start <epoch> [--host <free host>]
+  python -m harness.line start rule "<change>" --why "<why faster>" --design-start <epoch> --equivalent
   python -m harness.line status rule|rl               # every attempt, the hosts, the lease
   python -m harness.line stop rule|rl                 # leave the loop; attempts run on
 
@@ -36,6 +37,7 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from . import equivalence
 from . import evaluate as E
 from . import rl
 from guided import recipe_jobs, remote  # noqa: E402  (rl puts guided on the path)
@@ -64,8 +66,30 @@ def queued(line):
 
 def extra(state, training=None):
     """What an attempt's record carries besides its evaluation."""
-    return {"why": state.get("why"), "base": state.get("base"), "started_at": state["started_at"],
-            "training": training or state.get("training")}
+    out = {"why": state.get("why"), "base": state.get("base"), "started_at": state["started_at"],
+           "training": training or state.get("training")}
+    if state.get("decision_ms"):
+        out["decision_ms"] = state["decision_ms"]
+    return out
+
+
+def decision_ms(state):
+    """A rule attempt's milliseconds per decision and its base version's, both measured the same way.
+
+    Reported with every rule result: the line's own evaluations, the RL
+    line's teacher labels and the platform's time limits all pay for it.
+    """
+    pool = E.load_pool()
+    specs = {state["id"]: state["spec"]}
+    base = next((r for r in reversed(E.attempts(pool["id"], "rule")) if r["id"] == state.get("base")), None)
+    if base:
+        specs[base["id"]] = base["spec"]
+    try:
+        costs = rl.decision_costs(specs, pool["runtime_path"])
+    except Exception as exc:  # the evaluation still counts the version's own errors
+        E.log(f"{state['id']}: decision cost not measured: {str(exc)[-300:]}")
+        return None
+    return {"mine": costs[state["id"]]["mean_ms"], "base": costs[base["id"]]["mean_ms"] if base else None}
 
 
 def record_failure(state, status, error, training=None):
@@ -318,7 +342,13 @@ def advance(state):
             state = claim_host(state)
         elif state["stage"] == "training":
             state = train(state)
+        elif state["stage"] == "equivalence":
+            equivalent(state)
+            return
         else:
+            if state["line"] == "rule" and "decision_ms" not in state:
+                state = load(state["id"]) | {"decision_ms": decision_ms(state)}
+                save(state)
             E.evaluate(state["line"], state["spec"], state["description"], state["id"],
                        state.get("design_seconds"), host=state["host"],
                        confirm_seed=state["confirm_seed"], extra=extra(state))
@@ -345,6 +375,40 @@ def train(state):
     state = load(state["id"]) | {"stage": "evaluating", "spec": spec, "training": training}
     save(state)
     return state
+
+
+def equivalent(state):
+    """Replace the best version by code that decides exactly as it does (harness/equivalence.py)."""
+    pool = E.load_pool()
+    champion = E.best(pool["id"], "rule")
+    if champion is None or champion["id"] != state["base"]:
+        record_failure(state, "inequivalent", f"最好版本已不是 {state['base']}，等价检查没有对象")
+        return
+    state = load(state["id"]) | {"decision_ms": state.get("decision_ms") or decision_ms(state)}
+    save(state)
+    root = E.LOCAL / "attempts" / state["id"] / "equivalence"
+    with (E.LOCAL / "evaluation-local.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)  # alone on the Mac, like an evaluation
+        result = equivalence.check(E.frozen_source(champion), state["spec"]["package_path"],
+                                   state["confirm_seed"], root)
+    summary = {"to": champion["id"], "seed": state["confirm_seed"], "hands": result["hands"],
+               "decisions": result["decisions"], "mismatches": result["mismatches"],
+               "time_ratio": result["seconds"][1] / max(result["seconds"][0], 1e-9)}
+    if result["mismatches"]:
+        examples = "\n".join(f"{i + 1}. {text}" for i, text in enumerate(result["examples"]))
+        record_failure(state, "inequivalent",
+                       f"{result['hands']} 局新牌局的 {result['decisions']} 个决策里，{result['mismatches']} 个与 "
+                       f"{champion['id']} 不同。\n前几个：\n{examples}\n完整局面（Observation 与双方动作）在 "
+                       f"{root / 'mismatches.pickle'}")
+        return
+    # Same decisions play the development set's games move for move: the scores carry over.
+    record = dict(id=state["id"], line="rule", pool=pool["id"], status="keep", description=state["description"],
+                  host="local", finished_at=time.time(), games=champion["games"], score=champion["score"],
+                  se=champion["se"], best_before=champion["score"], diff=0.0, confirm=None,
+                  stats=champion["stats"], spec=state["spec"], dev_blocks=champion["dev_blocks"],
+                  design_seconds=state.get("design_seconds"), equivalent=summary) | extra(state)
+    record["reference"] = E.against_platform(record)
+    E.append_record(record)
 
 
 def requeue(state, stage):
@@ -536,10 +600,12 @@ def wait(line, minutes):
         time.sleep(POLL_SECONDS)
 
 
-def start(line, change, why, design_start, host=None):
+def start(line, change, why, design_start, host=None, equivalent=False):
     claim(line)
     preflight(line)
     champion = E.best(E.load_pool()["id"], line)
+    if equivalent and (line != "rule" or champion is None):
+        raise E.Refused("等价替换只用于规则线已有最好版本之后：它要与最好版本逐个决策比较。")
     source = E.SOURCES[line]
     rel = source.relative_to(E.REPO).as_posix()
     workdir = E.LOCAL / f"workdir-{line}.json"
@@ -568,7 +634,8 @@ def start(line, change, why, design_start, host=None):
         now = time.time()
         state = dict(id=attempt_id, line=line, host=host, description=change, why=why,
                      base=champion["id"] if champion else None, started_at=now,
-                     design_seconds=now - design_start, stage="training" if line == "rl" else "evaluating",
+                     design_seconds=now - design_start,
+                     stage="training" if line == "rl" else "equivalence" if equivalent else "evaluating",
                      seed=random.SystemRandom().getrandbits(31), confirm_seed=random.SystemRandom().getrandbits(62))
         save(state)
     if line == "rule":
@@ -578,7 +645,8 @@ def start(line, change, why, design_start, host=None):
     save(state)
     spawn(attempt_id)
     number = int(attempt_id.rsplit("-", 1)[-1])
-    print(f"尝试 {number} · {E.LINE_NAMES[line]}：{change}" + (f"（{host}）" if line == "rl" else ""))
+    print(f"尝试 {number} · {E.LINE_NAMES[line]}：{change}" + (f"（{host}）" if line == "rl" else "")
+          + ("（等价替换）" if equivalent else ""))
 
 
 def status(line):
@@ -676,6 +744,8 @@ def main():
     s.add_argument("--why", required=True, help="one or two sentences: the hypothesis behind it")
     s.add_argument("--design-start", type=float, required=True, help="epoch when designing this attempt began")
     s.add_argument("--host", help="RL: the free host this attempt was designed for (wait lists them)")
+    s.add_argument("--equivalent", action="store_true",
+                   help="rule: decides exactly as the best version, only faster or simpler; checked move by move")
     for name in ("status", "stop", "takeover"):
         sub.add_parser(name).add_argument("line", choices=lines)
     h = sub.add_parser("hosts")
@@ -689,7 +759,7 @@ def main():
         if args.command == "wait":
             wait(args.line, args.minutes)
         elif args.command == "start":
-            start(args.line, args.change, args.why, args.design_start, args.host)
+            start(args.line, args.change, args.why, args.design_start, args.host, args.equivalent)
         elif args.command == "status":
             status(args.line)
         elif args.command == "stop":

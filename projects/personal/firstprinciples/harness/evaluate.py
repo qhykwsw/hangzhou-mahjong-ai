@@ -372,7 +372,7 @@ def frozen_source(record):
     return LOCAL / "rl" / "attempts" / record["id"] / "recipe"
 
 
-STAGE_NAMES = {"queued": "排队等主机", "training": "训练中", "evaluating": "评估中"}
+STAGE_NAMES = {"queued": "排队等主机", "training": "训练中", "evaluating": "评估中", "equivalence": "等价检查中"}
 
 
 def history(line):
@@ -392,11 +392,16 @@ def history(line):
         design = "" if r.get("design_seconds") is None else f" 设计{r['design_seconds'] / 60:.0f}分"
         host = f" @{r['host']}" if r.get("host") not in (None, "local") else ""
         base = f" 基于{r['base']}" if r.get("base") else ""
-        out.append(f"{r['id']} {STATUS[r['status']]}{host} {r['games']}场 {score}{diff}{lower}{design}{base}｜{r['description']}")
+        cost = f" 每决策{r['decision_ms']['mine']:.2g}ms" if r.get("decision_ms") else ""
+        kind = f" 等价替换（沿用{r['equivalent']['to']}的成绩）" if r.get("equivalent") else ""
+        out.append(f"{r['id']} {STATUS[r['status']]}{kind}{host} {r['games']}场 {score}{diff}{lower}{cost}{design}{base}"
+                   f"｜{r['description']}")
         if r.get("why"):
             out.append(f"    假设：{r['why']}")
         if r.get("error"):
-            out.append(f"    原因：{r['error'][-300:]}")
+            # A mismatch report's head says how many; its positions were in the report.
+            reason = r["error"].splitlines()[0] if r["status"] == "inequivalent" else r["error"][-300:]
+            out.append(f"    原因：{reason}")
     for r in running(line):
         minutes = (time.time() - r["started_at"]) / 60
         where = f" @{r['host']}" if r.get("host") else ""
@@ -695,7 +700,7 @@ def against_platform(record):
 
 
 STATUS = {"keep": "成功", "discard": "失败", "unconfirmed": "开发集高但未确认",
-          "reference": "参照", "crash": "崩溃", "invalid": "无效", "cancelled": "已取消"}
+          "reference": "参照", "crash": "崩溃", "invalid": "无效", "cancelled": "已取消", "inequivalent": "不等价"}
 LINE_NAMES = {"rule": "规则线", "rl": "RL 线", "reference": "参照"}
 
 
@@ -718,19 +723,34 @@ def report(record):
     training = record.get("training") or {}
     trained = (f"训练：{training['hands']:,} 局，{training['training_seconds'] / 60:.0f} 分钟"
                if training.get("hands") and training.get("training_seconds") else None)
+    cost = record.get("decision_ms")
+    cost = cost and (f"每决策 {cost['mine']:.2g} ms" + (f"（此前最好 {cost['base']:.2g} ms）" if cost.get("base") else "")
+                     + "，Mac 单进程实测")
     if record["score"] is None:
+        # A mismatch report names positions; keep all of it.
+        reason = (record.get("error") or "")[-(1500 if record["status"] == "inequivalent" else 300):]
         return "\n".join([f"{head}：{status}{f'（{where[1:]}）' if where else ''}", f"改动：{record['description']}",
-                          *([trained] if trained else []), f"原因：{(record.get('error') or '')[-300:]}"])
-    lines = [f"{head}：{status}（开发集 {record['games']} 场{where}）",
-             f"改动：{record['description']}",
-             *([trained] if trained else []),
-             f"得分：{record['score']:+.2f} ± {record['se']:.2f}"
-             + (f"（此前最好 {record['best_before']:+.2f}，配对差 {record['diff']:+.2f}）" if record["best_before"] is not None else "（基线）")]
+                          *([trained] if trained else []), *([cost] if cost else []), f"原因：{reason}"])
+    same = record.get("equivalent")
+    if same:
+        lines = [f"{head}：{status}（等价替换，没有跑开发集）",
+                 f"改动：{record['description']}",
+                 f"等价检查：{same['hands']} 局新牌局的 {same['decisions']} 个决策与 {same['to']} 完全一致，"
+                 f"沿用它的得分 {record['score']:+.2f} ± {record['se']:.2f}；同一批决策上用时为它的 {same['time_ratio']:.0%}"]
+    else:
+        lines = [f"{head}：{status}（开发集 {record['games']} 场{where}）",
+                 f"改动：{record['description']}",
+                 *([trained] if trained else []),
+                 f"得分：{record['score']:+.2f} ± {record['se']:.2f}"
+                 + (f"（此前最好 {record['best_before']:+.2f}，配对差 {record['diff']:+.2f}）" if record["best_before"] is not None else "（基线）")]
     if record["confirm"]:
         c = record["confirm"]
         lines.append(f"确认集：{c['games']} 场配对差 {c['diff']:+.2f} ± {c['se']:.2f}，90% 下界 {c['lower90']:+.2f}")
+    if cost:
+        lines.append(cost)
     s = record["stats"]
-    lines.append(f"超时 {s['timeouts']}，代打 {s['fallback_actions']}，报错 {s['errors']}")
+    if not same:
+        lines.append(f"超时 {s['timeouts']}，代打 {s['fallback_actions']}，报错 {s['errors']}")
     ref = record.get("reference")
     if ref and ref.get("missing"):
         lines.append(f"自由对战上场版本 {ref['against']} 在当前对手池下没有参照成绩，无法比较")

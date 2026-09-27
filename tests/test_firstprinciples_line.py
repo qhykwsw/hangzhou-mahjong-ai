@@ -207,3 +207,34 @@ def test_catalog_offers_every_version_that_became_a_line_best(harness):
     assert set(offered) == {"fp-rule-002", "fp-rl-001"}
     assert offered["fp-rule-002"]["spec"]["runtime_path"] == "/pool-runtime"  # rule versions play under the pool's runtime
     assert "runtime_path" not in offered["fp-rl-001"]["spec"]
+
+
+@pytest.mark.parametrize("mismatches, best_after", [(0, "fp-rule-003"), (2, "fp-rule-002")])
+def test_equivalent_code_takes_over_the_best_versions_scores(harness, monkeypatch, mismatches, best_after):
+    E, _, line = harness
+    equivalence = importlib.import_module("harness.equivalence")
+    monkeypatch.setattr(E, "platform_entrant", lambda: None)
+    monkeypatch.setattr(line, "decision_ms", lambda state: {"mine": 2.0, "base": 8.0})
+    record(E, id="fp-rule-002", line="rule", games=16, finished_at=1, stats={"timeouts": 0},
+           spec={"package_path": "/best"}, dev_blocks={"0": 1.5, "1": -0.5}, score=0.5)
+    seen = []
+
+    def check(best, new, seed, root):
+        seen.append((str(best), new))
+        return {"hands": 64, "decisions": 700, "mismatches": mismatches, "seconds": [8.0, 2.0],
+                "examples": ["第 1 局 draw：最好版本 a，新代码 b"] * mismatches}
+
+    monkeypatch.setattr(equivalence, "check", check)
+    state = dict(id="fp-rule-003", line="rule", host="local", description="剪枝", why="更快", base="fp-rule-002",
+                 started_at=2, design_seconds=60, stage="equivalence", confirm_seed=7,
+                 spec={"package_path": "/new", "package_hash": "n"})
+    line.save(state)
+    line.equivalent(state)
+    assert seen == [("/best", "/new")]
+    assert E.best("pool-a", "rule")["id"] == best_after
+    mine = E.attempts("pool-a", "rule")[-1]
+    if mismatches:
+        assert mine["status"] == "inequivalent" and "2 个与 fp-rule-002 不同" in mine["error"]
+    else:
+        assert (mine["dev_blocks"], mine["score"], mine["equivalent"]["time_ratio"]) == ({"0": 1.5, "1": -0.5}, 0.5, 0.25)
+    assert not E.running("rule")

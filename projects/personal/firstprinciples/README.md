@@ -14,6 +14,7 @@
 - 开发集：每个版本（尝试、参照、RL 起点）都打满同一批 16384 场，一个版本只有一个成绩；同一版本有多条记录时，图、排名和 `status` 只显示场数最多、最新的那条。
 - 确认集：开发集超过最好成绩后，换全新牌墙与最好版本各打 8192 场，配对差单侧 90% 下界大于 0 才算成功。确认期间最好版本换了（RL 线三台主机并行时会发生），先用新最好版本存档的开发集成绩比一次，不领先就直接判失败，领先才让它重打这批新牌墙。
 - 新的最好版本还会在开发集上与自由对战的上场版本配对，下界大于 0 时汇报「高于参照线，可以上场」，由用户决定是否换上。
+- 等价替换：规则线只提速、不改决策的尝试（`start --equivalent`）不跑开发集。`harness/equivalence.py` 在新牌局里让它与最好版本面对同一批局面（最好版本坐一座，其余三座是对手池里的规则），逐个决策比较；全部一致才沿用最好版本的成绩成为新的最好版本，否则记为不等价。每个规则结果都附每决策耗时，与 RL 教师清单同一口径（Mac 单进程实测）。
 
 ## 迭代方式
 
@@ -43,7 +44,7 @@ cd projects/personal/firstprinciples
 - 换了对手池就要在新池下重跑参照（上场版本、对手池里的模型）和 `harness.rl baseline`（RL 起点，它同时就是模仿小模型的参照）；没有起点成绩时 RL 线的迭代会停下。
 - 修改 `projects/personal/selfplay/guided/` 后：把 `.local/rl/source` 按其 `source-manifest.json` 的 id 归档到 `.local/rl/sources/<id>`，再对每台主机重新 `setup <起点 sha>`，最后 `seal`。`setup` 从当前工作区冻结框架（`guided/` 与 `src/`）：工作区里有其他会话未提交的改动时，先用 `git worktree` 取一份干净的 HEAD，把 `recipe_jobs.REPO` 指向它冻结到 `.local/rl/source`，再 `setup`。
 - 往 4070 上传教师包时，清单里登记的文件要全部带上，包括 Mac 的 `.so`，否则 `read_bundle` 会拒绝；每个运行时目录都要在主机上单独编译 `_fast` 扩展。对手池里的大模型是 384/8/8，评估时由对局执行器从 Mac 的模型库自动同步，不要手动往主机拷贝模型。
-- 流程检查：把 `.local/pool.json`、`.local/seal.json` 和 `.local/rl/setup-*.json` 复制到仓库内一个单独的目录，设 `FP_LOCAL` 指向它，再用 `FP_DEV`（开发集局组数，每组 4 场）、`FP_CONFIRM`、`FP_RL_HANDS`、`FP_RL_BUDGET` 缩短场数与训练预算，跑一遍 wait/start。这些缩短的设置只在 `FP_LOCAL` 下被接受，流程检查不提交 Git、不改动自由对战，跑完删掉这个目录。
+- 流程检查：把 `.local/pool.json`、`.local/seal.json` 和 `.local/rl/setup-*.json` 复制到仓库内一个单独的目录，设 `FP_LOCAL` 指向它，再用 `FP_DEV`（开发集局组数，每组 4 场）、`FP_CONFIRM`、`FP_EQUIVALENCE_HANDS`、`FP_RL_HANDS`、`FP_RL_BUDGET` 缩短场数与训练预算，跑一遍 wait/start。这些缩短的设置只在 `FP_LOCAL` 下被接受，流程检查不提交 Git、不改动自由对战，跑完删掉这个目录。
 
 ## 运行数据
 

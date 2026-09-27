@@ -231,7 +231,8 @@ def catalog_facts():
             "score": record and round(record["score"], 2),
             "se": record and round(record["se"], 2),
             "decision_ms": costs.get(cid),
-            "description": record["description"] if cid in offered else None,
+            "description": (f"与 {record['equivalent']['to']} 决策完全一致的等价实现：" if record.get("equivalent") else "")
+            + record["description"] if cid in offered else None,
         })
     return facts
 
