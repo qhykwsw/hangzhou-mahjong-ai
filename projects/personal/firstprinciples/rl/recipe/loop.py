@@ -164,12 +164,14 @@ def train(ctx):
     # policy-gradient steps. Interleaving the two made each undo the other.
     opt = torch.optim.Adam(actor.parameters(), lr=float(cfg["distill_learning_rate"]), eps=1e-5)
     permuter = SuitPermuter(ctx.device)
-    step, iteration, last = 0, 0, 0.0
+    chunks = max(1, int(cfg["chunks_per_step"]))
+    step, iteration, rollouts, last = 0, 0, 0, 0.0
     hands = lambda: ctx.hands_left() is None or ctx.hands_left() > 0  # noqa: E731
-    while hands() and ctx.time_left() > 1.15 * last + reserve:
-        began = time.time()
+
+    def rollout(distilling):
+        """One rollout of target_rows decisions, or None when time or hands ran short."""
+        nonlocal iteration
         rows = []
-        distilling = step < int(cfg["distill_steps"])
         with InferenceSession(actor) as session:
             while len(rows) < target_rows and hands() and ctx.time_left() > reserve:
                 iteration += 1
@@ -179,14 +181,22 @@ def train(ctx):
                 )
                 rows += got
         if not rows or (len(rows) < target_rows and hands()):
-            break
-        step += 1
-        collected = time.time() - began
-        packing_started = time.time()
-        batch_source = (resident_rows(rows, ctx.device, ctx.resources["gpu_limit_bytes"])
-                        if cfg.get("resident_rows", False) else None)
-        packing_seconds = time.time() - packing_started
+            return None
+        return rows
+
+    while hands() and ctx.time_left() > 1.15 * last + reserve:
+        began = time.time()
+        distilling = step < int(cfg["distill_steps"])
         if distilling:
+            rows = rollout(True)
+            if rows is None:
+                break
+            step += 1
+            collected = time.time() - began
+            packing_started = time.time()
+            batch_source = (resident_rows(rows, ctx.device, ctx.resources["gpu_limit_bytes"])
+                            if cfg.get("resident_rows", False) else None)
+            packing_seconds = time.time() - packing_started
             stats = distill(actor, rows, opt, microbatch, ctx.device, rng, int(cfg["distill_epochs"]),
                             batch_source=batch_source, permuter=permuter)
             count = len(rows)
@@ -197,28 +207,55 @@ def train(ctx):
                     packing_seconds=packing_seconds)
             torch.cuda.empty_cache()
             continue
-        weights, stats = advantages(
-            rows, cfg, rng, ctx.device, ctx.seed + 7919 * step, batch_source=batch_source,
-        )
-        fitted = time.time() - began - collected
-        params, direction = gradient(
-            actor, rows, weights, microbatch, ctx.device, batch_source=batch_source,
-            capture=cfg.get("gradient_graphs", False),
-        )
-        subset = rng.choice(len(rows), size=min(len(rows), int(cfg["kl_rows"])), replace=False)
-        batches = [batch_source.batch(subset[s : s + 512]) if batch_source is not None
-                   else make_batch([rows[i] for i in subset[s : s + 512]], ctx.device)
-                   for s in range(0, len(subset), 512)]
-        count = len(rows)
-        used_resident = batch_source is not None
-        del rows, batch_source
+        # One policy-gradient step sums the gradients of `chunks` rollouts of
+        # the same policy: near the teacher's optimum each step's noise costs
+        # quadratically, so a larger batch per KL step settles closer to it.
+        # Each rollout is fitted, differentiated and freed before the next.
+        params, direction, batches, parts, count = None, None, None, [], 0
+        collected = fitted = 0.0
+        for part in range(chunks):
+            if part and not hands():
+                break
+            started = time.time()
+            rows = rollout(False)
+            if rows is None:
+                break
+            collected += time.time() - started
+            started = time.time()
+            batch_source = (resident_rows(rows, ctx.device, ctx.resources["gpu_limit_bytes"])
+                            if cfg.get("resident_rows", False) else None)
+            rollouts += 1
+            weights, stats = advantages(
+                rows, cfg, rng, ctx.device, ctx.seed + 7919 * rollouts, batch_source=batch_source,
+            )
+            fitted += time.time() - started
+            params, grad = gradient(
+                actor, rows, weights, microbatch, ctx.device, batch_source=batch_source,
+                capture=cfg.get("gradient_graphs", False),
+            )
+            direction = grad if direction is None else [d + g for d, g in zip(direction, grad)]
+            # The KL check uses a subset of the latest rollout (same policy).
+            subset = rng.choice(len(rows), size=min(len(rows), int(cfg["kl_rows"])), replace=False)
+            del batches
+            batches = [batch_source.batch(subset[s : s + 512]) if batch_source is not None
+                       else make_batch([rows[i] for i in subset[s : s + 512]], ctx.device)
+                       for s in range(0, len(subset), 512)]
+            parts.append(stats)
+            count += len(rows)
+            del rows, batch_source, weights, grad
+            torch.cuda.empty_cache()
+        if direction is None:
+            break
+        step += 1
+        direction = [d / len(parts) for d in direction]
+        stats = {key: float(np.mean([p[key] for p in parts])) for key in parts[0]}
         stats |= kl_step(actor, params, direction, batches, float(cfg["step_kl"]))
+        del params, direction, batches
         ctx.save_actor(actor)
         last = time.time() - began
         ctx.log(
-            step=step, rows=count, **stats, collect_seconds=collected,
+            step=step, rows=count, rollouts=len(parts), **stats, collect_seconds=collected,
             critic_seconds=fitted, step_seconds=last,
-            packing_seconds=packing_seconds, resident_rows=used_resident,
         )
         torch.cuda.empty_cache()
     return actor
