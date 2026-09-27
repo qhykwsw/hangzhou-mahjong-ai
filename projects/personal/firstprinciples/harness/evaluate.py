@@ -464,16 +464,20 @@ STAGE_NAMES = {"queued": "排队等主机", "training": "训练中", "evaluating
 
 
 # -- replacing the pool -------------------------------------------------------------
-def drain_reason():
-    """Why the maintainer holds new attempts back (drain on), or None."""
+def drain_reason(line=None):
+    """Why the maintainer holds the line's new attempts back (drain on), or None."""
     path = LOCAL / "drain.json"
-    return read_json(path)["why"] if path.exists() else None
+    if not path.exists():
+        return None
+    drain = read_json(path)
+    return drain["why"] if line is None or line in drain.get("lines", ("rule", "rl")) else None
 
 
-def set_drain(why):
+def set_drain(why, lines=None):
+    """Hold both lines, or only ``lines`` (one line's replayed versions may be recorded before the other's)."""
     path = LOCAL / "drain.json"
     if why:
-        atomic_json(path, {"why": why, "at": time.time()})
+        atomic_json(path, {"why": why, "at": time.time(), "lines": list(lines or ("rule", "rl"))})
     else:
         path.unlink(missing_ok=True)
 
@@ -937,6 +941,7 @@ def main():
     dr = sub.add_parser("drain", help="hold new attempts back while the pool is replaced (maintainer)")
     dr.add_argument("state", choices=("on", "off"))
     dr.add_argument("why", nargs="?", default="维护者正在更换固定对手池")
+    dr.add_argument("--only", choices=("rule", "rl"), help="hold only this line")
     rb = sub.add_parser("rebase", help="replay earlier versions on the current pool's development set")
     rb.add_argument("attempts", nargs="+")
     rb.add_argument("--host", default="local", choices=tuple(EVAL_WORKERS))
@@ -959,8 +964,8 @@ def main():
         print(json.dumps(freeze_pool(args.model, args.name, args.runtime, args.replace, rules)["id"]))
         return
     if args.command == "drain":
-        set_drain(args.why if args.state == "on" else None)
-        print(f"排空：{args.state}")
+        set_drain(args.why if args.state == "on" else None, [args.only] if args.only else None)
+        print(f"排空：{args.state}" + (f"（只有{LINE_NAMES[args.only]}）" if args.only and args.state == "on" else ""))
         return
     if args.command == "rebase":
         try:
