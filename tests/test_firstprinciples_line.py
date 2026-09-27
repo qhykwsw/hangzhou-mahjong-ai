@@ -1,6 +1,7 @@
 """Iteration-line loop (ADR-0016): seal, leases, host queue, recipe rules, platform flag."""
 import importlib
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -275,3 +276,26 @@ def test_rl_attempts_choose_their_hands_and_may_continue_the_best(harness, monke
     path, behind = rl.start_actor(states["4070"], "4070", {"start_actor": "/start"})
     assert path.endswith("/w3") and behind == 1_000_000  # training adds up along the line
     assert rl.start_actor(states["4090"], "4090", {"start_actor": "/start"}) == ("/start", 0)
+
+
+def test_a_host_lent_until_a_time_closes_then_and_its_attempt_moves(harness, monkeypatch):
+    E, rl, line = harness
+    for host in rl.HOSTS:
+        (rl.RL / f"setup-{host}.json").write_text("{}")
+    record(E, id="fp-rl-000")
+    monkeypatch.setattr(line, "interrupt", lambda state: None)
+    with pytest.raises(E.Refused):
+        line.hosts("off", "5070ti", at="2000-01-01 09:30")
+    line.hosts("off", "5070ti", at=time.strftime("%Y-%m-%d %H:%M", time.localtime(time.time() + 3600)))
+    E.reserve_attempt("rl", "5070ti", "a direction", stage="training")
+    assert line.enabled("5070ti") and line.closing("5070ti") and line.close_due_hosts() == []
+    values = json.loads((E.LOCAL / "hosts.json").read_text())
+    values["5070ti"]["off_at"] = time.time() - 1  # the lending time is over
+    (E.LOCAL / "hosts.json").write_text(json.dumps(values))
+    notices = line.close_due_hosts()
+    assert len(notices) == 1 and "排队到其他空闲主机重做训练" in notices[0]
+    assert not line.enabled("5070ti") and line.close_due_hosts() == []
+    assert E.running("rl")[0]["stage"] == "queued"  # the direction goes on elsewhere
+    assert line.design_hosts("rl") == (["4090"], None)  # the redo takes the first free host
+    line.hosts("on", "5070ti")
+    assert line.enabled("5070ti") and not line.closing("5070ti")

@@ -38,6 +38,7 @@
 | 「接管」 | `python -m harness.line takeover <线>`：另一个会话持有推进权、wait 让你停下时 |
 | 「4070 先别用了」「4090 加回来」 | `python -m harness.line hosts off\|on <主机>`；关闭时在跑的尝试照常跑完 |
 | 「立刻腾出 4070」 | `python -m harness.line hosts off 4070 --now`：撤下它上面的尝试，排队到其他主机重做 |
+| 「5070 Ti 只能用到明天 9:30」 | `python -m harness.line hosts off 5070ti --at "YYYY-MM-DD 09:30"`：到点关闭，没跑完的尝试排队到其他主机重做；之前 wait 会提示剩余时间，按它定规模 |
 | 「取消尝试 N」 | `python -m harness.line cancel <编号>` |
 | 同意把某个版本换上自由对战 | `python -m harness.line promote <编号>`，然后继续循环 |
 

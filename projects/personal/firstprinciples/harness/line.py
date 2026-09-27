@@ -12,7 +12,7 @@ on the conversation that started an attempt:
 
 Only on the user's explicit word:
   python -m harness.line takeover rule|rl
-  python -m harness.line hosts [on|off <host> [--now]]
+  python -m harness.line hosts [on|off <host> [--now | --at "YYYY-MM-DD HH:MM"]]
   python -m harness.line cancel <attempt>
   python -m harness.line promote <attempt>
 
@@ -110,8 +110,55 @@ def settings():
 
 
 def enabled(host):
-    """The user's switch for a host (hosts on|off); every host starts switched on."""
-    return host == "local" or settings().get(host, {}).get("enabled", True)
+    """The user's switch for a host (hosts on|off); every host starts switched on.
+
+    A host the user lent until a time (hosts off --at) counts as off from then.
+    """
+    if host == "local":
+        return True
+    value = settings().get(host, {})
+    return value.get("enabled", True) and time.time() < value.get("off_at", float("inf"))
+
+
+def closing(host):
+    """When a host still in use is due to be switched off, else None."""
+    value = settings().get(host, {})
+    return value.get("off_at") if value.get("enabled", True) and value.get("off_at") else None
+
+
+def when(epoch):
+    return time.strftime("%m-%d %H:%M", time.localtime(epoch))
+
+
+def take_away(host):
+    """Stop the attempts on ``host`` and queue them for another free host to redo."""
+    moved = []
+    for state in E.running("rl"):
+        if state.get("host") == host:
+            interrupt(state)
+            stage = "training" if state["stage"] == "training" else "evaluating"
+            requeue(state, stage)
+            moved.append((state["id"], stage))
+    return moved
+
+
+def close_due_hosts():
+    """Switch off the hosts whose lending time is over and take their attempts away; returns notices.
+
+    Any wait of either line does it, so the time holds while a session loops.
+    """
+    notices = []
+    for host, value in settings().items():
+        if value.get("enabled", True) and time.time() >= value.get("off_at", float("inf")):
+            with E.attempts_lock():
+                values = settings()
+                values[host] = {k: v for k, v in values[host].items() if k != "off_at"} | {"enabled": False}
+                E.atomic_json(E.LOCAL / "hosts.json", values)
+            moved = take_away(host)
+            notices.append(f"{host}：按计划在 {when(value['off_at'])} 关闭，用户说「{host} 加回来」之前不再派发"
+                           + "".join(f"；{a} 已撤下，排队到其他空闲主机重做{'训练' if s == 'training' else '评估'}"
+                                     for a, s in moved))
+    return notices
 
 
 def online(hosts, probe=True):
@@ -532,7 +579,8 @@ def summary(line):
         out.append(f"在途：{s['id']} {E.STAGE_NAMES.get(s.get('stage'), '进行中')}{where} {minutes:.0f} 分｜{s['description']}")
     if line == "rl":
         states, busy = host_states(line)
-        out.append("主机：" + "；".join(f"{h} {v}" + (f"（{busy[h]}）" if h in busy else "") for h, v in states.items()))
+        out.append("主机：" + "；".join(f"{h} {v}" + (f"（{busy[h]}）" if h in busy else "")
+                                      + (f"（{when(closing(h))} 关闭）" if closing(h) else "") for h, v in states.items()))
     return out
 
 
@@ -572,12 +620,13 @@ def wait(line, minutes):
             return emit([], [], f"停下：{exc}", line)
         except (E.Refused, FileNotFoundError) as exc:
             return emit([], [], f"停下：{exc}", line)
+        closed = close_due_hosts()
         ensure_drivers(line)
         retry_kills()
         pool_id = E.load_pool()["id"]
         done = E.reported()
         records = [r for r in E.attempts(pool_id, line) if r["id"] not in done]
-        notices = host_notices(line)
+        notices = closed + host_notices(line)
         flagged = [r["id"] for r in records if (r.get("reference") or {}).get("above")]
         # The user decides whether it goes on the platform; the line does not wait for the answer.
         ask = (f"{flagged[-1]} 高于自由对战现在的上场版本，可以换上。要换上吗？同意的话回复，"
@@ -594,6 +643,10 @@ def wait(line, minutes):
                     where = (f"空闲主机 {free[0]}，按它的资源设计" if len(free) == 1
                              else f"空闲主机 {'、'.join(free)}，选一台按它的资源设计") + "（见 status 的主机资源）；"
                     command = "start 并用 --host 指定这台主机"
+                    for h in free:
+                        if closing(h):
+                            where += (f"{h} 只用到 {when(closing(h))}（还剩 {(closing(h) - time.time()) / 3600:.1f} 小时），"
+                                      "到时没跑完的尝试会排队到其他主机从头重做（排在新设计之前），按剩余时间定规模；")
                 step = f"设计：{where}{base}。先读 status 与迭代笔记 {notes_path(line)}，只改一处，然后运行 {command}。"
             else:
                 step = f"等待：{why_not}。再次运行 wait。"
@@ -678,24 +731,29 @@ def status(line):
     print(f"迭代笔记：{notes_path(line)}" + ("" if notes_path(line).exists() else "（还没有，第一次拿到结果后新建）"))
 
 
-def hosts(action=None, host=None, now=False):
+def hosts(action=None, host=None, now=False, at=None):
     if action:
         if host not in rl.HOSTS:
             raise E.Refused(f"主机只能是 {'、'.join(rl.HOSTS)}")
+        if at and (action != "off" or now):
+            raise E.Refused("--at 只用于 off，不和 --now 一起用")
+        off_at = time.mktime(time.strptime(at, "%Y-%m-%d %H:%M")) if at else None
+        if off_at is not None and off_at <= time.time():
+            raise E.Refused(f"{at} 已经过去；立即关闭用 --now")
         with E.attempts_lock():
             values = settings()
-            values.setdefault(host, {})["enabled"] = action == "on"
+            if off_at is not None:
+                # Lent until then: attempts may still start on it; any wait after that time closes it.
+                values[host] = values.get(host, {}) | {"enabled": True, "off_at": off_at}
+            else:
+                values[host] = {"enabled": action == "on"}
             E.atomic_json(E.LOCAL / "hosts.json", values)
         if action == "off" and now:
-            for state in E.running("rl"):
-                if state.get("host") == host:
-                    interrupt(state)
-                    stage = "training" if state["stage"] == "training" else "evaluating"
-                    requeue(state, stage)
-                    print(f"{state['id']} 已从 {host} 撤下，排队到其他空闲主机重做{'训练' if stage == 'training' else '评估'}")
+            for attempt_id, stage in take_away(host):
+                print(f"{attempt_id} 已从 {host} 撤下，排队到其他空闲主机重做{'训练' if stage == 'training' else '评估'}")
     states, busy = host_states("rl")
     for h, v in states.items():
-        print(f"{h}：{v}" + (f"，在途 {busy[h]}" if h in busy else ""))
+        print(f"{h}：{v}" + (f"，在途 {busy[h]}" if h in busy else "") + (f"，{when(closing(h))} 关闭" if closing(h) else ""))
 
 
 def cancel(attempt_id):
@@ -770,6 +828,8 @@ def main():
     h.add_argument("action", nargs="?", choices=("on", "off"))
     h.add_argument("host", nargs="?")
     h.add_argument("--now", action="store_true", help="with off: take the attempt away from the host at once")
+    h.add_argument("--at", help='with off: keep using the host until this local time ("YYYY-MM-DD HH:MM"), '
+                                "then switch it off and take its attempt away")
     for name in ("cancel", "promote", "drive"):
         sub.add_parser(name).add_argument("attempt")
     args = parser.parse_args()
@@ -788,7 +848,7 @@ def main():
             claim(args.line, force=True)
             print(f"{E.LINE_NAMES[args.line]}：本会话已接管；原会话下次调用时会停下")
         elif args.command == "hosts":
-            hosts(args.action, args.host, args.now)
+            hosts(args.action, args.host, args.now, args.at)
         elif args.command == "cancel":
             cancel(args.attempt)
         elif args.command == "promote":
