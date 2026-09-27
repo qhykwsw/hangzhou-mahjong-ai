@@ -12,7 +12,9 @@ waiting hand it allows; further away a generic discount per step stands in.
 A win also cancels the payment I would owe to someone else's win, SAVED fan.
 All of this counts only the draws I have left before the wall runs out.
 Passing on a discard lets the opponents between its discarder and me draw
-before my turn, so a call or kong also takes their draws away. Discards of
+before my turn, so a call or kong also takes their draws away. A wait my
+discard leaves also counts its non-winning draws that a later discard turns
+into a better wait. Discards of
 equal value keep the hand whose tiles connect to more live tiles. When the hand is already baotou (every draw wins), a win now is traded for a
 doubling that keeps the certain win: a kong whose replacement draw still wins,
 else a white discard that scores piao. A call from a baotou wait is priced with
@@ -24,7 +26,7 @@ from functools import lru_cache
 
 from mahjong_ai.domain.observations import can_discard_piao
 from mahjong_ai.domain.rules import WHITE, is_baotou
-from mahjong_ai.sdk.shape import analyze, remaining_tiles
+from mahjong_ai.sdk.shape import analyze, remaining_tiles, shanten
 
 Q = 0.15  # an opponent self-draws during the three draws between two of mine
 DRAW_RISK = 1 - (1 - Q) ** (1 / 3)  # the same, for one opponent's draw
@@ -116,6 +118,35 @@ def tenpai_value(hand, opened, available, draws=LONG):
     return waiting_value(hand, opened, available, draws=draws)
 
 
+@lru_cache(maxsize=20000)
+def reshaped_value(hand, opened, available, draws):
+    """A waiting hand with the option to trade a non-winning draw for a better wait."""
+    value = waiting_value(hand, opened, available, draws=draws)
+    if draws < 2 or shanten(hand, opened) > 0:
+        return value
+    unseen = max(1, sum(available))
+    row = analyze(hand, opened, available)
+    wins = set(row["winning_tiles"])
+    stay = waiting_value(hand, opened, available, draws=draws - 1)
+    gain, reach = 0.0, 0
+    for tile in range(34):
+        if tile in wins or available[tile] <= 0 or hand.count(tile) >= 4:
+            continue
+        drawn = sorted((*hand, tile))
+        best = stay
+        for drop in set(drawn):
+            rest = list(drawn)
+            rest.remove(drop)
+            rest = tuple(rest)
+            if rest != hand and shanten(rest, opened) <= 0:
+                best = max(best, waiting_value(rest, opened, available, draws=draws - 1))
+        if best > stay:
+            gain += available[tile] * (best - stay)
+            reach += available[tile]
+    survive = (1 - Q) * (1 - (row["winning_copies"] + reach) / unseen)
+    return value + (1 - Q) * gain / unseen * repeat(survive, draws - 1)
+
+
 def potential(hand, available):
     """Live tiles that pair with or sit within two of each kept tile."""
     total = 0
@@ -180,9 +211,11 @@ class Race:
                 chain, piao = obs.chain_count + 1, obs.piao_count + 1
             else:
                 chain, piao = 0, 0
-            return (1 - Q) * waiting_value(
-                rest, opened, available, chain, piao, draws
-            ) + TIE * potential(rest, available)
+            if chain:
+                value = waiting_value(rest, opened, available, chain, piao, draws)
+            else:
+                value = reshaped_value(rest, opened, available, draws)
+            return (1 - Q) * value + TIE * potential(rest, available)
         if action.action in ("peng", "chi"):
             used = action.tiles if action.action == "chi" else (action.tile,) * 2
             for tile in used:
