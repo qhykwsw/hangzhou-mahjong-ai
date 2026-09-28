@@ -52,6 +52,7 @@
 | `history_probability` | 对手座位从 `history`（`{"model:名字": Actor}`）抽取的概率，其余按 `opponents` 抽取 |
 | `critic_features` | `"模块:函数"`，在对局进程里对每个学习决策调用 `f(state, seat)`，返回的数组并入该行；`state` 是完整的 HandState，可读对手手牌和按摸牌顺序排列的牌墙 |
 | `finish_game` | `"模块:函数"`，每整场结束时在对局进程里调用 `f(rows, cfg)`，必须给每行写入 `adv` 和 `ret` |
+| `playout_baseline` | 为真时，学习座位每次采样动作与概率最大动作（argmax）不同（行的 `deviated` 为真），框架复制这一局，在该处改走 argmax，之后学习座位一律 argmax、其余座位照常，打到这一局结束，把学习座位这一局的桌面分（底分为单位）写入该行的 `playout`，下一局由学习座位坐庄时 `playout_deals_next` 为 1.0。所有学习决策都带 `deviated`。牌墙与种子固定、对手按观察确定地决策时，下一次偏离之前实际路径就是 argmax 路径，所以每个决策的 argmax 价值都可得：本局下一次偏离的 `playout`，其后没有偏离则是实际结果。对手有随机性时这个基线仍不依赖本步动作，只是更不准；开启后模型对手也改取 argmax。`finish_game` 在该场所有复制局打完后才调用。复制局不产生训练行、不计入 `samples` 和局数预算，采集时间约多三成 |
 
 训练计划的 `execution` 还可以固定按主机校准的推理调度：`inference_history_band` 按完整历史长度分组，`fine_graph_batches` 细化 CUDA Graph 的批次大小。它们覆盖同名 `cfg` 项，只减少 padding，不截断历史、缩减训练量或改变并发资源；`execution` 里出现其他键时训练直接报错。自定义采样／价值 hook 保持原有的批次组合。
 

@@ -4,6 +4,7 @@ Importing this module must not load the game SDK: each spawned worker first
 binds the immutable rules runtime supplied with its teachers.
 """
 
+import copy
 import importlib
 from pathlib import Path
 import random
@@ -12,6 +13,10 @@ import traceback
 
 from . import bootstrap  # noqa: F401
 from .statistics import seed_for, advantages
+
+
+# The current Actor's argmax: the learner's seat in a deviation's greedy continuation.
+GREEDY = "model:greedy"
 
 
 def hook(spec, default):
@@ -78,6 +83,11 @@ class Game:
         self.complete = False
         self.predecision_reward = 0.0
         self.pending = None
+        # cfg["playout_baseline"]: every learner deviation from the argmax gets a
+        # greedy continuation of its hand (Shadow); the game is finished once they are.
+        self.playout = bool(cfg.get("playout_baseline")) and train
+        self.shadows = []
+        self.unfinished = False
         self._next_hand()
 
     def _next_hand(self):
@@ -136,12 +146,8 @@ class Game:
                         policy.finish_round(result, seat)
                     if self.teacher:
                         self.teacher.finish_round(result, self.focal)
-                    if self.train:
-                        finish = hook(self.cfg.get("finish_game"), None)
-                        if finish is None:
-                            advantages(self.rows, self.cfg["gae_lambda"])
-                        else:
-                            finish(self.rows, self.cfg)
+                    self.unfinished = self.train
+                    self.settled()
                     return None
                 self._next_hand()
                 continue
@@ -190,14 +196,108 @@ class Game:
         from selfplay_core.actions import action_index
 
         row, legal, seat = self.pending
-        index, logprob, value = response
+        # Collection answers (action, logprob, value, argmax); evaluation (action, logprob, value).
+        index, logprob, value, *greedy = response
         action = next((a for a in legal if action_index(a) == index), None)
         if action is None:
             raise ValueError("neural policy returned an illegal action")
         if self.train and seat == self.focal:
             row.update(action=index, logprob=logprob, value=value)
+            if self.playout:
+                if not greedy:
+                    raise ValueError("the playout baseline needs the argmax with each collection answer")
+                row["deviated"] = greedy[0] != index
+                if row["deviated"]:
+                    move = next(a for a in legal if action_index(a) == greedy[0])
+                    self.shadows.append(Shadow(self, fork(self.state), move, legal, row))
             self.rows.append(row)
         self.pending = None
+        self.state.step(action, legal)
+
+    def settled(self):
+        """Complete, with every greedy continuation played out; the rows are then finished once."""
+        if not self.complete or not all(shadow.done for shadow in self.shadows):
+            return False
+        if self.unfinished:
+            self.unfinished = False
+            finish = hook(self.cfg.get("finish_game"), None)
+            if finish is None:
+                advantages(self.rows, self.cfg["gae_lambda"])
+            else:
+                finish(self.rows, self.cfg)
+        return True
+
+
+def fork(state):
+    """A copy of a hand to play on.
+
+    The game's recorded events and the per-seat views built from them are
+    immutable and shared (deep-copying them cost about as much as playing
+    the continuation); the lists holding them and the live hand are copied.
+    """
+    memo = {id(item): item for item in state.events}
+    for view in getattr(state, "_views", ()):
+        memo.update((id(item), item) for item in view)
+    return copy.deepcopy(state, memo)
+
+
+class Shadow:
+    """A learner deviation's greedy continuation, for the playout baseline.
+
+    A copy of the hand at the deviation, with the argmax played there and at
+    every later learner decision and every other seat as in the game, to the
+    end of the hand. Wall and seeds are fixed and the other seats decide
+    deterministically (rules; model opponents answer with their argmax under
+    cfg["playout_baseline"]), so until the learner's next deviation the game's
+    own path is this greedy path: every greedy decision before a deviation
+    shares its playout value, and after the hand's last deviation the realized
+    outcome. The deviating row gets ``playout`` (the learner's hand score in
+    base-score units) and ``playout_deals_next`` (1.0 when the learner deals
+    the next hand).
+    """
+
+    def __init__(self, game, state, action, legal, row):
+        self.game, self.state, self.row = game, state, row
+        self.dealer, self.pending, self.done = game.dealer, None, False
+        state.step(action, legal)
+
+    def advance(self):
+        from .encoding import encode
+
+        game, state = self.game, self.state
+        while not state.settled:
+            if state.steps >= game.config.max_actions_per_hand:
+                raise RuntimeError("hand action budget exceeded")
+            legal = state.legal_actions()
+            if len(legal) == 1:
+                state.step(legal[0], legal)
+                continue
+            seat = state.turn
+            obs = state.observation(legal)
+            if seat in game.policies:
+                action = game.policies[seat].act(obs)
+                if action not in legal:
+                    raise ValueError("frozen opponent returned an illegal action")
+                state.step(action, legal)
+                continue
+            self.pending = legal
+            row = encode(obs, game.cfg["lookahead"])
+            row["teacher"] = -1
+            return {"row": row, "slot": GREEDY if seat == game.focal else game.specs[seat], "train": False, "bc": False}
+        self.done, self.state = True, None
+        # The winner deals next; after a draw the dealer stays.
+        dealer = state.winner if state.winner is not None else self.dealer
+        self.row["playout"] = state.delta[game.focal] / game.config.base_score
+        self.row["playout_deals_next"] = float(dealer == game.focal)
+        return None
+
+    def apply(self, response):
+        from selfplay_core.actions import action_index
+
+        legal, self.pending = self.pending, None
+        action = next((a for a in legal if action_index(a) == response[0]), None)
+        if action is None:
+            raise ValueError("neural policy returned an illegal action")
         self.state.step(action, legal)
 
 
@@ -325,12 +425,29 @@ def worker(conn, cfg, bundle_path, panel_path, worker_index, command):
             next_id += 1
             return True
 
+        def inputs(request):
+            if not command.get("policy_inputs_only"):
+                return request
+            # Rollout/privileged fields stay in the worker's owned row and are
+            # sent once with the completed game. Actor inference never reads
+            # them; BC also needs its label.
+            return dict(request, row={
+                key: request["row"][key] for key in ("planes", "scalars", "events", "mask", "teacher")
+            })
+
         for _ in range(cfg["tables"]):
             add_game()
         while games and time.time() < deadline:
             requests, finished = [], []
             for ident, game in list(games.items()):
+                for n, shadow in enumerate(game.shadows):
+                    if not shadow.done:
+                        request = shadow.advance()
+                        if request is not None:
+                            requests.append(((ident, n), inputs(request)))
                 request = game.advance()
+                if request is None and not game.settled():
+                    continue  # its greedy continuations are still being played
                 if request is None:
                     external.release(game.borrowed)
                     completed_games += 1
@@ -351,22 +468,17 @@ def worker(conn, cfg, bundle_path, panel_path, worker_index, command):
                     del games[ident]
                     add_game()
                 else:
-                    if command.get("policy_inputs_only"):
-                        # Rollout/privileged fields stay in the worker's owned
-                        # row and are sent once with the completed game. Actor
-                        # inference never reads them; BC also needs its label.
-                        request = dict(request, row={
-                            key: request["row"][key]
-                            for key in ("planes", "scalars", "events", "mask", "teacher")
-                        })
-                    requests.append((ident, request))
+                    requests.append((ident, inputs(request)))
             if requests or finished:
                 conn.send(("batch", requests, finished))
                 responses = conn.recv()
                 if responses is None:
                     break
                 for ident, response in responses:
-                    games[ident].apply(response)
+                    if isinstance(ident, tuple):
+                        games[ident[0]].shadows[ident[1]].apply(response)
+                    else:
+                        games[ident].apply(response)
         conn.send(
             (
                 "done",

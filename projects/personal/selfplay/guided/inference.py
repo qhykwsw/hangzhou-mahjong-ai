@@ -101,9 +101,9 @@ class ActorGraphs:
     kernels from Python per batch costs more than the kernels. Inputs are
     written into pinned host buffers of a few padded shapes and copied into
     the graph's static tensors; the replayed computation is the eager one
-    (forward, mask, log-softmax, then multinomial sampling or argmax and the
-    chosen log-probability), so its outputs are identical in distribution and,
-    for argmax, in value. Shapes beyond the buckets run eagerly.
+    (forward, mask, log-softmax, then multinomial sampling or argmax, the
+    chosen log-probability and the argmax), so its outputs are identical in
+    distribution and, for argmax, in value. Shapes beyond the buckets run eagerly.
     """
 
     BATCH_BUCKETS = (1, 2, 4, 8, 16, 32, 64, 128)
@@ -157,7 +157,7 @@ class ActorGraphs:
                 views[3][:, 0] = (
                     True  # padding rows stay valid; they never reach a caller
                 )
-                answers = torch.zeros((size, 2), dtype=torch.float32).pin_memory()
+                answers = torch.zeros((size, 3), dtype=torch.float32).pin_memory()
                 ring.append((tensors, views, answers, torch.cuda.Event()))
         turn = self.turn.get((key, size, width), 0)
         self.turn[(key, size, width)] = (turn + 1) % self.IN_FLIGHT
@@ -173,14 +173,13 @@ class ActorGraphs:
         with torch.autocast("cuda", torch.float16, cache_enabled=False):
             logits = model(planes, scalars, events).float()
         logp = logits.masked_fill(~mask, -1e9).log_softmax(-1)
-        actions = (
-            torch.multinomial(logp.exp(), 1).squeeze(1) if sample else logp.argmax(-1)
-        )
+        greedy = logp.argmax(-1)
+        actions = torch.multinomial(logp.exp(), 1).squeeze(1) if sample else greedy
         chosen = logp.gather(1, actions[:, None]).squeeze(1)
-        return torch.stack((actions.float(), chosen), -1)
+        return torch.stack((actions.float(), chosen, greedy.float()), -1)
 
     def decide(self, key, model, rows, sample):
-        """Launch (action, log-probability) per row: sampled from the policy, or its argmax.
+        """Launch (action, log-probability, argmax) per row: the action sampled from the policy, or its argmax.
 
         Returns a Decided whose result() waits for the device. The answers are
         copied straight out of the graph into a pinned buffer on the same

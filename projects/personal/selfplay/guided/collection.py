@@ -7,7 +7,7 @@ import time
 
 import numpy as np
 
-from .environment import worker
+from .environment import GREEDY, worker
 
 
 def request_groups(pending, history_band=0):
@@ -109,16 +109,16 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
         def finish(groups, replies):
             for group, rows_, learning, decided, complete in groups:
                 mark = time.perf_counter()
-                output = decided.result()
+                output = decided.result()  # (action, logprob, argmax), with the value when complete
                 if not complete:
                     values = np.zeros(len(group), dtype=np.float32)
                     if learning and "values" in hooks:
                         values = np.asarray(hooks["values"](rows_), dtype=np.float32).reshape(-1)
-                    output = np.concatenate((output, values[:, None]), axis=1)
+                    output = np.concatenate((output[:, :2], values[:, None], output[:, 2:]), axis=1)
                 timers["forward"] += time.perf_counter() - mark
                 mark = time.perf_counter()
-                for (conn, ident, _), (action, prob, value) in zip(group, output):
-                    replies[conn].append((ident, (int(action), float(prob), float(value))))
+                for (conn, ident, _), (action, prob, value, greedy) in zip(group, output):
+                    replies[conn].append((ident, (int(action), float(prob), float(value), int(greedy))))
                 timers["reply"] += time.perf_counter() - mark
             mark = time.perf_counter()
             for conn, response in replies.items():
@@ -179,19 +179,24 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
             for slot, group in request_groups(pending, history_band):
                 batch_sizes.append(len(group))
                 mark = time.perf_counter()
-                model = inference_actor if slot == "model:current" else history[slot]
+                model = inference_actor if slot in ("model:current", GREEDY) else history[slot]
                 learning = (
                     slot == "model:current"
                     and command["kind"] != "evaluate"
                     and not cfg["bc_only"]
                 )
+                # Only the learner samples; its greedy continuations (GREEDY) take
+                # the argmax, and with the playout baseline so do model opponents,
+                # which keeps a deviation's continuation reproducible.
+                sample = command["kind"] != "evaluate" and slot != GREEDY and (
+                    slot == "model:current" or not cfg.get("playout_baseline"))
                 rows_ = [item[2]["row"] for item in group]
                 with torch.no_grad():
                     if graphs is not None:
                         # Launch only: every model's batch of this round goes
                         # to the device before any answer is read, and the
                         # round is read after the next one has been launched.
-                        decided = graphs.decide(slot, model, rows_, sample=command["kind"] != "evaluate")
+                        decided = graphs.decide(slot, model, rows_, sample=sample)
                         groups.append((group, rows_, learning, decided, False))
                         timers["batch"] += time.perf_counter() - mark
                         continue
@@ -203,7 +208,7 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
                     mark = time.perf_counter()
                     logp = logits.masked_fill(~batch["mask"], -1e9).log_softmax(-1)
                     selected = None
-                    if command["kind"] == "evaluate":
+                    if not sample:
                         actions = logp.argmax(-1)
                     elif cfg["bc_only"] and slot == "model:current":
                         actions = batch["teacher"]
@@ -229,7 +234,7 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
                     if selected is None:
                         selected = logp.gather(1, actions[:, None]).squeeze(1)
                     output = (
-                        torch.stack((actions.float(), selected, values), -1)
+                        torch.stack((actions.float(), selected, values, logp.argmax(-1).float()), -1)
                         .cpu()
                         .numpy()
                     )
