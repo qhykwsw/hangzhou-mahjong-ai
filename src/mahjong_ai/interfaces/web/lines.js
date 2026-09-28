@@ -1,6 +1,7 @@
 "use strict";
 // Iteration lines (ADR-0016): one point per attempt, time on x, score against
 // the fixed opponent pool on y; kept attempts step the line's best upward.
+// Scores of different pools are not comparable: one pool is shown at a time.
 (() => {
   const $ = (id) => document.getElementById(id);
   const esc = (v) =>
@@ -14,14 +15,42 @@
   const time = (s) => new Date(s * 1000).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
   const signed = (v, d = 2) => (v == null ? "—" : (v >= 0 ? "+" : "") + v.toFixed(d));
 
+  // When a version was made: a version replayed on a new pool keeps its first
+  // attempt's time, and the RL start comes before every version trained from it.
+  function placed(attempts) {
+    const at = new Map(attempts.map((a) => [a, a.made_at ?? a.finished_at]));
+    for (const line of ["rule", "rl"]) {
+      const rows = attempts.filter((a) => a.line === line);
+      const first = Math.min(...rows.map((a) => at.get(a)));
+      for (const a of rows) if (a.id.startsWith("fp-rl-start-")) at.set(a, Math.min(at.get(a), first));
+    }
+    return at;
+  }
+
+  // The attempts that raised the line's best, in the order the versions were made:
+  // a kept attempt at least as high as every kept one before it (equal for an
+  // equivalent rewrite). The same rule applies to versions replayed on a new pool.
+  function raised(rows, at) {
+    const steps = new Set();
+    let best = null;
+    for (const a of rows.slice().sort((a, b) => at.get(a) - at.get(b))) {
+      if (a.status === "keep" && a.score != null && (best == null || a.score >= best)) {
+        steps.add(a);
+        best = a.score;
+      }
+    }
+    return steps;
+  }
+
   function chart(attempts) {
     const shown = attempts.filter((a) => a.score != null);
     if (!shown.length) return '<p class="muted">还没有尝试。</p>';
+    const at = placed(shown);
     // Drawn at the container's own width so labels keep their size on phones.
     const W = Math.max(300, Math.round($("linesChart").clientWidth - 16));
     const H = W < 600 ? 240 : 360, L = 44, R = 12, T = 12, B = 30;
     const ticks = W < 600 ? 3 : 5;
-    const xs = shown.map((a) => a.finished_at);
+    const xs = shown.map((a) => at.get(a));
     const ys = shown.map((a) => a.score);
     let x0 = Math.min(...xs), x1 = Math.max(...xs);
     if (x1 - x0 < 600) { x0 -= 300; x1 += 300; }
@@ -42,28 +71,34 @@
       parts.push(`<text x="${X(t)}" y="${H - 10}" class="axis" text-anchor="${anchor}">${esc(time(t))}</text>`);
     }
     for (const [key, meta] of Object.entries(LINES)) {
-      const rows = shown.filter((a) => a.line === key).sort((a, b) => a.finished_at - b.finished_at);
+      const rows = shown.filter((a) => a.line === key).sort((a, b) => at.get(a) - at.get(b));
       if (key === "reference") {
-        // Every reference version is its own dashed level, labelled at the right edge.
-        for (const ref of rows) {
+        // Every reference version is its own dashed level, labelled at the right edge
+        // unless the label would overlap one already drawn (the line keeps its tooltip).
+        let labelled = -Infinity;
+        for (const ref of rows.slice().sort((a, b) => b.score - a.score)) {
           const name = ref.id.replace(/^ref-/, "").replace(/^heuristic-[a-z]+--\d+--/, "");
-          parts.push(`<line x1="${L}" x2="${W - R}" y1="${Y(ref.score)}" y2="${Y(ref.score)}" stroke="${meta.color}" class="reference"><title>${esc(ref.description)} ${signed(ref.score)}</title></line>`);
+          parts.push(`<line x1="${L}" x2="${W - R}" y1="${Y(ref.score)}" y2="${Y(ref.score)}" stroke="${meta.color}" class="reference"><title>${esc(name)} ${signed(ref.score)}</title></line>`);
+          if (Y(ref.score) - labelled < 12) continue;
+          labelled = Y(ref.score);
           parts.push(`<text x="${W - R - 2}" y="${Y(ref.score) - 4}" class="axis" text-anchor="end" fill="${meta.color}">${esc(name)} ${signed(ref.score)}</text>`);
         }
         continue;
       }
-      // The best-so-far staircase through kept attempts.
-      const kept = rows.filter((a) => a.status === "keep");
+      // The best-so-far staircase through the attempts that raised it.
+      const steps = raised(rows, at);
+      const kept = rows.filter((a) => steps.has(a));
       if (kept.length) {
-        let d = `M${X(kept[0].finished_at)},${Y(kept[0].score)}`;
-        for (const a of kept.slice(1)) d += ` H${X(a.finished_at)} V${Y(a.score)}`;
+        let d = `M${X(at.get(kept[0]))},${Y(kept[0].score)}`;
+        for (const a of kept.slice(1)) d += ` H${X(at.get(a))} V${Y(a.score)}`;
         d += ` H${X(x1)}`;
         parts.push(`<path d="${d}" fill="none" stroke="${meta.color}" stroke-width="2"/>`);
       }
       for (const a of rows) {
-        const tip = `${a.id} ${STATUS[a.status] || a.status} ${signed(a.score)} ± ${a.se?.toFixed(2)}（${a.games} 场）\n${a.description}`;
-        const cls = a.status === "keep" ? `fill="${meta.color}"` : a.status === "unconfirmed" ? 'fill="none" stroke="#c9822b" stroke-width="2"' : 'fill="#b8c4c9"';
-        parts.push(`<circle cx="${X(a.finished_at)}" cy="${Y(a.score)}" r="5" ${cls}><title>${esc(tip)}</title></circle>`);
+        const note = a.rebased ? `\n换池重算（旧池 ${signed(a.rebased.old_score)}）` + (steps.has(a) ? "" : "：没有高过此前最好版本") : "";
+        const tip = `${a.id} ${STATUS[a.status] || a.status} ${signed(a.score)} ± ${a.se?.toFixed(2)}（${a.games} 场）${note}\n${a.description}`;
+        const cls = steps.has(a) ? `fill="${meta.color}"` : a.status === "unconfirmed" ? 'fill="none" stroke="#c9822b" stroke-width="2"' : 'fill="#b8c4c9"';
+        parts.push(`<circle cx="${X(at.get(a))}" cy="${Y(a.score)}" r="5" ${cls}><title>${esc(tip)}</title></circle>`);
       }
     }
     return `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="迭代线得分">${parts.join("")}</svg>`;
@@ -75,61 +110,85 @@
   }
 
   function legend(attempts) {
+    const at = placed(attempts.filter((a) => a.score != null));
     const counts = (line) => {
       const rows = attempts.filter((a) => a.line === line);
-      return `${rows.length} 次，成功 ${rows.filter((a) => a.status === "keep").length} 次`;
+      return `${rows.length} 次，提高 ${raised(rows.filter((a) => at.has(a)), at).size} 次`;
     };
     return [
       `<span><i style="background:var(--teal)"></i>规则线（${counts("rule")}）</span>`,
       `<span><i style="background:var(--blue)"></i>RL 线（${counts("rl")}）</span>`,
-      '<span><i style="background:#b8c4c9"></i>失败</span>',
+      '<span><i style="background:#b8c4c9"></i>失败或未提高</span>',
       '<span><i class="hollow"></i>开发集高但未确认</span>',
       '<span><i class="dash"></i>参照（上场版本与粗测）</span>',
     ].join("");
   }
 
   function table(attempts) {
+    const at = placed(attempts.filter((a) => a.score != null));
+    const steps = new Set(["rule", "rl"].flatMap((line) => [...raised(attempts.filter((a) => a.line === line && at.has(a)), at)]));
+    const when = (a) => at.get(a) ?? a.finished_at;
     return attempts
       .slice()
-      .sort((a, b) => b.finished_at - a.finished_at)
+      .sort((a, b) => when(b) - when(a))
       .map((a) => {
         const c = a.confirm;
-        return `<tr class="${a.status === "keep" ? "kept" : ""}">
+        const status = a.rebased ? `换池重算（旧池 ${signed(a.rebased.old_score)}）` : STATUS[a.status] || a.status;
+        return `<tr class="${steps.has(a) ? "kept" : ""}">
           <td>${esc(a.id)}<div class="muted">${esc(LINES[a.line]?.name || a.line)}</div></td>
-          <td>${esc(STATUS[a.status] || a.status)}</td>
+          <td>${esc(status)}</td>
           <td>${esc(a.description)}</td>
           <td>${signed(a.score)} ± ${a.se == null ? "—" : a.se.toFixed(2)}</td>
           <td>${signed(a.diff)}</td>
           <td>${c ? `${signed(c.diff)} ± ${c.se.toFixed(2)}（下界 ${signed(c.lower90)}）` : "—"}</td>
           <td>${a.games}</td>
-          <td>${esc(time(a.finished_at))}</td>
+          <td>${esc(time(when(a)))}</td>
         </tr>`;
       })
       .join("");
   }
 
-  let last = null;
+  let data = null;
+  let pick = null; // the pool shown: the current one unless the viewer picked another
+  const picked = () => data.attempts.filter((a) => a.pool === pick);
   window.addEventListener("resize", () => {
-    if (last && !$("linesView").hidden) $("linesChart").innerHTML = chart(last);
+    if (data && !$("linesView").hidden) $("linesChart").innerHTML = chart(picked());
   });
+
+  function draw() {
+    const current = pick === data.pool.id;
+    $("linesPool").textContent = current ? `固定对手池 ${data.pool.members.length} 个` : "旧对手池，分数与现役池不可比";
+    $("linesPool").title = current ? data.pool.members.join("\n") : pick;
+    const select = $("linesPoolPick");
+    select.innerHTML = data.pools
+      .map((p, i) => `<option value="${esc(p.id)}"${p.id === pick ? " selected" : ""}>第 ${i + 1} 代对手池${p.current ? "（现役）" : ""}</option>`)
+      .join("");
+    select.hidden = data.pools.length < 2;
+    const rows = picked();
+    $("linesLegend").innerHTML = legend(rows);
+    $("linesChart").innerHTML = chart(rows);
+    $("linesTable").innerHTML = table(rows);
+  }
 
   async function refresh() {
     try {
-      const data = await (await fetch("/api/lines")).json();
-      if (!data.enabled) {
+      const value = await (await fetch("/api/lines")).json();
+      if (!value.enabled) {
         $("linesChart").innerHTML = '<p class="muted">固定对手池尚未确定。</p>';
         return;
       }
-      $("linesPool").textContent = `固定对手池 ${data.pool.members.length} 个`;
-      $("linesPool").title = data.pool.members.join("\n");
-      $("linesLegend").innerHTML = legend(data.attempts);
-      last = data.attempts;
-      $("linesChart").innerHTML = chart(data.attempts);
-      $("linesTable").innerHTML = table(data.attempts);
+      data = value;
+      if (!pick || !data.pools.some((p) => p.id === pick)) pick = data.pool.id;
+      draw();
     } catch (error) {
       $("linesChart").innerHTML = `<p class="muted">读取失败：${esc(error)}</p>`;
     }
   }
+
+  $("linesPoolPick").addEventListener("change", (event) => {
+    pick = event.target.value;
+    draw();
+  });
 
   function select(lines) {
     $("tabResearch").setAttribute("aria-selected", String(!lines));

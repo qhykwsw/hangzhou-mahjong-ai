@@ -107,30 +107,64 @@ def application(project, tailscale_url=None):
     lines_root = ProjectDescriptor.load(project).workspace / "projects/personal/firstprinciples/.local"
 
     def iteration_lines():
-        """Read-only view of the maintainer's iteration lines (ADR-0016)."""
+        """Read-only view of the maintainer's iteration lines (ADR-0016), for every pool.
+
+        Scores of different pools are not comparable, so the page shows one
+        pool at a time. A version replayed on a new pool (harness.evaluate
+        rebase) carries ``made_at``, when its attempt first finished, so it
+        takes its place in the line's order instead of the replay's.
+        """
         pool_path, log_path = lines_root / "pool.json", lines_root / "attempts.jsonl"
         if not pool_path.exists():
             return {"enabled": False}
         pool = json.loads(pool_path.read_text())
-        latest = {}
+        latest = {}  # pool id -> attempt id -> record
         if log_path.exists():
             for line in log_path.read_text().splitlines():
-                if line.strip() and (r := json.loads(line)).get("pool") == pool["id"]:
-                    latest[r["id"]] = r  # a reference played again replaces its earlier record
-        # One point per version, as the harness shows it (harness.evaluate.distinct):
-        # of records with the same weights or package, the one over the most games.
-        chosen = {}
-        for r in latest.values():
-            spec = r.get("spec") or {}
-            key = (spec.get("parameters") or {}).get("weights") or spec.get("package_hash") or r["id"]
-            if key not in chosen or (r["games"], r["finished_at"]) >= (chosen[key]["games"], chosen[key]["finished_at"]):
-                chosen[key] = r
-        rows = [{k: r.get(k) for k in (
-            "id", "line", "status", "description", "started_at", "finished_at",
-            "games", "score", "se", "best_before", "diff", "confirm", "stats",
-            "design_seconds")} for r in latest.values() if r in chosen.values()]
+                if line.strip():
+                    r = json.loads(line)
+                    # a reference played again replaces its earlier record
+                    latest.setdefault(r.get("pool"), {})[r["id"]] = r
+
+        def made_at(r):
+            for _ in range(len(latest)):  # replayed again on each later pool
+                origin = latest.get((r.get("rebased") or {}).get("from_pool"), {}).get(r["id"])
+                if origin is None:
+                    break
+                r = origin
+            return r["finished_at"]
+
+        rows, pools = [], []
+        for pool_id, records in latest.items():
+            # Pools rebuilt before any attempt ran on them hold only references and a start.
+            if pool_id != pool["id"] and not any(
+                    r["line"] in ("rule", "rl") and not r["id"].startswith("fp-rl-start-") for r in records.values()):
+                continue
+            # One point per version, as the harness shows it (harness.evaluate.distinct):
+            # of records with the same weights or package, the one over the most games.
+            chosen = {}
+            for r in records.values():
+                spec = r.get("spec") or {}
+                key = (spec.get("parameters") or {}).get("weights") or spec.get("package_hash") or r["id"]
+                if key not in chosen or (r["games"], r["finished_at"]) >= (chosen[key]["games"], chosen[key]["finished_at"]):
+                    chosen[key] = r
+            for r in chosen.values():
+                row = {k: r.get(k) for k in (
+                    "id", "line", "status", "description", "started_at", "finished_at",
+                    "games", "score", "se", "best_before", "diff", "confirm", "stats",
+                    "design_seconds")}
+                row["pool"] = pool_id
+                if r.get("rebased"):
+                    row["made_at"] = made_at(r)
+                    row["rebased"] = {"old_score": r["rebased"].get("old_score")}
+                rows.append(row)
+            pools.append({"id": pool_id, "first_at": min(r["finished_at"] for r in records.values()),
+                          "current": pool_id == pool["id"]})
+        if pool["id"] not in latest:  # a new pool before its first record
+            pools.append({"id": pool["id"], "first_at": time.time(), "current": True})
+        pools.sort(key=lambda p: p["first_at"])
         return {"enabled": True, "pool": {"id": pool["id"], "members": sorted(pool["members"])},
-                "attempts": rows}
+                "pools": pools, "attempts": rows}
 
     async def lines(request):
         return JSONResponse(await asyncio.to_thread(iteration_lines))
