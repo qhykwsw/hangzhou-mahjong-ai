@@ -570,7 +570,8 @@ def history(line):
     for r in running(line):
         minutes = (time.time() - r["started_at"]) / 60
         where = f" @{r['host']}" if r.get("host") else ""
-        plan = (f" {r['hands'] / 10000:g}万局" + (f" 续训自{r['base']}" if r.get("from") == "best" else "")
+        source = r["base"] if r.get("from") == "best" else r.get("from")
+        plan = (f" {r['hands'] / 10000:g}万局" + (f" 续训自{source}" if source not in (None, "start") else "")
                 if r.get("hands") else "")
         out.append(f"{r['id']} {STAGE_NAMES.get(r.get('stage'), '进行中')}{where}{plan} {minutes:.0f}分｜{r['description']}")
     return "\n".join(out)
@@ -741,6 +742,22 @@ def paired(a, b, blocks):
     mean = sum(diffs) / len(diffs)
     sd = math.sqrt(sum((d - mean) ** 2 for d in diffs) / (len(diffs) - 1))
     return mean, sd / math.sqrt(len(diffs))
+
+
+def compare(a, b):
+    """Paired development-set difference a − b of two versions scored on the current pool: (diff, se, games).
+
+    Every version plays the same development games, so any two can be
+    compared block by block from their records, without playing again.
+    """
+    pool = load_pool()
+    rows = {r["id"]: r for r in attempts(pool["id"]) if r.get("dev_blocks")}
+    missing = [x for x in (a, b) if x not in rows or len(rows[x]["dev_blocks"]) < DEV_BLOCKS]
+    if missing:
+        raise Refused(f"{'、'.join(missing)} 在当前对手池下没有完整的开发集成绩")
+    blocks = range(DEV_BLOCKS)
+    diff, se = paired(*({int(k): v for k, v in rows[x]["dev_blocks"].items()} for x in (a, b)), blocks)
+    return diff, se, DEV_BLOCKS * 4
 
 
 def mean_se(values):
@@ -954,6 +971,9 @@ def main():
     ref.add_argument("--host", default="local", choices=tuple(EVAL_WORKERS))
     ref.add_argument("--weights", help="score an exported model by its weights hash under this name")
     sub.add_parser("seal", help="accept the current evaluation conditions (maintainer)")
+    cmp = sub.add_parser("compare", help="paired development-set difference of two scored versions")
+    cmp.add_argument("a")
+    cmp.add_argument("b")
     imp = sub.add_parser("implement", help="register an equivalent, faster implementation of a rule member of the pool")
     imp.add_argument("member")
     imp.add_argument("package")
@@ -981,6 +1001,13 @@ def main():
         return
     if args.command == "seal":
         print(seal())
+        return
+    if args.command == "compare":
+        try:
+            diff, se, games = compare(args.a, args.b)
+        except Refused as exc:
+            raise SystemExit(str(exc))
+        print(f"{args.a} − {args.b}：{diff:+.2f} ± {se:.2f}（开发集 {games} 场逐组配对，单侧 90% 下界 {diff - CONFIRM_Z * se:+.2f}）")
         return
     if args.command == "implement":
         try:

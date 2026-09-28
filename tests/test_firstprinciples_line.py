@@ -259,11 +259,17 @@ def test_rl_attempts_choose_their_hands_and_may_continue_the_best(harness, monke
         start("4070")
     with pytest.raises(E.Refused, match="训练局数"):
         start("4070", hands=rl.MAX_HANDS + 1)
+    record(E, id="fp-rl-002", status="discard", finished_at=1.5, games=16, spec={"family": "model", "parameters": {"weights": "w2"}},
+           training={"hands": 500_000, "budget": 500_000, "lineage_hands": 500_000})
+    with pytest.raises(E.Refused, match="不是评估过的 RL 版本"):
+        start("5070ti", start_from="fp-rl-999")
     start("4070", start_from="best")  # the same recipe, trained on from the best version
     start("4090", hands=3_000_000)  # the same recipe for more hands
+    start("5070ti", start_from="fp-rl-002")  # from any evaluated version, kept or not (e.g. an imitation)
     states = {s["host"]: s for s in E.running("rl")}
     assert (states["4070"]["from"], states["4070"]["hands"]) == ("best", rl.HANDS)
     assert (states["4090"]["from"], states["4090"]["hands"]) == ("start", 3_000_000)
+    assert states["5070ti"]["from"] == "fp-rl-002"
 
     class Host:
         def sync(self, paths):
@@ -276,6 +282,20 @@ def test_rl_attempts_choose_their_hands_and_may_continue_the_best(harness, monke
     path, behind = rl.start_actor(states["4070"], "4070", {"start_actor": "/start"})
     assert path.endswith("/w3") and behind == 1_000_000  # training adds up along the line
     assert rl.start_actor(states["4090"], "4090", {"start_actor": "/start"}) == ("/start", 0)
+    path, behind = rl.start_actor(states["5070ti"], "5070ti", {"start_actor": "/start"})
+    assert path.endswith("/w2") and behind == 500_000
+
+
+def test_any_two_scored_versions_compare_on_the_development_set(harness, monkeypatch):
+    E, rl, line = harness
+    monkeypatch.setattr(E, "DEV_BLOCKS", 3)
+    record(E, id="fp-rl-001", dev_blocks={"0": 1.0, "1": 2.0, "2": 3.0})
+    record(E, id="fp-rl-002", dev_blocks={"0": 0.0, "1": 2.0, "2": 1.0})
+    record(E, id="fp-rl-003", dev_blocks={"0": 0.0})
+    diff, se, games = E.compare("fp-rl-001", "fp-rl-002")
+    assert (round(diff, 6), games) == (1.0, 12) and se > 0
+    with pytest.raises(E.Refused, match="fp-rl-003"):
+        E.compare("fp-rl-001", "fp-rl-003")
 
 
 def test_a_host_lent_until_a_time_closes_then_and_its_attempt_moves(harness, monkeypatch):

@@ -353,17 +353,34 @@ def training_opponents(host_name):
             host.remote_path(pool["runtime_path"]))
 
 
+def origin(state):
+    """The version an attempt trains from: None for the fixed start."""
+    source = state["base"] if state.get("from") == "best" else state.get("from")
+    return None if source in (None, "start") else source
+
+
+def version(attempt_id):
+    """An evaluated RL version to train from (any pool): its latest record with an Actor."""
+    rows = [r for r in E.attempts(line="rl")
+            if r["id"] == attempt_id and ((r.get("spec") or {}).get("parameters") or {}).get("weights")]
+    if not rows:
+        raise E.Refused(f"{attempt_id} 不是评估过的 RL 版本（记录里没有它的模型），不能从它出发。")
+    return rows[-1]
+
+
 def start_actor(state, host_name, setup_):
     """Where the attempt's training starts on the host, and the training hands already behind it.
 
     By default the fixed start (setup); with ``from: best`` the Actor of the
     best version the attempt was designed on, so training adds up along the
-    line (every step of it still had to beat the best version).
+    line (every step of it still had to beat the best version); with a
+    version id, that version's Actor, kept or not (e.g. an imitation to
+    try RL on).
     """
-    pool = E.load_pool()
-    if state.get("from") != "best":
+    source = origin(state)
+    if source is None:
         return setup_["start_actor"], 0
-    base = next(r for r in reversed(E.attempts(pool["id"], "rl")) if r["id"] == state["base"])
+    base = version(source)
     weights = E.MODELS / base["spec"]["parameters"]["weights"]
     host = E.remote_host(host_name)
     host.sync([weights])
@@ -412,7 +429,7 @@ def train(state):
     status = result["status"]
     training = {"host": host, "state": status.get("state"), "hands": status.get("hands"),
                 "training_seconds": status.get("training_seconds"), "budget": hands,
-                "from": state["base"] if state.get("from") == "best" else None,
+                "from": origin(state),
                 "lineage_hands": behind + (status.get("hands") or 0)}
     if not result["ok"]:
         return "crash", None, training | {"error": str(status.get("error") or status)[-2000:]}
