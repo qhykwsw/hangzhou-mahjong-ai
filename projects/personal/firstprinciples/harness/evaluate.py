@@ -32,6 +32,7 @@ Maintainer commands (from projects/personal/firstprinciples); iteration agents u
   python -m harness.evaluate drain on "<why>" | off                    # stop new attempts while the pool is replaced
   python -m harness.evaluate rebase <attempt> ... [--host <host>]       # replay earlier versions on the new pool
   python -m harness.evaluate rebase-finish rule|rl                      # record them; the highest is the line's best
+  python -m harness.evaluate refresh rule|rl [--host <host>]            # replay a line's best under the current conditions
   python -m harness.evaluate seal                                       # after any change to the conditions
   python -m harness.evaluate reference <research candidate | model name> [--host local|4070|4090|5070ti]
   python -m harness.evaluate implement <pool member> <package dir>      # an equivalent, faster implementation
@@ -536,6 +537,36 @@ def rebase_finish(line):
     return rows
 
 
+def refresh(line, host=None):
+    """Replay the line's best version on the development set under the current conditions and record it again.
+
+    Paired development comparisons read the best version's archived blocks,
+    so these must come from the conditions candidates meet now: after the
+    pool's members got equivalent faster implementations, or when the archive
+    carries decision timeouts that later runs no longer have. The new record
+    keeps the version's id and its time (``refreshed`` holds when and the old
+    score); being the last kept record, it stays the line's best.
+    """
+    pool = load_pool()
+    check_seal()
+    champion = best(pool["id"], line)
+    if champion is None:
+        raise Refused(f"{LINE_NAMES[line]}还没有成功的版本")
+    host = host or champion.get("host") or EVAL_HOST[line]
+    times = sum(1 for r in attempts(pool["id"], line) if r["id"] == champion["id"] and r.get("refreshed"))
+    scores, stats = play(pool, champion["id"], champion["spec"], range(DEV_BLOCKS), pool["dev_seed"],
+                         f"dev-refresh{times + 1}", host)
+    score, se = mean_se(scores[k] for k in range(DEV_BLOCKS))
+    record = dict(champion, host=host, games=DEV_BLOCKS * 4, score=score, se=se, stats=stats,
+                  dev_blocks={str(k): scores[k] for k in sorted(scores)},
+                  refreshed={"at": time.time(), "old_score": champion["score"], "old_stats": champion.get("stats")})
+    with records_path().open("a") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    mark_reported([record])
+    log(f"{champion['id']} refreshed on {pool['id']}: {score:+.2f} ± {se:.2f} (was {champion['score']:+.2f})")
+    return record
+
+
 def history(line):
     """Every attempt of the line, its best version and the reference, for designing the next one."""
     pool = load_pool()
@@ -554,8 +585,11 @@ def history(line):
         host = f" @{r['host']}" if r.get("host") not in (None, "local") else ""
         base = f" 基于{r['base']}" if r.get("base") else ""
         cost = f" 每决策{r['decision_ms']['mine']:.2g}ms" if r.get("decision_ms") else ""
-        kind = (f" 等价替换（沿用{r['equivalent']['to']}的成绩）" if r.get("equivalent")
+        kind = (f" 等价替换（{'沿用' if r['equivalent'].get('carried', True) else '重打'}{r['equivalent']['to']}的开发集）"
+                if r.get("equivalent")
                 else f" 换池重算（旧池 {r['rebased']['old_score']:+.2f}）" if r.get("rebased") else "")
+        if r.get("refreshed"):
+            kind += f" 当前条件重测（原 {r['refreshed']['old_score']:+.2f}）"
         t = r.get("training") or {}
         trained = (f" 训练{t['hands'] / 10000:.0f}万局" + (f"（续训自{t['from']}，累计{t['lineage_hands'] / 10000:.0f}万局）"
                                                          if t.get("from") else "")) if t.get("hands") else ""
@@ -970,6 +1004,9 @@ def main():
     ref.add_argument("candidate")
     ref.add_argument("--host", default="local", choices=tuple(EVAL_WORKERS))
     ref.add_argument("--weights", help="score an exported model by its weights hash under this name")
+    rf = sub.add_parser("refresh", help="replay a line's best on the development set under the current conditions")
+    rf.add_argument("line", choices=("rule", "rl"))
+    rf.add_argument("--host", choices=tuple(EVAL_WORKERS))
     sub.add_parser("seal", help="accept the current evaluation conditions (maintainer)")
     cmp = sub.add_parser("compare", help="paired development-set difference of two scored versions")
     cmp.add_argument("a")
@@ -998,6 +1035,15 @@ def main():
     if args.command == "rebase-finish":
         rows = rebase_finish(args.line)
         print("\n".join(f"{r['id']} {r['score']:+.2f}（旧池 {r['rebased']['old_score']:+.2f}）" for r in rows))
+        return
+    if args.command == "refresh":
+        try:
+            r = refresh(args.line, args.host)
+        except Refused as exc:
+            raise SystemExit(str(exc))
+        s = r["stats"]
+        print(f"{r['id']} {r['score']:+.2f} ± {r['se']:.2f}（原 {r['refreshed']['old_score']:+.2f}；"
+              f"超时 {s['timeouts']}，代打 {s['fallback_actions']}，报错 {s['errors']}）")
         return
     if args.command == "seal":
         print(seal())

@@ -7,8 +7,9 @@ the pool's rule members, and the new code gets every call the best version
 gets (the same seeds, observations and round results) and must choose the
 same action every time. When it does, it would play the development set's
 games move for move, so it becomes the best version with the best version's
-scores. One different decision fails it; the first ones are kept for the agent
-to reproduce.
+scores; if the fallback played some of the best version's moves there
+(timeouts), the new code plays the development set itself. One different
+decision fails it; the first ones are kept for the agent to reproduce.
 """
 import json
 import os

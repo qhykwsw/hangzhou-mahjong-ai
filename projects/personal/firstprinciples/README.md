@@ -50,6 +50,7 @@ cd projects/personal/firstprinciples
   3. 在新池下补齐成绩：每个成员的参照（`reference`）、`harness.rl baseline`（RL 起点），以及两条线每个成为过最好版本的版本与自由对战上场版本（`rebase <编号> ... --host <主机>`，可分到几台主机并行，中断后重跑会跳过已完成的）；
   4. `rebase-finish rule` 与 `rebase-finish rl`（在 baseline 之后）：重算的版本沿用原编号记入新池，分数从低到高写入，所以每条线重算分最高的成为它在新池下的最好版本；这些记录不作为新结果汇报；
   5. `drain off`，告诉两条线新旧分数不可比。一条线的重算先完成时，可以先记入它，用 `drain on "<原因>" --only <另一条线>` 只让另一条线继续等；记入之后不再给这条线补记重算，否则低分记录会排在后面成为「最好版本」。
+- 评估条件在同一个池里变了（成员登记了等价快版、主机执行参数改了），或最好版本的开发集存档带着超时：`drain on "<原因>" --only <线>`，等这条线在途尝试结束后 `refresh <线>`，在当前条件下重打它最好版本的开发集并追加同编号记录（时间位置不变），再 `drain off`。开发集配对差读的是最好版本的存档，存档条件与候选不同时会系统性偏高或偏低；确认集每次重打冠军，不受影响。
 - 修改 `projects/personal/selfplay/guided/` 后：把 `.local/rl/source` 按其 `source-manifest.json` 的 id 归档到 `.local/rl/sources/<id>`，再对每台主机重新 `setup <起点 sha>`，最后 `seal`。`setup` 从当前工作区冻结框架（`guided/` 与 `src/`）：工作区里有其他会话未提交的改动时，先用 `git worktree` 取一份干净的 HEAD，把 `recipe_jobs.REPO` 指向它冻结到 `.local/rl/source`，再 `setup`。
 - 往 4070 上传教师包时，清单里登记的文件要全部带上，包括 Mac 的 `.so`，否则 `read_bundle` 会拒绝；每个运行时目录都要在主机上单独编译 `_fast` 扩展。对手池里有模型成员时，评估由对局执行器从 Mac 的模型库自动同步，不要手动往主机拷贝模型。
 - 流程检查：把 `.local/pool.json`、`.local/seal.json` 和 `.local/rl/setup-*.json` 复制到仓库内一个单独的目录，设 `FP_LOCAL` 指向它，再用 `FP_DEV`（开发集局组数，每组 4 场）、`FP_CONFIRM`、`FP_EQUIVALENCE_HANDS`、`FP_RL_HANDS`、`FP_RL_BUDGET` 缩短场数与训练预算，跑一遍 wait/start。这些缩短的设置只在 `FP_LOCAL` 下被接受，流程检查不提交 Git、不改动自由对战，跑完删掉这个目录。

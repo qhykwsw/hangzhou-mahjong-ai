@@ -452,11 +452,21 @@ def equivalent(state):
                        f"{champion['id']} 不同。\n前几个：\n{examples}\n完整局面（Observation 与双方动作）在 "
                        f"{root / 'mismatches.pickle'}")
         return
-    # Same decisions play the development set's games move for move: the scores carry over.
+    # Same decisions play the development set's games move for move: the scores carry
+    # over, unless the fallback played some of the best version's moves (timeouts),
+    # which faster code may not need; then it plays the development set itself.
+    blocks, stats = champion["dev_blocks"], champion["stats"]
+    games, score, se, diff = champion["games"], champion["score"], champion["se"], 0.0
+    summary["carried"] = not (stats.get("timeouts") or stats.get("fallback_actions"))
+    if not summary["carried"]:
+        scores, stats = E.play(pool, state["id"], state["spec"], range(E.DEV_BLOCKS), pool["dev_seed"], "dev", "local")
+        blocks = {str(k): scores[k] for k in sorted(scores)}
+        games, (score, se) = E.DEV_BLOCKS * 4, E.mean_se(scores[k] for k in range(E.DEV_BLOCKS))
+        diff, _ = E.paired(scores, {int(k): v for k, v in champion["dev_blocks"].items()}, range(E.DEV_BLOCKS))
     record = dict(id=state["id"], line="rule", pool=pool["id"], status="keep", description=state["description"],
-                  host="local", finished_at=time.time(), games=champion["games"], score=champion["score"],
-                  se=champion["se"], best_before=champion["score"], diff=0.0, confirm=None,
-                  stats=champion["stats"], spec=state["spec"], dev_blocks=champion["dev_blocks"],
+                  host="local", finished_at=time.time(), games=games, score=score,
+                  se=se, best_before=champion["score"], diff=diff, confirm=None,
+                  stats=stats, spec=state["spec"], dev_blocks=blocks,
                   design_seconds=state.get("design_seconds"), equivalent=summary) | extra(state)
     record["reference"] = E.against_platform(record)
     E.append_record(record)

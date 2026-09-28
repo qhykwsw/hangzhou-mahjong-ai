@@ -98,7 +98,8 @@
       for (const a of rows) {
         const note = a.rebased ? `\n换池重算（旧池 ${signed(a.rebased.old_score)}）` + (steps.has(a) ? "" : "：没有高过此前最好版本")
           + (a.shown_only ? "\n仅供展示，未记入迭代记录" : "") : "";
-        const tip = `${a.id} ${STATUS[a.status] || a.status} ${signed(a.score)} ± ${a.se?.toFixed(2)}（${a.games} 场）${note}\n${a.description}`;
+        const redone = a.refreshed ? `\n当前条件下重测开发集（原 ${signed(a.refreshed.old_score)}）` : "";
+        const tip = `${a.id} ${STATUS[a.status] || a.status} ${signed(a.score)} ± ${a.se?.toFixed(2)}（${a.games} 场）${note}${redone}\n${a.description}`;
         const cls = steps.has(a) ? `fill="${meta.color}"` : a.status === "unconfirmed" ? 'fill="none" stroke="#c9822b" stroke-width="2"' : 'fill="#b8c4c9"';
         parts.push(`<circle cx="${X(at.get(a))}" cy="${Y(a.score)}" r="5" ${cls}><title>${esc(tip)}</title></circle>`);
       }
@@ -135,7 +136,8 @@
       .sort((a, b) => when(b) - when(a))
       .map((a) => {
         const c = a.confirm;
-        const status = a.rebased ? `换池重算（旧池 ${signed(a.rebased.old_score)}${a.shown_only ? "，仅展示" : ""}）` : STATUS[a.status] || a.status;
+        const status = (a.rebased ? `换池重算（旧池 ${signed(a.rebased.old_score)}${a.shown_only ? "，仅展示" : ""}）` : STATUS[a.status] || a.status)
+          + (a.refreshed ? `，当前条件重测（原 ${signed(a.refreshed.old_score)}）` : "");
         return `<tr class="${steps.has(a) ? "kept" : ""}">
           <td>${esc(a.id)}<div class="muted">${esc(LINES[a.line]?.name || a.line)}</div></td>
           <td>${esc(status)}</td>

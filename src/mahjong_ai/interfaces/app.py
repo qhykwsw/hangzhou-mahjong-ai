@@ -178,6 +178,8 @@ def application(project, tailscale_url=None):
                 if r.get("rebased"):
                     row["made_at"] = made_at(r)
                     row["rebased"] = {"old_score": r["rebased"].get("old_score")}
+                if r.get("refreshed"):
+                    row["refreshed"] = {"old_score": r["refreshed"].get("old_score")}
                 rows.append(row)
             pools.append({"id": pool_id, "first_at": min(r["finished_at"] for r in records.values()),
                           "current": pool_id == pool["id"], "members": names})

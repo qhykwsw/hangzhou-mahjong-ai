@@ -369,3 +369,49 @@ def test_a_new_pool_takes_the_replayed_versions_and_their_best(harness, monkeypa
     assert line.design_hosts("rl", probe=False)[0] == []
     E.set_drain(None)
     assert line.design_hosts("rule") == (["local"], None)
+
+
+def test_equivalent_code_replays_a_development_set_its_best_version_timed_out_on(harness, monkeypatch):
+    E, _, line = harness
+    equivalence = importlib.import_module("harness.equivalence")
+    monkeypatch.setattr(E, "platform_entrant", lambda: None)
+    monkeypatch.setattr(E, "DEV_BLOCKS", 2)
+    monkeypatch.setattr(line, "decision_ms", lambda state: {"mine": 2.0, "base": 8.0})
+    (E.LOCAL / "pool.json").write_text(json.dumps({"id": "pool-a", "members": {}, "dev_seed": 3}))
+    record(E, id="fp-rule-002", line="rule", games=8, finished_at=1, stats={"timeouts": 3, "fallback_actions": 3},
+           spec={"package_path": "/best"}, dev_blocks={"0": 1.5, "1": -0.5}, score=0.5)
+    monkeypatch.setattr(equivalence, "check", lambda *args: {"hands": 64, "decisions": 700, "mismatches": 0,
+                                                             "seconds": [8.0, 2.0], "examples": []})
+    played = []
+    monkeypatch.setattr(E, "play", lambda pool, cid, spec, blocks, seed, label, host: (
+        played.append((cid, label)) or {b: 2.0 for b in blocks}, {"timeouts": 0, "fallback_actions": 0, "errors": 0}))
+    state = dict(id="fp-rule-003", line="rule", host="local", description="剪枝", why="更快", base="fp-rule-002",
+                 started_at=2, design_seconds=60, stage="equivalence", confirm_seed=7,
+                 spec={"package_path": "/new", "package_hash": "n"})
+    line.save(state)
+    line.equivalent(state)
+    mine = E.best("pool-a", "rule")
+    assert played == [("fp-rule-003", "dev")] and mine["id"] == "fp-rule-003"
+    assert (mine["dev_blocks"], mine["score"], mine["diff"], mine["stats"]["timeouts"]) == ({"0": 2.0, "1": 2.0}, 2.0, 1.5, 0)
+    assert not mine["equivalent"]["carried"]
+
+
+def test_a_best_version_replays_the_development_set_under_the_current_conditions(harness, monkeypatch):
+    E, _, _ = harness
+    monkeypatch.setattr(E, "DEV_BLOCKS", 2)
+    (E.LOCAL / "pool.json").write_text(json.dumps({"id": "pool-a", "members": {}, "dev_seed": 3}))
+    E.seal()
+    record(E, id="fp-rule-002", line="rule", games=8, finished_at=5, host="local", stats={"timeouts": 3},
+           spec={"package_hash": "b"}, dev_blocks={"0": 1.0, "1": 0.0}, score=0.5)
+    record(E, id="fp-rule-003", line="rule", status="unconfirmed", games=8, finished_at=6, dev_blocks={"0": 2.0, "1": 1.0})
+    labels = []
+    monkeypatch.setattr(E, "play", lambda pool, cid, spec, blocks, seed, label, host: (
+        labels.append((cid, label, host)) or {b: 1.5 + b for b in blocks}, {"timeouts": 0, "fallback_actions": 0, "errors": 0}))
+    r = E.refresh("rule")
+    assert labels == [("fp-rule-002", "dev-refresh1", "local")]
+    best = E.best("pool-a", "rule")
+    assert best["id"] == "fp-rule-002" and best["finished_at"] == 5 and best["dev_blocks"] == {"0": 1.5, "1": 2.5}
+    assert (r["refreshed"]["old_score"], r["stats"]["timeouts"], r["score"]) == (0.5, 0, 2.0)
+    assert round(E.compare("fp-rule-003", "fp-rule-002")[0], 6) == -0.5  # was +1.0 against the stale blocks
+    E.refresh("rule")
+    assert labels[-1][1] == "dev-refresh2"  # a later refresh never reuses the earlier one's jobs
