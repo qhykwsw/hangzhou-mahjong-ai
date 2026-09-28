@@ -56,4 +56,4 @@ cd projects/personal/firstprinciples
 
 ## 运行数据
 
-都在本项目 `.local/`：`pool.json`、`seal.json`、`attempts.jsonl`（每次尝试一条记录）、`running/`（在途尝试的状态）、`hosts.json`（主机开关）、`notes/<线>.md`（迭代笔记）、冻结的尝试快照与任务目录。研究网页的「迭代线」标签页只读展示。
+都在本项目 `.local/`：`pool.json`（现役对手池）、`pools/<池 id>.json`（每个对手池的存档，换池后网页按它画各代的参照线）、`seal.json`、`attempts.jsonl`（每次尝试一条记录）、`rebase/<池 id>-unrecorded/`（只供网页展示、不记入记录的换池重算）、`running/`（在途尝试的状态）、`hosts.json`（主机开关）、`notes/<线>.md`（迭代笔记）、冻结的尝试快照与任务目录。研究网页的「迭代线」标签页只读展示。

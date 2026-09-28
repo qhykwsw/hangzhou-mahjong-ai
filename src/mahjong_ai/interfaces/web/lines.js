@@ -42,8 +42,9 @@
     return steps;
   }
 
-  function chart(attempts, current) {
-    const shown = attempts.filter((a) => a.score != null && (current || a.line !== "reference"));
+  function chart(attempts) {
+    // Reference levels: the pool's own members only (other references stay in the table).
+    const shown = attempts.filter((a) => a.score != null && (a.line !== "reference" || a.member));
     if (!shown.length) return '<p class="muted">还没有尝试。</p>';
     const at = placed(shown);
     // Drawn at the container's own width so labels keep their size on phones.
@@ -72,7 +73,7 @@
     }
     for (const [key, meta] of Object.entries(LINES)) {
       const rows = shown.filter((a) => a.line === key).sort((a, b) => at.get(a) - at.get(b));
-      if (key === "reference") {  // only the current pool's (older ones are not shown)
+      if (key === "reference") {
         // Every reference version is its own dashed level, labelled at the right edge
         // unless the label would overlap one already drawn (the line keeps its tooltip).
         let labelled = -Infinity;
@@ -95,7 +96,8 @@
         parts.push(`<path d="${d}" fill="none" stroke="${meta.color}" stroke-width="2"/>`);
       }
       for (const a of rows) {
-        const note = a.rebased ? `\n换池重算（旧池 ${signed(a.rebased.old_score)}）` + (steps.has(a) ? "" : "：没有高过此前最好版本") : "";
+        const note = a.rebased ? `\n换池重算（旧池 ${signed(a.rebased.old_score)}）` + (steps.has(a) ? "" : "：没有高过此前最好版本")
+          + (a.shown_only ? "\n仅供展示，未记入迭代记录" : "") : "";
         const tip = `${a.id} ${STATUS[a.status] || a.status} ${signed(a.score)} ± ${a.se?.toFixed(2)}（${a.games} 场）${note}\n${a.description}`;
         const cls = steps.has(a) ? `fill="${meta.color}"` : a.status === "unconfirmed" ? 'fill="none" stroke="#c9822b" stroke-width="2"' : 'fill="#b8c4c9"';
         parts.push(`<circle cx="${X(at.get(a))}" cy="${Y(a.score)}" r="5" ${cls}><title>${esc(tip)}</title></circle>`);
@@ -109,7 +111,7 @@
     return [1, 2, 5, 10].map((m) => m * p).find((s) => s >= raw) || p * 10;
   }
 
-  function legend(attempts, current) {
+  function legend(attempts) {
     const at = placed(attempts.filter((a) => a.score != null));
     const counts = (line) => {
       const rows = attempts.filter((a) => a.line === line);
@@ -120,7 +122,7 @@
       `<span><i style="background:var(--blue)"></i>RL 线（${counts("rl")}）</span>`,
       '<span><i style="background:#b8c4c9"></i>失败或未提高</span>',
       '<span><i class="hollow"></i>开发集高但未确认</span>',
-      current ? '<span><i class="dash"></i>参照（对手池成员与上场版本）</span>' : "",
+'<span><i class="dash"></i>参照（对手池成员）</span>',
     ].join("");
   }
 
@@ -133,7 +135,7 @@
       .sort((a, b) => when(b) - when(a))
       .map((a) => {
         const c = a.confirm;
-        const status = a.rebased ? `换池重算（旧池 ${signed(a.rebased.old_score)}）` : STATUS[a.status] || a.status;
+        const status = a.rebased ? `换池重算（旧池 ${signed(a.rebased.old_score)}${a.shown_only ? "，仅展示" : ""}）` : STATUS[a.status] || a.status;
         return `<tr class="${steps.has(a) ? "kept" : ""}">
           <td>${esc(a.id)}<div class="muted">${esc(LINES[a.line]?.name || a.line)}</div></td>
           <td>${esc(status)}</td>
@@ -152,21 +154,22 @@
   let pick = null; // the pool shown: the current one unless the viewer picked another
   const picked = () => [...data.attempts, ...(data.older || [])].filter((a) => a.pool === pick);
   window.addEventListener("resize", () => {
-    if (data && !$("linesView").hidden) $("linesChart").innerHTML = chart(picked(), pick === data.pool.id);
+    if (data && !$("linesView").hidden) $("linesChart").innerHTML = chart(picked());
   });
 
   function draw() {
     const current = pick === data.pool.id;
-    $("linesPool").textContent = current ? `固定对手池 ${data.pool.members.length} 个` : "旧对手池，分数与现役池不可比";
-    $("linesPool").title = current ? data.pool.members.join("\n") : pick;
+    const members = data.pools.find((p) => p.id === pick)?.members || [];
+    $("linesPool").textContent = current ? `固定对手池 ${members.length} 个` : `旧对手池 ${members.length} 个，分数与现役池不可比`;
+    $("linesPool").title = members.join("\n") || pick;
     const select = $("linesPoolPick");
     select.innerHTML = data.pools
       .map((p, i) => `<option value="${esc(p.id)}"${p.id === pick ? " selected" : ""}>第 ${i + 1} 代对手池${p.current ? "（现役）" : ""}</option>`)
       .join("");
     select.hidden = data.pools.length < 2;
     const rows = picked();
-    $("linesLegend").innerHTML = legend(rows, current);
-    $("linesChart").innerHTML = chart(rows, current);
+    $("linesLegend").innerHTML = legend(rows);
+    $("linesChart").innerHTML = chart(rows);
     $("linesTable").innerHTML = table(rows);
   }
 

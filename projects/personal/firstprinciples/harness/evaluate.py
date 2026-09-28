@@ -195,6 +195,8 @@ def freeze_pool(model_weights, model_name, runtime=None, replace=False, rules=No
     if kept:
         pool["implementations"] = kept
     atomic_json(path, pool)
+    # Every pool stays on file after it is replaced: its records name it by id.
+    atomic_json(LOCAL / "pools" / f"{pool['id']}.json", pool)
     return pool
 
 

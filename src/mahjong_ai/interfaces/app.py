@@ -112,7 +112,10 @@ def application(project, tailscale_url=None):
         Scores of different pools are not comparable, so the page shows one
         pool at a time. A version replayed on a new pool (harness.evaluate
         rebase) carries ``made_at``, when its attempt first finished, so it
-        takes its place in the line's order instead of the replay's.
+        takes its place in the line's order instead of the replay's. Replays
+        kept out of the records (``rebase/<pool>-unrecorded``, so they cannot
+        become a line's best) are shown too, marked ``shown_only``. Reference
+        rows of the pool's own members are marked ``member``.
         """
         pool_path, log_path = lines_root / "pool.json", lines_root / "attempts.jsonl"
         if not pool_path.exists():
@@ -125,6 +128,19 @@ def application(project, tailscale_url=None):
                     r = json.loads(line)
                     # a reference played again replaces its earlier record
                     latest.setdefault(r.get("pool"), {})[r["id"]] = r
+        shown_only = set()
+        for folder in (lines_root / "rebase").glob("*-unrecorded"):
+            for path in folder.glob("*.json"):
+                r = json.loads(path.read_text())
+                if r["id"] not in latest.setdefault(r["pool"], {}):
+                    latest[r["pool"]][r["id"]] = r
+                    shown_only.add((r["pool"], r["id"]))
+
+        def members(pool_id):
+            if pool_id == pool["id"]:
+                return sorted(pool["members"])
+            archived = lines_root / "pools" / f"{pool_id}.json"  # harness.evaluate.freeze_pool
+            return sorted(json.loads(archived.read_text())["members"]) if archived.exists() else []
 
         def made_at(r):
             for _ in range(len(latest)):  # replayed again on each later pool
@@ -136,6 +152,7 @@ def application(project, tailscale_url=None):
 
         rows, pools = [], []
         for pool_id, records in latest.items():
+            names = members(pool_id)
             # Pools rebuilt before any attempt ran on them hold only references and a start.
             if pool_id != pool["id"] and not any(
                     r["line"] in ("rule", "rl") and not r["id"].startswith("fp-rl-start-") for r in records.values()):
@@ -154,14 +171,19 @@ def application(project, tailscale_url=None):
                     "games", "score", "se", "best_before", "diff", "confirm", "stats",
                     "design_seconds")}
                 row["pool"] = pool_id
+                if r["line"] == "reference":
+                    row["member"] = r["id"].removeprefix("ref-") in names
+                if (pool_id, r["id"]) in shown_only:
+                    row["shown_only"] = True
                 if r.get("rebased"):
                     row["made_at"] = made_at(r)
                     row["rebased"] = {"old_score": r["rebased"].get("old_score")}
                 rows.append(row)
             pools.append({"id": pool_id, "first_at": min(r["finished_at"] for r in records.values()),
-                          "current": pool_id == pool["id"]})
+                          "current": pool_id == pool["id"], "members": names})
         if pool["id"] not in latest:  # a new pool before its first record
-            pools.append({"id": pool["id"], "first_at": time.time(), "current": True})
+            pools.append({"id": pool["id"], "first_at": time.time(), "current": True,
+                          "members": members(pool["id"])})
         pools.sort(key=lambda p: p["first_at"])
         # "attempts" stays the current pool's, as a page loaded before older pools were served expects.
         return {"enabled": True, "pool": {"id": pool["id"], "members": sorted(pool["members"])},
