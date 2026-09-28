@@ -29,6 +29,9 @@ generic one.
 """
 COMBINATION = "firstprinciples-rule"
 
+import math
+from functools import lru_cache
+
 from mahjong_ai.domain.observations import can_discard_piao
 from mahjong_ai import _fast
 from mahjong_ai.domain.rules import WHITE, is_baotou
@@ -45,17 +48,14 @@ Q_EARLY = 0.10
 Q_LATE = 0.30
 OPTION_REACH = 1.35  # the largest measured ratio was 1.30
 TIE = 1e-7  # weight of shape potential, which only separates equal values
-# Measured against the fixed pool: the chance one opponent self-draws before my
-# next draw, by stage (my draws left 13+, 9-12, fewer), its melds (0-3+) and how
-# many of its last three discards were middle suit tiles (first entry: fewer
-# than three discards yet; then 0-3).
-OPPONENT_HAZARD = (
-    ((0.003, 0.004, 0.017, 0.030, 0.020), (0.014, 0.009, 0.033, 0.069, 0.055), (0.042, 0.036, 0.059, 0.059, 0.050), (0.075, 0.065, 0.119, 0.047, 0.070)),
-    ((0.024, 0.013, 0.033, 0.044, 0.074), (0.046, 0.029, 0.052, 0.071, 0.082), (0.074, 0.049, 0.074, 0.091, 0.129), (0.131, 0.101, 0.133, 0.148, 0.159)),
-    ((0.060, 0.048, 0.060, 0.074, 0.058), (0.083, 0.069, 0.084, 0.093, 0.089), (0.105, 0.093, 0.106, 0.109, 0.121), (0.164, 0.133, 0.161, 0.173, 0.225)),
-)
-
-
+# Measured against the fixed pool (logistic fit over 200k opponent-rounds): the
+# log-odds that one opponent self-draws before my next draw, weighting in order
+# 1, my draws left d, d*d/16, its melds being 1 / 2 / 3+, melds*d, middle suit
+# tiles among its last three discards, whether it has three yet, middle tiles
+# among its last six, honors and terminals among its last three, its discards
+# /10, its discards since its last call /9 (9 without a call), whether it
+# deals, and whether it has discarded a white (a piao: it waits on baotou).
+OPPONENT_LOGIT = (-0.0571, -0.1131, -0.2408, -0.5687, -0.2777, 0.1483, 0.0804, 0.0021, 1.0988, 0.1779, -0.4002, -0.1582, -1.9073, -0.6204, 0.1573, 5.1224)
 LONG = 16  # more draws of mine than any hand holds
 
 
@@ -66,18 +66,36 @@ def tenpai_hazard(draws, speed=1.0):
 
 def opponent_speed(obs, draws):
     """The opponents' chance to win before my next draw, read from their melds
-    and recent discards, as a multiple of the generic tenpai_hazard, in steps
-    of 0.05 within 0.1-2."""
-    stage = 0 if draws >= 13 else (1 if draws >= 9 else 2)
+    and discards, as a multiple of the generic tenpai_hazard, in steps of 0.05
+    within 0.1-3."""
+    hand_no = obs.public_events[-1].hand_no if obs.public_events else 0
+    since = {}
+    for event in obs.public_events:
+        if event.hand_no != hand_no:
+            continue
+        if event.kind in ("chi", "peng", "gang"):
+            since[event.seat] = 0
+        elif event.kind == "discard" and event.seat in since:
+            since[event.seat] += 1
+    d = min(draws, 16)
     stay = 1.0
     for seat in range(4):
         if seat == obs.stage.seat:
             continue
-        last = obs.discards[seat][-3:]
-        middle = sum(1 for t in last if t < 27 and 2 <= t % 9 <= 6) if len(last) == 3 else -1
-        stay *= 1 - OPPONENT_HAZARD[stage][min(3, len(obs.melds[seat]))][middle + 1]
+        discards = obs.discards[seat]
+        last3, last6 = discards[-3:], discards[-6:]
+        melds = min(3, len(obs.melds[seat]))
+        features = (
+            1, d, d * d / 16, melds == 1, melds == 2, melds == 3, (melds >= 1) * d,
+            sum(1 for t in last3 if t < 27 and 2 <= t % 9 <= 6), len(last3) == 3,
+            sum(1 for t in last6 if t < 27 and 2 <= t % 9 <= 6),
+            sum(1 for t in last3 if t >= 27), sum(1 for t in last3 if t < 27 and t % 9 in (0, 8)),
+            len(discards) / 10, min(since.get(seat, 9), 9) / 9, obs.stage.dealer == seat, WHITE in discards,
+        )
+        logit = sum(w * x for w, x in zip(OPPONENT_LOGIT, features))
+        stay *= 1 - 1 / (1 + math.exp(-logit))
     ratio = (1 - stay) / tenpai_hazard(draws)
-    return min(2.0, max(0.1, round(ratio * 20) / 20))
+    return min(3.0, max(0.1, round(ratio * 20) / 20))
 
 
 # The valuation above, run by the SDK's C race valuation with this line's
@@ -97,6 +115,84 @@ def reshaped_value(hand, opened, available, draws, options=True, speed=1.0):
     """A waiting hand with the option to trade a non-winning draw for a better wait."""
     return _fast.race_reshaped(hand, opened, available, draws, PROFILE, analyze, options, speed)
 
+
+
+@lru_cache(maxsize=2000)
+def piao_value(hand, opened, available, chain, piao, draws, speed=1.0):
+    """A baotou wait holding a spare white: each draw either wins now or, when
+    a white discard keeps baotou, scores piao and waits on at double fan."""
+    unseen = max(1, sum(available))
+    held = list(_fast.counts(hand))
+    q = Q * speed
+    total = 0.0
+    for tile in range(34):
+        if available[tile] <= 0 or held[tile] >= 4:
+            continue
+        held[tile] += 1
+        now = _fast.fan_value(held, tile, opened, chain, piao, False, False) + SAVED
+        best = now
+        if held[WHITE] >= 2:
+            held[WHITE] -= 1
+            if _fast.baotou(held, opened):
+                rest = sorted((*hand, tile))
+                rest.remove(WHITE)
+                rest = tuple(rest)
+                later = _fast.race_waiting(rest, opened, available, chain + 1, piao + 1, draws - 1, PROFILE, analyze, False, speed)
+                best = max(now, (1 - q) * later)
+            held[WHITE] += 1
+        held[tile] -= 1
+        total += available[tile] * best
+    return total / unseen
+
+
+
+def piao_gain(hand, opened, available, draws, speed):
+    """What the piao option adds to a wait holding a white, over the C race:
+    the white upgrade's baotou targets priced with piao_value when they keep
+    a spare white (only at a win, where this trade is made)."""
+    if WHITE not in hand or draws < 2:
+        return 0.0
+    if is_baotou(hand, opened):
+        if hand.count(WHITE) < 2:
+            return 0.0
+        return piao_value(hand, opened, available, 0, 0, draws, speed) - waiting_value(hand, opened, available, draws=draws, speed=speed)
+    held = list(_fast.counts(hand))
+    row = _fast.analyze_counts(held, opened, available, 0, 0, 0)
+    if row[0] > 0:
+        return 0.0
+    unseen = max(1, sum(available))
+    q = Q * speed
+    fans = dict(zip(row[2], row[3]))
+    kinds = [t for t in range(34) if held[t]]
+    plain = richer = 0.0
+    reach = 0
+    for tile in range(34):
+        if available[tile] <= 0 or held[tile] >= 4:
+            continue
+        held[tile] += 1
+        best = best_p = 0.0
+        for drop in kinds:
+            if drop == tile or not held[drop]:
+                continue
+            held[drop] -= 1
+            if _fast.baotou(held, opened):
+                rest = sorted((*hand, tile))
+                rest.remove(drop)
+                rest = tuple(rest)
+                v = waiting_value(rest, opened, available, draws=draws - 1, speed=speed)
+                vp = piao_value(rest, opened, available, 0, 0, draws - 1, speed) if rest.count(WHITE) >= 2 else v
+                best, best_p = max(best, v), max(best_p, vp)
+            held[drop] += 1
+        held[tile] -= 1
+        if tile in fans:
+            plain += available[tile] * max(fans[tile] + SAVED, (1 - q) * best)
+            richer += available[tile] * max(fans[tile] + SAVED, (1 - q) * best_p)
+        elif best:
+            plain += available[tile] * (1 - q) * best
+            richer += available[tile] * (1 - q) * best_p
+            reach += available[tile]
+    stay = (1 - tenpai_hazard(draws, speed)) * (1 - (row[5] + reach) / unseen)
+    return (richer - plain) / unseen * (1 - stay ** draws) / (1 - stay)
 
 
 def potential(hand, available):
@@ -142,7 +238,7 @@ class Race:
             catch_exempt=obs.catch_play and not obs.catch_restricted,
         )
 
-    def value(self, obs, action, opened, available, options=True, speed=1.0):
+    def value(self, obs, action, opened, available, options=True, speed=1.0, at_win=False):
         hand = list(obs.hand)
         # My draws left before the wall is down to its last 20 tiles.
         draws = max(1, -(-(obs.wall_remaining - LAST_WALL) // 4))
@@ -168,6 +264,8 @@ class Race:
                 value = waiting_value(rest, opened, available, chain, piao, draws, speed=speed)
             else:
                 value = reshaped_value(rest, opened, available, draws, options, speed)
+                if at_win:
+                    value += piao_gain(rest, opened, available, draws, speed)
             return (1 - Q * speed) * value + TIE * potential(rest, available)
         if action.action in ("peng", "chi"):
             used = action.tiles if action.action == "chi" else (action.tile,) * 2
@@ -237,11 +335,12 @@ class Race:
             speed = opponent_speed(obs, draws)
         # The trade option one step away adds at most about a quarter to a
         # hand's value, so only discards that close to the best need it.
-        values = [self.value(obs, a, opened, available, False, speed) for a in obs.legal_actions]
+        at_win = any(a.action == "hu" for a in obs.legal_actions)
+        values = [self.value(obs, a, opened, available, False, speed, at_win) for a in obs.legal_actions]
         top = max(values)
         for i, a in enumerate(obs.legal_actions):
             if a.action == "discard" and values[i] * OPTION_REACH >= top:
-                values[i] = self.value(obs, a, opened, available, True, speed)
+                values[i] = self.value(obs, a, opened, available, True, speed, at_win)
         return obs.legal_actions[max(range(len(values)), key=values.__getitem__)]
 
 
