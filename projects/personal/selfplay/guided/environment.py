@@ -374,6 +374,11 @@ def worker(conn, cfg, bundle_path, panel_path, worker_index, command):
         deadline = command["deadline"]
         todo = list(command.get("jobs", []))
         is_eval = command["kind"] == "evaluate"
+        # Training games whose rule seats the C engine can play run there.
+        if not is_eval and cfg.get("fast_game", True):
+            from .fastgame import FastGame as Training
+        else:
+            Training = Game
         completed_samples = completed_games = 0
         games = {}
         next_id = 0
@@ -407,7 +412,7 @@ def worker(conn, cfg, bundle_path, panel_path, worker_index, command):
                     for _ in range(4)
                 ]
                 seats[focal] = "model:current"
-                game = Game(
+                game = Training(
                     cfg,
                     bundle,
                     entries,

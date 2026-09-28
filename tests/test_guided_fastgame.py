@@ -1,0 +1,235 @@
+"""The C training game (guided/native.c) plays the Python engine's games bit for bit."""
+
+from pathlib import Path
+import importlib.util
+import random
+import sys
+
+import numpy as np
+import pytest
+
+PROJECT = Path(__file__).resolve().parents[1] / "projects/personal/selfplay"
+if str(PROJECT) not in sys.path:
+    sys.path.insert(0, str(PROJECT))
+
+pytest.importorskip("mahjong_ai._fast", reason="C accelerator not built")
+
+from guided import artifacts, fastgame  # noqa: E402  (fastgame first: members register through it)
+from guided.config import configuration  # noqa: E402
+from guided.encoding import encode, oracle  # noqa: E402
+from guided.environment import Game  # noqa: E402
+from guided.statistics import seed_for  # noqa: E402
+from mahjong_ai.domain.engine import HandState  # noqa: E402
+from mahjong_ai.domain.types import RoundConfig  # noqa: E402
+from selfplay_core.actions import action_index  # noqa: E402
+
+CONFIG = RoundConfig(rounds=16, allow_tiebreak=False)
+
+# A fixed pool member's shape: the whole decision in the runtime's race_act.
+MEMBER = """
+from mahjong_ai import _fast
+from mahjong_ai.sdk.shape import analyze
+
+Q = 0.15
+PROFILE = _fast.race_profile(Q, 0.467, 0.22, 0.45, 0.10, 0.30, {hunt}, {upgrade}, 1 - (1 - Q) ** (1 / 3), 1e-7, 20, {style})
+
+
+def examined(hand, opened, available, chain=0, piao=0):
+    return analyze(hand, opened, available, chain, piao)
+
+
+class Race:
+    def reset(self, seed):
+        pass
+
+    def finish_round(self, result, seat):
+        pass
+
+
+class Native(Race):
+    def act(self, obs):
+        return obs.legal_actions[_fast.race_act(obs, PROFILE, examined)]
+"""
+
+
+@pytest.fixture(scope="module")
+def members(tmp_path_factory):
+    folder = tmp_path_factory.mktemp("members")
+    built = []
+    for i, (style, hunt, upgrade) in enumerate([(0, 1.0, True), (1, 1.0, True), (2, 1.0, False), (3, 1.0, True),
+                                                (4, 0.8, True), (5, 1.2, True)]):
+        path = folder / f"member{i}.py"
+        path.write_text(MEMBER.format(style=style, hunt=hunt, upgrade=upgrade))
+        spec = importlib.util.spec_from_file_location(f"fastgame_member{i}", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        built.append(module.Native())
+    return built
+
+
+def snapshot_of(state):
+    events = [
+        (e.kind, e.seat, e.tile, tuple(e.tiles), tuple(e.scores), e.concealed, private)
+        for e, private in state.events[state.hand_start:]
+        if e.kind != "deal"
+    ]
+    return {
+        "dealer": state.dealer, "hand_no": state.hand_no, "rounds_total": state.rounds_total,
+        "scores": tuple(state.scores), "wall": tuple(state.wall),
+        "hands": tuple(tuple(h) for h in state.hands), "initial_hands": tuple(tuple(h) for h in state.initial_hands),
+        "melds": tuple(tuple((m.kind, tuple(m.tiles), m.from_seat, m.concealed) for m in row) for row in state.melds),
+        "discards": tuple(tuple(r) for r in state.discards), "white_acquired": tuple(state.white_acquired),
+        "events": tuple(events), "phase": state.phase, "turn": state.turn, "drawn": state.drawn,
+        "kong_draw": state.kong_draw, "chain": tuple(state.chain), "piao": tuple(state.piao),
+        "catch_owner": state.catch_owner, "response_queue": tuple(state.response_queue),
+        "discarder": state.discarder, "discarded": state.discarded, "winner": state.winner,
+        "fan": state.fan.fan if state.fan else None, "delta": tuple(state.delta), "settled": state.settled,
+        "steps": state.steps,
+    }
+
+
+def test_the_c_hand_is_the_python_hand_at_every_step():
+    rng = random.Random(7)
+    for _ in range(40):
+        seed, dealer, hand_no = rng.getrandbits(64), rng.randrange(4), rng.randrange(1, 17)
+        scores = tuple(rng.randrange(-50, 50) for _ in range(4))
+        state = HandState(CONFIG, seed, dealer, hand_no, scores)
+        state.rounds_total = 16
+        hand = fastgame.native.Hand(seed, dealer, hand_no, scores, 16)
+        applied = []
+        while True:
+            got = hand.snapshot()
+            assert got.pop("log") == tuple(applied)
+            assert got == snapshot_of(state)
+            if state.settled:
+                break
+            legal = state.legal_actions()
+            assert hand.legal() == tuple(action_index(a) for a in legal)
+            choice = rng.randrange(len(legal))
+            state.step(legal[choice], legal)
+            hand.step(action_index(legal[choice]))
+            applied.append(action_index(legal[choice]))
+
+
+def test_members_encoding_and_oracle_match_at_every_decision(members):
+    rng = random.Random(11)
+    plans = [fastgame.race_member(m) for m in members]
+    assert all(plans)
+    fallbacks = decisions = 0
+    for _ in range(12):
+        seed, dealer, hand_no = rng.getrandbits(64), rng.randrange(4), rng.randrange(1, 17)
+        scores = tuple(rng.randrange(-60, 60) for _ in range(4))
+        seats = [rng.randrange(len(members)) for _ in range(4)]
+        state = HandState(CONFIG, seed, dealer, hand_no, scores)
+        state.rounds_total = 16
+        hand = fastgame.native.Hand(seed, dealer, hand_no, scores, 16)
+        while not state.settled:
+            legal = state.legal_actions()
+            if len(legal) == 1:
+                state.step(legal[0], legal)
+                hand.step(action_index(legal[0]))
+                continue
+            seat = state.turn
+            obs = state.observation(legal)
+            choice = members[seats[seat]].act(obs)
+            assert hand.act(*plans[seats[seat]]) == action_index(choice)
+            for lookahead in (True, False):
+                row, native = encode(obs, lookahead), hand.encode(lookahead)
+                if native is None:
+                    fallbacks += 1
+                    continue
+                assert list(native) == list(row)
+                for key in row:
+                    assert native[key].dtype == row[key].dtype and native[key].shape == row[key].shape
+                    assert native[key].tobytes() == row[key].tobytes(), key
+            want, got = oracle(state, seat), hand.oracle(seat)
+            for key in want:
+                assert got[key].dtype == want[key].dtype and got[key].tobytes() == want[key].tobytes()
+            decisions += 1
+            state.step(choice, legal)
+            hand.step(action_index(choice))
+    assert decisions > 300 and fallbacks < decisions
+
+
+def learner(row, legal):
+    """A scripted learner: its choice, and a different argmax now and then (deviations)."""
+    digest = int(np.frombuffer(row["planes"].tobytes(), dtype=np.uint16).sum()) + int(row["events"].sum())
+    choice = legal[digest % len(legal)]
+    greedy = legal[(digest // 7) % len(legal)]
+    return choice, greedy
+
+
+def play(game):
+    """Drive a game (with its greedy continuations) as the worker does, answering with the scripted learner."""
+    requests = 0
+    while True:
+        for shadow in game.shadows:
+            while not shadow.done:
+                request = shadow.advance()
+                if request is None:
+                    break
+                legal = [i for i in np.flatnonzero(request["row"]["mask"])]
+                shadow.apply((learner(request["row"], legal)[1], -0.25, 0.0, 0))
+                requests += 1
+        request = game.advance()
+        if request is None:
+            if game.settled():
+                return requests
+            continue
+        legal = [int(i) for i in np.flatnonzero(request["row"]["mask"])]
+        choice, greedy = learner(request["row"], legal)
+        game.apply((choice, -0.5, 0.125, greedy))
+        requests += 1
+
+
+def rows_of(game):
+    return [
+        {k: (v.dtype.str, v.shape, v.tobytes()) if hasattr(v, "tobytes") else v for k, v in row.items()}
+        for row in game.rows
+    ]
+
+
+@pytest.mark.parametrize("features", [None, "guided.encoding:oracle", "test_guided_fastgame:reads_events"])
+def test_fast_game_plays_the_python_game(members, monkeypatch, features):
+    by_id = {f"m{i}": m for i, m in enumerate(members)}
+    monkeypatch.setattr(artifacts, "build_policy", lambda bundle, cid: by_id[cid])
+    cfg = configuration(rounds=16, lookahead=True, gae_lambda=0.95) | {"playout_baseline": True}
+    if features:
+        cfg["critic_features"] = features
+    for n in range(2):
+        seed = seed_for(29, "fast-game", n)
+        seats = ["model:current", "m1", "m3", "m5"] if n == 0 else ["m0", "m2", "model:current", "m4"]
+        focal = seats.index("model:current")
+        games = [cls(cfg, {"entries": []}, {k: None for k in by_id}, seats, seed, focal=focal, train=True)
+                 for cls in (Game, fastgame.FastGame)]
+        assert games[1].seats is not None
+        counts = [play(game) for game in games]
+        assert counts[0] == counts[1] > 50
+        assert games[0].scores == games[1].scores and games[0].hand_no == games[1].hand_no == 16
+        assert games[0].predecision_reward == games[1].predecision_reward
+        assert rows_of(games[0]) == rows_of(games[1])
+        assert any(row.get("deviated") for row in games[1].rows)
+
+
+def reads_events(state, seat):
+    """A critic_features hook reading the Python state beyond its plain fields."""
+    features = oracle(state, seat)
+    features["events_seen"] = np.float32(len(state.events))
+    features["legal_seen"] = np.float32(len(state.legal_actions()))
+    return features
+
+
+def test_other_rule_seats_stay_on_the_python_engine(members, monkeypatch):
+    class Other:
+        def reset(self, seed):
+            pass
+
+        def act(self, obs):
+            return obs.legal_actions[-1]
+
+    by_id = {"m0": members[0], "other": Other()}
+    monkeypatch.setattr(artifacts, "build_policy", lambda bundle, cid: by_id[cid])
+    cfg = configuration(rounds=16, lookahead=False)
+    game = fastgame.FastGame(cfg, {"entries": []}, {k: None for k in by_id}, ["model:current", "m0", "other", "m0"],
+                             seed_for(3, "other"), focal=0, train=True)
+    assert game.seats is None and isinstance(game.state, HandState)
