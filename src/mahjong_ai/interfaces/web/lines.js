@@ -42,8 +42,8 @@
     return steps;
   }
 
-  function chart(attempts) {
-    const shown = attempts.filter((a) => a.score != null);
+  function chart(attempts, current) {
+    const shown = attempts.filter((a) => a.score != null && (current || a.line !== "reference"));
     if (!shown.length) return '<p class="muted">还没有尝试。</p>';
     const at = placed(shown);
     // Drawn at the container's own width so labels keep their size on phones.
@@ -72,7 +72,7 @@
     }
     for (const [key, meta] of Object.entries(LINES)) {
       const rows = shown.filter((a) => a.line === key).sort((a, b) => at.get(a) - at.get(b));
-      if (key === "reference") {
+      if (key === "reference") {  // only the current pool's (older ones are not shown)
         // Every reference version is its own dashed level, labelled at the right edge
         // unless the label would overlap one already drawn (the line keeps its tooltip).
         let labelled = -Infinity;
@@ -109,7 +109,7 @@
     return [1, 2, 5, 10].map((m) => m * p).find((s) => s >= raw) || p * 10;
   }
 
-  function legend(attempts) {
+  function legend(attempts, current) {
     const at = placed(attempts.filter((a) => a.score != null));
     const counts = (line) => {
       const rows = attempts.filter((a) => a.line === line);
@@ -120,7 +120,7 @@
       `<span><i style="background:var(--blue)"></i>RL 线（${counts("rl")}）</span>`,
       '<span><i style="background:#b8c4c9"></i>失败或未提高</span>',
       '<span><i class="hollow"></i>开发集高但未确认</span>',
-      '<span><i class="dash"></i>参照（上场版本与粗测）</span>',
+      current ? '<span><i class="dash"></i>参照（对手池成员与上场版本）</span>' : "",
     ].join("");
   }
 
@@ -150,9 +150,9 @@
 
   let data = null;
   let pick = null; // the pool shown: the current one unless the viewer picked another
-  const picked = () => data.attempts.filter((a) => a.pool === pick);
+  const picked = () => [...data.attempts, ...(data.older || [])].filter((a) => a.pool === pick);
   window.addEventListener("resize", () => {
-    if (data && !$("linesView").hidden) $("linesChart").innerHTML = chart(picked());
+    if (data && !$("linesView").hidden) $("linesChart").innerHTML = chart(picked(), pick === data.pool.id);
   });
 
   function draw() {
@@ -165,8 +165,8 @@
       .join("");
     select.hidden = data.pools.length < 2;
     const rows = picked();
-    $("linesLegend").innerHTML = legend(rows);
-    $("linesChart").innerHTML = chart(rows);
+    $("linesLegend").innerHTML = legend(rows, current);
+    $("linesChart").innerHTML = chart(rows, current);
     $("linesTable").innerHTML = table(rows);
   }
 

@@ -163,8 +163,10 @@ def application(project, tailscale_url=None):
         if pool["id"] not in latest:  # a new pool before its first record
             pools.append({"id": pool["id"], "first_at": time.time(), "current": True})
         pools.sort(key=lambda p: p["first_at"])
+        # "attempts" stays the current pool's, as a page loaded before older pools were served expects.
         return {"enabled": True, "pool": {"id": pool["id"], "members": sorted(pool["members"])},
-                "pools": pools, "attempts": rows}
+                "pools": pools, "attempts": [r for r in rows if r["pool"] == pool["id"]],
+                "older": [r for r in rows if r["pool"] != pool["id"]]}
 
     async def lines(request):
         return JSONResponse(await asyncio.to_thread(iteration_lines))
