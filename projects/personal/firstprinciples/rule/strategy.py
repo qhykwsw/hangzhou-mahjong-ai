@@ -60,6 +60,8 @@ SHAPE_PAIR = 0.009
 SHAPE_ADJACENT = 0.0114
 SHAPE_UKEIRE = 0.0078
 SHAPE_DISTANCE = -0.045
+SHAPE_OPEN = 0.0105
+SHAPE_EDGE = -0.0055
 LONG = 16  # more draws of mine than any hand holds
 
 
@@ -205,7 +207,10 @@ def shape_bonus(rest, opened, available, full):
     held = _fast.counts(rest)
     pairs = sum(1 for t in range(33) if held[t] >= 2)
     adjacent = sum(1 for t in range(27) if t % 9 <= 7 and held[t] and held[t + 1])
+    edges = sum(1 for t in range(27) if t % 9 in (0, 7) and held[t] and held[t + 1])
     bonus = SHAPE_PAIR * pairs + SHAPE_ADJACENT * adjacent
+    # Two-sided pairs more, edge pairs (12, 89) less than adjacency alone.
+    bonus += SHAPE_OPEN * (adjacent - edges) + SHAPE_EDGE * edges
     if full:
         row = _fast.analyze_counts(list(held), opened, available, 0, 0, 0)
         bonus += SHAPE_UKEIRE * row[4] / 10 + SHAPE_DISTANCE * row[0]
@@ -270,7 +275,7 @@ class Race:
             ahead = 0 if discarder is None else (obs.stage.seat - discarder - 1) % 4
             return (1 - DRAW_RISK) ** ahead * waiting_value(
                 tuple(hand), opened, available, obs.chain_count, obs.piao_count, draws
-            )
+            ) + shape_bonus(tuple(sorted(hand)), opened, available, True)
         if action.action == "discard":
             rest = tuple(sorted(without(hand, action.tile)))
             if action.tile == WHITE and self.piao(obs, opened):
@@ -291,7 +296,9 @@ class Race:
             used = action.tiles if action.action == "chi" else (action.tile,) * 2
             for tile in used:
                 hand.remove(tile)
-            value = best_discard_value(hand, opened + 1, available, draws)
+            rests = [tuple(sorted(without(hand, tile))) for tile in set(hand)]
+            kept = max(rests, key=lambda rest: waiting_value(rest, opened + 1, available, draws=draws))
+            value = waiting_value(kept, opened + 1, available, draws=draws)
             # Called from a baotou wait, a white discard that keeps baotou
             # scores piao without waiting for my own draw.
             if WHITE in hand and is_baotou(obs.hand, opened):
@@ -304,7 +311,7 @@ class Race:
                         value,
                         waiting_value(rest, opened + 1, available, chain, piao, draws),
                     )
-            return (1 - Q) * value
+            return (1 - Q) * value + shape_bonus(kept, opened + 1, available, True)
         if action.action == "gang":
             for _ in range(KONG_TILES[action.kind]):
                 hand.remove(action.tile)
