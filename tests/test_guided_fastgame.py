@@ -291,6 +291,9 @@ def test_encoding_first_in_a_fresh_worker_process():
         "row = fastgame.native.Hand(11502053608047823656, 0, 1, (0, 0, 0, 0), 16).encode(True)\n"
         "assert row['planes'][50].any()\n"  # a winning draw after some discard: the race tables' fans
     )
-    env = {**__import__("os").environ, "PYTHONPATH": f"{PROJECT}:{PROJECT / 'src'}"}
+    import os
+
+    paths = [str(PROJECT), str(PROJECT / "src"), str(PROJECT.parents[2] / "src"), os.environ.get("PYTHONPATH", "")]
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(p for p in paths if p)}
     done = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=120)
     assert done.returncode == 0, done.stderr[-2000:]
