@@ -79,6 +79,7 @@ class Game:
                 self.teacher = build_policy(bundle, teacher)
             self.teacher.reset(seed_for(seed, "teacher", focal))
         self.teacher_id = teacher or ""
+        self.teacher_errors = 0
         self.scores, self.dealer, self.hand_no = [0] * 4, seed % 4, 0
         self.history, self.views, self.rows = [], None, []
         self.complete = False
@@ -181,10 +182,20 @@ class Game:
             if self.train and seat == self.focal:
                 row.update(hook(self.cfg.get("critic_features"), oracle)(state, seat))
                 if self.teacher:
-                    action = self.teacher.act(obs)
-                    if action not in legal:
-                        raise ValueError("teacher returned an illegal action")
-                    row["teacher"] = action_index(action)
+                    # A teacher that fails on a decision (raises, or answers
+                    # illegally) leaves that row unlabelled instead of
+                    # stopping the collection.
+                    try:
+                        action = self.teacher.act(obs)
+                    except Exception:
+                        action = None
+                        _teacher_failed(self.teacher_id)
+                    if action in legal:
+                        row["teacher"] = action_index(action)
+                    else:
+                        self.teacher_errors += 1
+                        if action is not None:
+                            _teacher_failed(self.teacher_id, f"illegal action {action}")
             self.pending = (row, legal, seat)
             return {
                 "row": row,
@@ -227,6 +238,20 @@ class Game:
             else:
                 finish(self.rows, self.cfg)
         return True
+
+
+_TEACHER_WARNED = set()
+
+
+def _teacher_failed(teacher, what=None):
+    """Report a teacher's first failure in this worker on stderr (the trial's log)."""
+    if teacher in _TEACHER_WARNED:
+        return
+    _TEACHER_WARNED.add(teacher)
+    import sys
+
+    detail = what or traceback.format_exc(limit=3)
+    print(f"teacher {teacher} failed on a decision; unlabelled from now on where it fails:\n{detail}", file=sys.stderr, flush=True)
 
 
 def fork(state):
@@ -379,7 +404,7 @@ def worker(conn, cfg, bundle_path, panel_path, worker_index, command):
             from .fastgame import FastGame as Training
         else:
             Training = Game
-        completed_samples = completed_games = 0
+        completed_samples = completed_games = teacher_errors = 0
         games = {}
         next_id = 0
 
@@ -463,6 +488,7 @@ def worker(conn, cfg, bundle_path, panel_path, worker_index, command):
                     if completed_games % 100 == 0:
                         gc.collect()
                     completed_samples += len(game.rows)
+                    teacher_errors += game.teacher_errors
                     finished.append(
                         {
                             "rows": game.rows,
@@ -497,6 +523,7 @@ def worker(conn, cfg, bundle_path, panel_path, worker_index, command):
                     "games": completed_games,
                     "samples": completed_samples,
                     "unfinished_games": len(games),
+                    "teacher_errors": teacher_errors,
                 },
             )
         )

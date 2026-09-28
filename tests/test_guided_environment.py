@@ -18,7 +18,7 @@ from guided.environment import Game
 from guided.evaluation import schedule, summarize
 from guided.statistics import advantages, guidance, interval, seed_for
 from mahjong_ai.domain.engine import HandState, MahjongEngine, derive_seed
-from mahjong_ai.domain.types import RoundConfig
+from mahjong_ai.domain.types import Action, RoundConfig
 from mahjong_ai.strategies.heuristic import HeuristicPolicy
 from selfplay_core.actions import action_index
 
@@ -173,7 +173,7 @@ def test_teacher_label_does_not_replace_student_action_or_behavior_probability(
     assert game.rows[0]["value"] == 3.25
 
 
-def test_illegal_teacher_and_student_actions_fail_explicitly(policies, monkeypatch):
+def test_illegal_teacher_labels_nothing_and_illegal_student_actions_fail(policies, monkeypatch):
     bundle, entries, _ = policies
     from mahjong_ai.domain.types import Action
 
@@ -188,10 +188,8 @@ def test_illegal_teacher_and_student_actions_fail_explicitly(policies, monkeypat
         train=True,
     )
     monkeypatch.setattr(game.teacher, "act", lambda obs: Action("invalid"))
-    with pytest.raises(ValueError, match="teacher returned an illegal"):
-        game.advance()
-    monkeypatch.setattr(game.teacher, "act", HeuristicPolicy(style="balanced").act)
-    game.advance()
+    request = game.advance()
+    assert request["row"]["teacher"] == -1 and game.teacher_errors == 1
     with pytest.raises(ValueError, match="neural policy returned an illegal"):
         game.apply((9999, 0.0, 0.0))
     assert not game.rows
@@ -397,3 +395,26 @@ assert 'torch' not in sys.modules
         [sys.executable, "-c", code, str(PROJECT)], capture_output=True, text=True
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_a_failing_teacher_leaves_its_rows_unlabelled(monkeypatch):
+    class Flaky(HeuristicPolicy):
+        calls = 0
+
+        def act(self, obs):
+            Flaky.calls += 1
+            if Flaky.calls % 5 == 0:
+                raise ZeroDivisionError("float division by zero")
+            if Flaky.calls % 7 == 0:
+                return Action("discard", 34)  # no such tile: illegal
+            return super().act(obs)
+
+    teacher = Flaky(style="balanced")
+    monkeypatch.setattr(artifacts, "build_policy", lambda bundle, cid: teacher if cid == "teacher" else HeuristicPolicy(style="balanced"))
+    bundle = {"teacher": "teacher", "entries": [{"id": "teacher"}, {"id": "rule"}]}
+    game = Game(configuration(rounds=16, lookahead=False), bundle, {"teacher": bundle, "rule": bundle},
+                ["model:current", "rule", "rule", "rule"], seed_for(5, "flaky"), focal=0, teacher="teacher", train=True)
+    play_game(game, HeuristicPolicy(style="balanced"))
+    unlabelled = [row["teacher"] for row in game.rows if row["teacher"] < 0]
+    assert game.complete and unlabelled and len(unlabelled) == game.teacher_errors
+    assert all(row["mask"][row["teacher"]] for row in game.rows if row["teacher"] >= 0)
