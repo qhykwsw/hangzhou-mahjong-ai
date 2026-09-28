@@ -860,7 +860,12 @@ static int g_encode(const g_hand *h, const g_action *legal, int n_legal, int loo
             for (int tile = 0; tile < (discard ? NTILES : 1); tile++) {
                 if (discard && !counts[tile]) continue;
                 if (discard) counts[tile]--;
-                analyze_values(counts, remaining, opened, h->chain[seat], h->piao[seat], h->ycbk, &rows[tile]);
+                /* analyze_values, through the race members' shape tables when nothing hinges on
+                 * you_cai_bi_kao (the two agree on every draw distance and fan). */
+                if (h->ycbk)
+                    analyze_values(counts, remaining, opened, h->chain[seat], h->piao[seat], h->ycbk, &rows[tile]);
+                else
+                    race_analyze_values(counts, remaining, opened, h->chain[seat], h->piao[seat], &rows[tile]);
                 if (discard) counts[tile]++;
                 analysis_row *r = &rows[tile];
                 if (r->distance < 0) return 0;
@@ -1177,25 +1182,110 @@ static PyObject *hand_encode(HandObject *self, PyObject *arg) {
     return result;
 }
 
+/* A writable C-contiguous column of fixed-size rows: the byte address of row
+ * `row` holding `bytes` (a shared array's column; the host owns its memory). */
+static char *g_row(Py_buffer *view, PyObject *column, const char *name, Py_ssize_t row, Py_ssize_t stride, Py_ssize_t bytes) {
+    if (PyObject_GetBuffer(column, view, PyBUF_WRITABLE | PyBUF_C_CONTIGUOUS) < 0) return NULL;
+    if (row < 0 || stride <= 0 || view->len % stride || (row + 1) * stride > view->len || bytes > stride) {
+        PyBuffer_Release(view);
+        view->obj = NULL;
+        PyErr_Format(PyExc_ValueError, "%s: row %zd outside a column of %zd-byte rows", name, row, stride);
+        return NULL;
+    }
+    return (char *)view->buf + row * stride;
+}
+
+static PyObject *hand_encoded_event_count(HandObject *self, PyObject *unused) {
+    return PyLong_FromLong(self->h.n_ev > 0 ? self->h.n_ev : 1);
+}
+
+/* encode_into(planes, scalars, events, mask, row_index, event_offset,
+ * event_capacity, lookahead): encode's arrays written into whole columns of
+ * the shared row store (abi v1), the events at event_offset of the arena; the
+ * number of events written, or None where encode returns None. */
+static PyObject *hand_encode_into(HandObject *self, PyObject *args) {
+    PyObject *planes_obj, *scalars_obj, *events_obj, *mask_obj, *look_obj;
+    Py_ssize_t row, event_offset, event_capacity;
+    if (!PyArg_ParseTuple(args, "OOOOnnnO", &planes_obj, &scalars_obj, &events_obj, &mask_obj, &row,
+                          &event_offset, &event_capacity, &look_obj))
+        return NULL;
+    int lookahead = PyObject_IsTrue(look_obj);
+    if (lookahead < 0) return NULL;
+    g_action legal[64];
+    int n = g_legal(&self->h, legal);
+    g_encoded *e = PyMem_Malloc(sizeof(g_encoded));
+    if (!e) return PyErr_NoMemory();
+    int rc = g_encode(&self->h, legal, n, lookahead, e);
+    if (rc <= 0) {
+        PyMem_Free(e);
+        if (rc < 0) return NULL;
+        Py_RETURN_NONE;
+    }
+    if (event_capacity < e->n_events) {
+        PyMem_Free(e);
+        PyErr_Format(PyExc_ValueError, "%d events need more than the %zd reserved", e->n_events, event_capacity);
+        return NULL;
+    }
+    Py_buffer views[4] = {{0}};
+    PyObject *result = NULL;
+    char *planes = g_row(&views[0], planes_obj, "planes", row, N_PLANES * NTILES * 2, N_PLANES * NTILES * 2);
+    char *scalars = planes ? g_row(&views[1], scalars_obj, "scalars", row, N_SCALARS * 2, N_SCALARS * 2) : NULL;
+    char *mask = scalars ? g_row(&views[2], mask_obj, "mask", row, N_ACTIONS, N_ACTIONS) : NULL;
+    char *events = NULL;
+    if (mask && PyObject_GetBuffer(events_obj, &views[3], PyBUF_WRITABLE | PyBUF_C_CONTIGUOUS) == 0) {
+        if (event_offset < 0 || views[3].len % 10 || (event_offset + event_capacity) * 10 > views[3].len)
+            PyErr_Format(PyExc_ValueError, "events %zd..%zd outside the arena", event_offset, event_offset + event_capacity);
+        else
+            events = (char *)views[3].buf + event_offset * 10;
+    }
+    if (events) {
+        uint16_t *hp = (uint16_t *)planes, *hs = (uint16_t *)scalars;
+        for (int i = 0; i < N_PLANES * NTILES; i++) hp[i] = g_half(e->planes[i]);
+        for (int i = 0; i < N_SCALARS; i++) hs[i] = g_half(e->scalars[i]);
+        memcpy(mask, e->mask, N_ACTIONS);
+        memcpy(events, e->events, sizeof(int16_t) * 5 * (size_t)e->n_events);
+        result = PyLong_FromLong(e->n_events);
+    }
+    for (int i = 0; i < 4; i++)
+        if (views[i].obj) PyBuffer_Release(&views[i]);
+    PyMem_Free(e);
+    return result;
+}
+
+static void g_oracle(const g_hand *h, int seat, float *planes, float *scalars);
+
+/* oracle_into(oracle_planes, oracle_scalars, row_index, seat): oracle's arrays into whole columns. */
+static PyObject *hand_oracle_into(HandObject *self, PyObject *args) {
+    PyObject *planes_obj, *scalars_obj;
+    Py_ssize_t row;
+    int seat;
+    if (!PyArg_ParseTuple(args, "OOni", &planes_obj, &scalars_obj, &row, &seat)) return NULL;
+    if (seat < 0 || seat > 3) {
+        PyErr_SetString(PyExc_ValueError, "seat must be 0..3");
+        return NULL;
+    }
+    Py_buffer views[2] = {{0}};
+    char *planes = g_row(&views[0], planes_obj, "oracle_planes", row, 16 * NTILES * 4, 16 * NTILES * 4);
+    char *scalars = planes ? g_row(&views[1], scalars_obj, "oracle_scalars", row, 16, 16) : NULL;
+    if (scalars) g_oracle(&self->h, seat, (float *)planes, (float *)scalars);
+    for (int i = 0; i < 2; i++)
+        if (views[i].obj) PyBuffer_Release(&views[i]);
+    if (!scalars) return NULL;
+    Py_RETURN_NONE;
+}
+
 static void g_count_planes4(float *out, const int *c) {
     for (int n = 0; n < 4; n++)
         for (int t = 0; t < NTILES; t++) out[n * NTILES + t] = c[t] >= n + 1 ? 1.0f : 0.0f;
 }
 
-/* oracle(seat): guided.encoding.oracle, the other hands and the wall. */
-static PyObject *hand_oracle(HandObject *self, PyObject *arg) {
-    long seat = PyLong_AsLong(arg);
-    if (seat == -1 && PyErr_Occurred()) return NULL;
-    if (seat < 0 || seat > 3) {
-        PyErr_SetString(PyExc_ValueError, "seat must be 0..3");
-        return NULL;
-    }
-    const g_hand *h = &self->h;
-    float planes[16 * NTILES], scalars[4] = {0};
+/* guided.encoding.oracle: the other hands and the wall. */
+static void g_oracle(const g_hand *h, int seat, float *planes, float *scalars) {
+    memset(scalars, 0, 4 * sizeof(float));
     for (int i = 0; i < 4; i++) {
         int c[NTILES] = {0};
         if (i < 3) {
-            int s = (int)(seat + i + 1) % 4;
+            int s = (seat + i + 1) % 4;
             memcpy(c, h->c[s], sizeof(c));
             int opened = h->n_melds[s], size = h->n_hand[s];
             if (size == 13 - 3 * opened || size == 14 - 3 * opened) {
@@ -1209,6 +1299,18 @@ static PyObject *hand_oracle(HandObject *self, PyObject *arg) {
         g_count_planes4(planes + 4 * i * NTILES, c);
     }
     scalars[3] = (float)(wall_len(h) / 136.0);
+}
+
+/* oracle(seat): guided.encoding.oracle as arrays. */
+static PyObject *hand_oracle(HandObject *self, PyObject *arg) {
+    long seat = PyLong_AsLong(arg);
+    if (seat == -1 && PyErr_Occurred()) return NULL;
+    if (seat < 0 || seat > 3) {
+        PyErr_SetString(PyExc_ValueError, "seat must be 0..3");
+        return NULL;
+    }
+    float planes[16 * NTILES], scalars[4];
+    g_oracle(&self->h, (int)seat, planes, scalars);
     PyObject *s1 = Py_BuildValue("(ii)", 16, NTILES), *s2 = Py_BuildValue("(i)", 4);
     PyObject *p = NULL, *s = NULL, *result = NULL;
     if (s1 && s2 && (p = g_array(s1, dt_f32, planes, sizeof(planes))) && (s = g_array(s2, dt_f32, scalars, sizeof(scalars))))
@@ -1320,6 +1422,9 @@ static PyMethodDef hand_methods[] = {
     {"act", (PyCFunction)hand_act, METH_VARARGS, "A race member's choice for the seat to move."},
     {"encode", (PyCFunction)hand_encode, METH_O, "guided.encoding.encode of the seat to move, or None."},
     {"oracle", (PyCFunction)hand_oracle, METH_O, "guided.encoding.oracle for a seat."},
+    {"encoded_event_count", (PyCFunction)hand_encoded_event_count, METH_NOARGS, "Event rows encode writes for the seat to move."},
+    {"encode_into", (PyCFunction)hand_encode_into, METH_VARARGS, "encode into whole columns of a row store; events written, or None."},
+    {"oracle_into", (PyCFunction)hand_oracle_into, METH_VARARGS, "oracle into whole columns of a row store."},
     {"snapshot", (PyCFunction)hand_snapshot, METH_NOARGS, "Every field as plain values."},
     {NULL},
 };

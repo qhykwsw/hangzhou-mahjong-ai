@@ -233,3 +233,50 @@ def test_other_rule_seats_stay_on_the_python_engine(members, monkeypatch):
     game = fastgame.FastGame(cfg, {"entries": []}, {k: None for k in by_id}, ["model:current", "m0", "other", "m0"],
                              seed_for(3, "other"), focal=0, train=True)
     assert game.seats is None and isinstance(game.state, HandState)
+
+
+def test_encode_into_writes_the_same_bytes_into_row_store_columns(members):
+    rows, arena = 8, 4096
+    planes = np.zeros((rows, 57, 34), np.float16)
+    scalars = np.zeros((rows, 79), np.float16)
+    mask = np.zeros((rows, 231), bool)
+    events = np.zeros((arena, 5), np.int16)
+    oracle_planes = np.zeros((rows, 16, 34), np.float32)
+    oracle_scalars = np.zeros((rows, 4), np.float32)
+    plans = [fastgame.race_member(m) for m in members]
+    rng = random.Random(5)
+    offset = checked = 0
+    for _ in range(4):
+        hand = fastgame.native.Hand(rng.getrandbits(64), rng.randrange(4), rng.randrange(1, 17), (3, -1, -2, 0), 16)
+        while not hand.settled:
+            legal = hand.legal()
+            if len(legal) > 1:
+                row, seat = rng.randrange(rows), hand.turn
+                want = hand.encode(True)
+                count = hand.encoded_event_count()
+                if offset + count > arena:
+                    offset = 0
+                written = hand.encode_into(planes, scalars, events, mask, row, offset, count, True)
+                if want is None:
+                    assert written is None
+                else:
+                    assert written == count == len(want["events"])
+                    assert planes[row].tobytes() == want["planes"].tobytes()
+                    assert scalars[row].tobytes() == want["scalars"].tobytes()
+                    assert mask[row].tobytes() == want["mask"].tobytes()
+                    assert events[offset:offset + count].tobytes() == want["events"].tobytes()
+                    checked += 1
+                offset += count
+                hand.oracle_into(oracle_planes, oracle_scalars, row, seat)
+                reference = hand.oracle(seat)
+                assert oracle_planes[row].tobytes() == reference["oracle_planes"].tobytes()
+                assert oracle_scalars[row].tobytes() == reference["oracle_scalars"].tobytes()
+            hand.step(legal[0] if len(legal) == 1 else hand.act(*plans[rng.randrange(len(plans))]))
+    assert checked > 50
+    with pytest.raises(ValueError):
+        hand = fastgame.native.Hand(1, 0, 1, (0, 0, 0, 0), 16)
+        hand.encode_into(planes, scalars, events, mask, rows, 0, 64, True)  # no such row
+    with pytest.raises(ValueError):
+        hand.encode_into(planes, scalars, events, mask, 0, arena - 1, 2, True)  # past the arena
+    with pytest.raises(ValueError):
+        hand.encode_into(planes, scalars, events, mask, 0, 0, 0, True)  # an empty history still writes one row
