@@ -280,3 +280,17 @@ def test_encode_into_writes_the_same_bytes_into_row_store_columns(members):
         hand.encode_into(planes, scalars, events, mask, 0, arena - 1, 2, True)  # past the arena
     with pytest.raises(ValueError):
         hand.encode_into(planes, scalars, events, mask, 0, 0, 0, True)  # an empty history still writes one row
+
+
+def test_encoding_first_in_a_fresh_worker_process():
+    """A worker whose first decision is the learner's encodes before any member has run."""
+    import subprocess
+
+    code = (
+        "from guided import fastgame\n"
+        "row = fastgame.native.Hand(11502053608047823656, 0, 1, (0, 0, 0, 0), 16).encode(True)\n"
+        "assert row['planes'][50].any()\n"  # a winning draw after some discard: the race tables' fans
+    )
+    env = {**__import__("os").environ, "PYTHONPATH": f"{PROJECT}:{PROJECT / 'src'}"}
+    done = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stderr[-2000:]

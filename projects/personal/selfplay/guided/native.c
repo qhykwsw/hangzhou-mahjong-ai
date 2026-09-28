@@ -852,6 +852,8 @@ static int g_encode(const g_hand *h, const g_action *legal, int n_legal, int loo
     int ref_shanten = 8;
     long ref_ukeire = 0, ref_copies = 0, ref_value = 0;
     if (lookahead) {
+        /* The race tables' meld table is built on first use (the members' race_bind). */
+        if (!h->ycbk && meld_tables() < 0) return -1;
         if (size == 13 - 3 * opened || size == 14 - 3 * opened) {
             analysis_row rows[NTILES], best;
             int counts[NTILES];
@@ -1452,7 +1454,7 @@ static PyMethodDef native_methods[] = {
 static struct PyModuleDef native_module = {PyModuleDef_HEAD_INIT, "native", NULL, -1, native_methods};
 
 PyMODINIT_FUNC PyInit_native(void) {
-    if (fast_keys() < 0 || g_stubs() < 0) return NULL;
+    if (fast_keys() < 0 || g_stubs() < 0 || meld_tables() < 0) return NULL;
     PyObject *np = PyImport_ImportModule("numpy");
     if (!np) return NULL;
     np_empty = PyObject_GetAttrString(np, "empty");
