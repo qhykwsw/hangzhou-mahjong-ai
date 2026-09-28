@@ -86,6 +86,28 @@ def project_manifest(tmp_path):
     )
 
 
+_PREPARED = {}
+
+
+def prepared(task, root):
+    """prepare() of a bootstrap job, run for real once per worker process: a
+    later test with the same packages gets copies of its outputs, its paths
+    moved to that test's project. Starting the processes that check each
+    package is most of every research test's setup."""
+    import json
+    import shutil
+
+    key = (Path(task["runtime_path"]).name, tuple(sorted((n, p["hash"]) for n, p in task["packages"].items())))
+    if key not in _PREPARED:
+        result = prepare(task, root, time.monotonic() + 30)
+        _PREPARED[key] = (task, result)
+        return result
+    first, result = _PREPARED[key]
+    for name, package in task["packages"].items():
+        shutil.copytree(first["packages"][name]["output"], package["output"])
+    return json.loads(json.dumps(result).replace(first["project"], task["project"]))
+
+
 def start_research(tmp_path, config=None, opponents="bootstrap"):
     r = Research(tmp_path)
     if opponents == "bootstrap":
@@ -99,7 +121,7 @@ def start_research(tmp_path, config=None, opponents="bootstrap"):
         task = c.task(s, job)
         root = Path(s["root"]) / "jobs" / job["id"]
         root.mkdir(parents=True)
-        result = prepare(task, root, time.monotonic() + 30)
+        result = prepared(task, root)
         r.accept(s, db, job, result)
         r.advance(s, db)
     return r, run, c

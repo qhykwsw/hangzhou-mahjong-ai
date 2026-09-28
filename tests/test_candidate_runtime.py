@@ -294,6 +294,14 @@ def test_iteration_deadline_freezes_checkpoint_for_evaluation(tmp_path):
     root = tmp_path / "job"
     root.mkdir()
     output = tmp_path / "versions" / "candidate-1"
+    source = Path(__file__).resolve().parents[1] / "src"
+    # The deadline must leave the job time to start and commit one checkpoint.
+    # That takes a few cold imports, so it scales with one measured just now:
+    # seconds on an idle machine, and still enough while experiments load it.
+    started = time.monotonic()
+    subprocess.run([sys.executable, "-B", "-c", "import mahjong_ai.execution.jobs, mahjong_ai.strategies.common"],
+                   env={**os.environ, "PYTHONPATH": str(source)}, check=True)
+    cold = time.monotonic() - started
     task = {
         "kind": "prepare",
         "project": str(tmp_path),
@@ -316,13 +324,11 @@ def test_iteration_deadline_freezes_checkpoint_for_evaluation(tmp_path):
         "definition": None,
         "training_games": 100000,
         "opponents": [],
-        # Enough wall time to import and commit one checkpoint even while a live
-        # experiment saturates the machine; the stall keeps training unfinished.
-        "deadline": time.time() + 30,
+        # The stall keeps training unfinished past this.
+        "deadline": time.time() + max(6.0, 10 * cold),
         "owner_pid": os.getpid(),
     }
     (root / "task.json").write_text(json.dumps(task))
-    source = Path(__file__).resolve().parents[1] / "src"
     subprocess.run(
         [sys.executable, "-B", "-m", "mahjong_ai.execution.jobs", str(root)],
         cwd=tmp_path,
