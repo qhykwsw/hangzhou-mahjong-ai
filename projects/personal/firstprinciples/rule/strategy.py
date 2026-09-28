@@ -56,6 +56,10 @@ TIE = 1e-7  # weight of shape potential, which only separates equal values
 # /10, its discards since its last call /9 (9 without a call), whether it
 # deals, and whether it has discarded a white (a piao: it waits on baotou).
 OPPONENT_LOGIT = (-0.0571, -0.1131, -0.2408, -0.5687, -0.2777, 0.1483, 0.0804, 0.0021, 1.0988, 0.1779, -0.4002, -0.1582, -1.9073, -0.6204, 0.1573, 5.1224)
+SHAPE_PAIR = 0.009
+SHAPE_ADJACENT = 0.0114
+SHAPE_UKEIRE = 0.0078
+SHAPE_DISTANCE = -0.045
 LONG = 16  # more draws of mine than any hand holds
 
 
@@ -195,6 +199,19 @@ def piao_gain(hand, opened, available, draws, speed):
     return (richer - plain) / unseen * (1 - stay ** draws) / (1 - stay)
 
 
+def shape_bonus(rest, opened, available, full):
+    """What simulation says the race misses in a kept hand: pairs and
+    adjacent pairs of suit tiles are worth more than their draws alone."""
+    held = _fast.counts(rest)
+    pairs = sum(1 for t in range(33) if held[t] >= 2)
+    adjacent = sum(1 for t in range(27) if t % 9 <= 7 and held[t] and held[t + 1])
+    bonus = SHAPE_PAIR * pairs + SHAPE_ADJACENT * adjacent
+    if full:
+        row = _fast.analyze_counts(list(held), opened, available, 0, 0, 0)
+        bonus += SHAPE_UKEIRE * row[4] / 10 + SHAPE_DISTANCE * row[0]
+    return bonus
+
+
 def potential(hand, available):
     """Live tiles that pair with or sit within two of each kept tile."""
     total = 0
@@ -266,7 +283,10 @@ class Race:
                 value = reshaped_value(rest, opened, available, draws, options, speed)
                 if at_win:
                     value += piao_gain(rest, opened, available, draws, speed)
-            return (1 - Q * speed) * value + TIE * potential(rest, available)
+            value = (1 - Q * speed) * value + TIE * potential(rest, available)
+            if not at_win:
+                value += shape_bonus(rest, opened, available, True)
+            return value
         if action.action in ("peng", "chi"):
             used = action.tiles if action.action == "chi" else (action.tile,) * 2
             for tile in used:
