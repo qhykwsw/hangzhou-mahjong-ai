@@ -2020,23 +2020,87 @@ static const draw_slot *race_draws(const int *counts, int open_melds) {
     return slot;
 }
 
+/* race_fan_value(counts plus t, t, ...) for the winning draws t of one
+ * waiting hand: what depends on the hand alone (its groups, odd count, and
+ * the baotou test of the waiting hand itself, the same for every draw) is
+ * computed once. */
+typedef struct {
+    const int *c;
+    int open_melds, chain, piao, sized, odd, luxury, bt;
+    meld_groups g;
+} draw_fans;
+
+static void draw_fans_prepare(draw_fans *f, const int *counts, int open_melds, int chain, int piao) {
+    int total = 0;
+    for (int i = 0; i < NTILES; i++) total += counts[i];
+    f->c = counts;
+    f->open_melds = open_melds;
+    f->chain = chain;
+    f->piao = piao;
+    f->sized = open_melds >= 0 && open_melds <= 4 && total + 1 == 14 - 3 * open_melds;
+    f->odd = f->luxury = 0;
+    for (int i = 0; i < WHITE; i++) {
+        f->odd += counts[i] % 2;
+        f->luxury += counts[i] == 4;
+    }
+    f->bt = -1;
+    if (f->sized) meld_groups_of(counts, &f->g);
+}
+
+static long draw_fans_value(draw_fans *f, int t) {
+    const int *c = f->c;
+    if (!f->sized) return 0;
+    int jokers = c[WHITE] + (t == WHITE);
+    int odd = f->odd, luxury = f->luxury;
+    if (t != WHITE) {
+        odd += c[t] % 2 ? -1 : 1;
+        luxury += c[t] + 1 == 4;
+    }
+    int hu = f->open_melds == 0 && odd <= jokers;
+    if (!hu) {
+        if (t == WHITE) {
+            hu = meld_groups_hu(&f->g, jokers);
+        } else {
+            int w[NTILES];
+            memcpy(w, c, sizeof(w));
+            w[t]++;
+            meld_groups d = f->g;
+            meld_groups_add(&d, w, t);
+            hu = meld_groups_hu(&d, jokers);
+        }
+    }
+    if (!hu) return 0;
+    if (f->bt < 0) f->bt = race_baotou_cached(c, f->open_melds);
+    long fan = 1;
+    if (f->open_melds == 0 && odd <= jokers) {
+        if (jokers == 4 && odd == 0) luxury++;
+        fan = 1L << (1 + luxury);
+    }
+    if (f->chain > 0) fan *= 1L << f->chain;
+    if (jokers + f->piao == 4) fan *= 2;
+    if (f->bt) fan *= 2;
+    return fan;
+}
+
 /* analyze_values over race_draws. */
 static void race_analyze_values(const int *counts, const int *avail, int open_melds,
                            int chain_count, int piao_count, analysis_row *out) {
-    int drawn[NTILES];
     const draw_slot *table = race_draws(counts, open_melds);
     int distance = table->distance;
     int improving[NTILES], wins[NTILES];
     long fans[NTILES];
-    int n_improving = 0, n_wins = 0;
+    int n_improving = 0, n_wins = 0, prepared = 0;
+    draw_fans f;
     for (int t = 0; t < NTILES; t++) {
         if (avail[t] <= 0 || counts[t] >= 4) continue;
         int d = table->draw[t];
         if (d < distance) improving[n_improving++] = t;
         if (d < 0) {
-            memcpy(drawn, counts, sizeof(drawn));
-            drawn[t]++;
-            long fan = race_fan_value(drawn, t, open_melds, chain_count, piao_count);
+            if (!prepared) {
+                draw_fans_prepare(&f, counts, open_melds, chain_count, piao_count);
+                prepared = 1;
+            }
+            long fan = draw_fans_value(&f, t);
             if (fan) {
                 wins[n_wins] = t;
                 fans[n_wins++] = fan;
