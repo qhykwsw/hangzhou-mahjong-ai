@@ -415,3 +415,19 @@ def test_a_best_version_replays_the_development_set_under_the_current_conditions
     assert round(E.compare("fp-rule-003", "fp-rule-002")[0], 6) == -0.5  # was +1.0 against the stale blocks
     E.refresh("rule")
     assert labels[-1][1] == "dev-refresh2"  # a later refresh never reuses the earlier one's jobs
+
+
+@pytest.mark.parametrize("new, refused", [("a\nB\nc\n", "改动了现役运行时的原有代码"), ("a\nb\nc\n", "没有可升级的内容")])
+def test_the_pool_runtime_takes_only_added_functions(harness, monkeypatch, tmp_path, new, refused):
+    E, _, _ = harness
+    old = tmp_path / "old-runtime"
+    (old / "mahjong_ai").mkdir(parents=True)
+    (old / "mahjong_ai" / "_fast.c").write_text("a\nb\nc\n")
+    repo = tmp_path / "repo"
+    (repo / "src" / "mahjong_ai").mkdir(parents=True)
+    (repo / "src" / "mahjong_ai" / "_fast.c").write_text(new)
+    monkeypatch.setattr(E, "REPO", repo)
+    (E.LOCAL / "pool.json").write_text(json.dumps({"id": "pool-a", "members": {}, "runtime_path": str(old)}))
+    E.seal()
+    with pytest.raises(E.Refused, match=refused):
+        E.upgrade_runtime()

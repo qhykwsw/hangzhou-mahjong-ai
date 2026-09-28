@@ -28,6 +28,7 @@ settings (EVAL_WORKERS, EVAL_TABLES), not part of the pool's identity.
 
 Maintainer commands (from projects/personal/firstprinciples); iteration agents use harness.line:
   python -m harness.evaluate runtime                                    # freeze src/mahjong_ai as a runtime
+  python -m harness.evaluate upgrade-runtime                            # the pool's runtime plus src/mahjong_ai/_fast.c's new functions
   python -m harness.evaluate pool [--model <weights-sha> --name <name>] [--rules <ids or package dirs>] [--runtime <dir>] [--replace]
   python -m harness.evaluate drain on "<why>" | off                    # stop new attempts while the pool is replaced
   python -m harness.evaluate rebase <attempt> ... [--host <host>]       # replay earlier versions on the new pool
@@ -143,6 +144,85 @@ def freeze_runtime():
             shutil.move(tmp, target)
             Path(tmp).mkdir()  # the context manager removes it
     return str(target)
+
+
+UPGRADE_BLOCKS = override("FP_UPGRADE_BLOCKS", 64)  # development blocks replayed under both runtimes
+
+# Compile the accelerator of the runtime tree in the working directory, as the hosts do.
+NATIVE = r"""
+import shutil,sysconfig,tempfile
+from pathlib import Path
+from setuptools import Extension,Distribution
+src=Path('mahjong_ai');target=src/('_fast'+sysconfig.get_config_var('EXT_SUFFIX'))
+with tempfile.TemporaryDirectory() as folder:
+    d=Distribution({'ext_modules':[Extension('mahjong_ai._fast',sources=[str(src/'_fast.c')],extra_compile_args=['-O3'])]})
+    c=d.get_command_obj('build_ext');c.build_lib=folder;c.build_temp=folder;c.ensure_finalized();c.run()
+    shutil.copyfile(c.get_ext_fullpath('mahjong_ai._fast'),target)
+"""
+
+
+def upgrade_runtime():
+    """Move the pool onto its runtime plus the new functions of src/mahjong_ai/_fast.c (maintainer).
+
+    The new runtime is the pool's own with the repository's _fast.c, which must
+    keep every line of the old one in order: functions are only added, so every
+    game plays as before. The rule line's best version then replays the same
+    development blocks under both runtimes and must score the same in each.
+    The pool keeps its id, development set and records; the maintainer reseals
+    afterwards, then registers member implementations that use the functions.
+    """
+    import difflib
+    import subprocess
+    import tempfile
+
+    pool = load_pool()
+    check_seal()
+    old = Path(pool["runtime_path"])
+    code = (REPO / "src" / "mahjong_ai" / "_fast.c").read_text()
+    ops = difflib.SequenceMatcher(None, (old / "mahjong_ai" / "_fast.c").read_text().splitlines(),
+                                  code.splitlines(), autojunk=False).get_opcodes()
+    changed = [(tag, i1 + 1, i2) for tag, i1, i2, _, _ in ops if tag not in ("equal", "insert")]
+    if changed:
+        raise Refused("src/mahjong_ai/_fast.c 改动了现役运行时的原有代码（不只是新增），不能原池升级；"
+                      f"改动的原行：{changed[:5]}。这种情况要换新的对手池。")
+    if all(tag == "equal" for tag, *_ in ops):
+        raise Refused("src/mahjong_ai/_fast.c 与现役运行时相同，没有可升级的内容")
+    store = RESEARCH / ".local/research/runtimes"
+    with tempfile.TemporaryDirectory(dir=store, prefix=".upgrading-") as tmp:
+        shutil.copytree(old / "mahjong_ai", Path(tmp) / "mahjong_ai",
+                        ignore=shutil.ignore_patterns("__pycache__", "_fast.cpython-*", "_fast.*.so", "_fast.*.pyd"))
+        (Path(tmp) / "mahjong_ai" / "_fast.c").write_text(code)
+        subprocess.run([sys.executable, "-c", NATIVE], cwd=tmp, check=True, capture_output=True)
+        fingerprint = subprocess.run(
+            [sys.executable, "-c", "from mahjong_ai.persistence.artifacts import runtime_fingerprint;print(runtime_fingerprint())"],
+            env=dict(os.environ, PYTHONPATH=tmp, PYTHONDONTWRITEBYTECODE="1"),
+            capture_output=True, text=True, check=True).stdout.strip()
+        target = store / fingerprint
+        if not target.exists():
+            shutil.move(tmp, target)
+            Path(tmp).mkdir()  # the context manager removes it
+    champion = best(pool["id"], "rule")
+    if champion is None:
+        raise Refused("规则线还没有最好版本，没有可重放的对局")
+    blocks = range(UPGRADE_BLOCKS)
+    upgraded = dict(pool, runtime_path=str(target))
+    label = f"upgrade-{fingerprint[:12]}"
+    before, _ = play(pool, champion["id"], champion["spec"], blocks, pool["dev_seed"], f"{label}-old", "local")
+    after, _ = play(upgraded, champion["id"], champion["spec"], blocks, pool["dev_seed"], f"{label}-new", "local")
+    if before != after:
+        differ = [k for k in blocks if before.get(k) != after.get(k)]
+        raise Refused(f"{champion['id']} 在新旧运行时下的开发集成绩不同（{len(differ)} 组，如第 {differ[:5]} 组），不升级")
+    pool = load_pool()
+    pool["members"] = {cid: dict(spec, runtime_path=str(target)) if spec.get("runtime_path") == str(old) else spec
+                       for cid, spec in pool["members"].items()}
+    pool["runtime_path"] = str(target)
+    pool.setdefault("runtime_upgrades", []).append({
+        "from": str(old), "to": str(target), "at": time.time(),
+        "replayed": {"version": champion["id"], "blocks": len(blocks), "games": len(blocks) * 4}})
+    atomic_json(LOCAL / "pool.json", pool)
+    atomic_json(LOCAL / "pools" / f"{pool['id']}.json", pool)
+    log(f"pool {pool['id']} runtime {old.name[:12]} -> {target.name[:12]}: {champion['id']} replayed {len(blocks)} blocks alike")
+    return pool
 
 
 def member_spec(entry, s, runtime):
@@ -1007,6 +1087,7 @@ def main():
     rf = sub.add_parser("refresh", help="replay a line's best on the development set under the current conditions")
     rf.add_argument("line", choices=("rule", "rl"))
     rf.add_argument("--host", choices=tuple(EVAL_WORKERS))
+    sub.add_parser("upgrade-runtime", help="move the pool onto its runtime plus src/mahjong_ai/_fast.c's new functions")
     sub.add_parser("seal", help="accept the current evaluation conditions (maintainer)")
     cmp = sub.add_parser("compare", help="paired development-set difference of two scored versions")
     cmp.add_argument("a")
@@ -1044,6 +1125,13 @@ def main():
         s = r["stats"]
         print(f"{r['id']} {r['score']:+.2f} ± {r['se']:.2f}（原 {r['refreshed']['old_score']:+.2f}；"
               f"超时 {s['timeouts']}，代打 {s['fallback_actions']}，报错 {s['errors']}）")
+        return
+    if args.command == "upgrade-runtime":
+        try:
+            pool = upgrade_runtime()
+        except Refused as exc:
+            raise SystemExit(str(exc))
+        print(json.dumps(pool["runtime_upgrades"][-1], ensure_ascii=False))
         return
     if args.command == "seal":
         print(seal())
