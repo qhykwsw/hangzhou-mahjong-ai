@@ -417,6 +417,17 @@ def test_a_best_version_replays_the_development_set_under_the_current_conditions
     assert labels[-1][1] == "dev-refresh2"  # a later refresh never reuses the earlier one's jobs
 
 
+def test_a_packages_own_c_may_not_start_processes_threads_or_python_code(harness, tmp_path):
+    E, _, _ = harness
+    (tmp_path / "strategy.py").write_text("from mahjong_ai import _fast\nnative = _fast.load_native(__file__)\n")
+    (tmp_path / "native.c").write_text('#include "_fast.c"\nstatic int f(void) { return shanten_raw(0, 0); }\n')
+    assert E.check_source(tmp_path) == []
+    (tmp_path / "util.h").write_text("static void g(void) { pthread_create(0, 0, 0, 0); system(\"x\"); }\n"
+                                     "#pragma omp parallel\nstatic void h(void) { PyRun_SimpleString(\"x\"); }\n")
+    assert E.check_source(tmp_path) == ["util.h:1 用了 pthread_create", "util.h:1 用了 system", "util.h:2 用了 #pragma omp",
+                                        "util.h:3 用了 PyRun_SimpleString"]
+
+
 def test_only_the_race_section_of_the_pool_runtime_may_change(harness):
     E, _, _ = harness
     banner, table = E.RACE_SECTION

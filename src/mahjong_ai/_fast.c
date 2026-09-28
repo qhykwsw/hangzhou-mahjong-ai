@@ -1232,6 +1232,112 @@ fail:
 }
 
 
+/* ---------- a candidate package's own native module ---------- */
+
+/* load_native(strategy_file): the native.c beside a strategy module (a rule
+ * line candidate's own C), compiled once per machine into a cache outside the
+ * package, keyed by that source, the headers beside it, this runtime's
+ * _fast.c, the Python ABI and the flags, then loaded as a fresh extension
+ * module named native (PyInit_native). Floats are rounded as Python rounds
+ * them (no fused multiply-adds). The source may include "_fast.c" to call
+ * these primitives directly; its PyInit_native then calls fast_keys(), which
+ * prepares what PyInit__fast would. MAHJONG_NATIVE_CACHE moves the cache. */
+static const char native_loader[] =
+    "import fcntl, hashlib, importlib.machinery, importlib.util, os, re, subprocess, sys, sysconfig\n"
+    "from pathlib import Path\n"
+    "\n"
+    "FLAGS = (\"-O3\", \"-ffp-contract=off\")\n"
+    "SUFFIX = sysconfig.get_config_var(\"EXT_SUFFIX\")\n"
+    "BUILD = \"\"\"\n"
+    "import os, shutil, sys, tempfile\n"
+    "from pathlib import Path\n"
+    "from setuptools import Distribution, Extension\n"
+    "source, target, runtime, flags = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3], sys.argv[4:]\n"
+    "with tempfile.TemporaryDirectory(prefix=\"native-\") as folder:\n"
+    "    copy = Path(folder) / \"native.c\"\n"
+    "    shutil.copyfile(source, copy)\n"
+    "    dist = Distribution({\"ext_modules\": [Extension(\"native\", sources=[str(copy)],\n"
+    "                         include_dirs=[str(source.parent), runtime], extra_compile_args=flags)]})\n"
+    "    command = dist.get_command_obj(\"build_ext\")\n"
+    "    command.build_lib = command.build_temp = folder\n"
+    "    command.ensure_finalized()\n"
+    "    command.run()\n"
+    "    part = target.with_name(target.name + \".part\")\n"
+    "    shutil.copyfile(command.get_ext_fullpath(\"native\"), part)\n"
+    "    os.replace(part, target)\n"
+    "\"\"\"\n"
+    "loaded = {}\n"
+    "\n"
+    "\n"
+    "def load(strategy_file):\n"
+    "    package = Path(strategy_file).resolve().parent\n"
+    "    source = package / \"native.c\"\n"
+    "    if not source.is_file():\n"
+    "        raise FileNotFoundError(f\"no native.c beside {strategy_file}\")\n"
+    "    runtime = Path(sys.modules[\"mahjong_ai._fast\"].__file__).resolve().parent\n"
+    "    digest = hashlib.sha256()\n"
+    "    for part in (source.read_bytes(), *(h.name.encode() + h.read_bytes() for h in sorted(package.glob(\"*.h\"))),\n"
+    "                 (runtime / \"_fast.c\").read_bytes(), SUFFIX.encode(), sys.version.encode(), \" \".join(FLAGS).encode()):\n"
+    "        digest.update(hashlib.sha256(part).digest())\n"
+    "    key = digest.hexdigest()[:40]\n"
+    "    if key in loaded:\n"
+    "        return loaded[key]\n"
+    "    cache = Path(os.environ.get(\"MAHJONG_NATIVE_CACHE\") or Path.home() / \".cache\" / \"leihuo_majiang\" / \"native\")\n"
+    "    cache.mkdir(parents=True, exist_ok=True)\n"
+    "    target = cache / (key + SUFFIX)\n"
+    "    if not target.exists():\n"
+    "        with open(cache / (key + \".lock\"), \"w\") as lock:\n"
+    "            fcntl.flock(lock, fcntl.LOCK_EX)\n"
+    "            if not target.exists():\n"
+    "                done = subprocess.run([sys.executable, \"-c\", BUILD, str(source), str(target), str(runtime), *FLAGS],\n"
+    "                                      capture_output=True, text=True)\n"
+    "                if done.returncode:\n"
+    "                    text = re.sub(r\"\\S*native-[^/\\s]+/native\\.c\", str(source), done.stderr or done.stdout)\n"
+    "                    raise RuntimeError(\"native.c does not build:\\n\" + text[-4000:])\n"
+    "    loader = importlib.machinery.ExtensionFileLoader(\"native\", str(target))\n"
+    "    spec = importlib.util.spec_from_file_location(\"native\", str(target), loader=loader)\n"
+    "    module = importlib.util.module_from_spec(spec)\n"
+    "    loader.exec_module(module)\n"
+    "    loaded[key] = module\n"
+    "    return module\n";
+
+static PyObject *native_load;
+
+static PyObject *py_load_native(PyObject *self, PyObject *strategy_file) {
+    if (!native_load) {
+        PyObject *globals = PyDict_New();
+        if (!globals) return NULL;
+        if (PyDict_SetItemString(globals, "__builtins__", PyEval_GetBuiltins()) < 0) {
+            Py_DECREF(globals);
+            return NULL;
+        }
+        PyObject *done = PyRun_String(native_loader, Py_file_input, globals, globals);
+        if (done) {
+            Py_DECREF(done);
+            native_load = PyDict_GetItemString(globals, "load");
+            Py_XINCREF(native_load);
+        }
+        Py_DECREF(globals);
+        if (!native_load) {
+            if (!PyErr_Occurred()) PyErr_SetString(PyExc_RuntimeError, "native loader is missing");
+            return NULL;
+        }
+    }
+    return PyObject_CallOneArg(native_load, strategy_file);
+}
+
+/* For a native module that includes this file: the keys PyInit__fast interns. */
+__attribute__((unused)) static int fast_keys(void) {
+    const char *names[7] = {"shanten", "improving", "ukeire", "winning_tiles",
+                           "winning_copies", "fans", "fan_value"};
+    for (int i = 0; i < 7; i++) {
+        if (!analysis_keys[i]) analysis_keys[i] = PyUnicode_InternFromString(names[i]);
+        if (!analysis_keys[i]) return -1;
+    }
+    return 0;
+}
+
+
 /* ---------- race valuation of the first-principles rule strategies ---------- */
 
 /* waiting_value and reshaped_value of the rule strategies that value a hand by
@@ -3172,6 +3278,8 @@ static PyMethodDef fast_methods[] = {
      "race_act(obs, profile, analyze): index of the race strategy's action in obs.legal_actions."},
     {"race_set_order", py_race_set_order, METH_VARARGS,
      "The order Python iterates a set of small ints added in the given order."},
+    {"load_native", py_load_native, METH_O,
+     "load_native(strategy_file): the package's native.c, compiled once per machine, as a module."},
     {NULL, NULL, 0, NULL},
 };
 

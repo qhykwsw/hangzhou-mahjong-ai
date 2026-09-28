@@ -702,6 +702,9 @@ def start(line, change, why, design_start, host=None, equivalent=False, hands=No
     problems = rl.check_recipe(source) if line == "rl" else E.check_source(source)
     if problems:
         raise E.Refused("不符合迭代线约定（进程、线程与资源归维护者），没有开跑：\n" + "\n".join(problems))
+    error = E.build_native(source) if line == "rule" else None
+    if error:
+        raise E.Refused("native.c 编译不过，没有开跑：\n" + error)
     online(LINE_HOSTS[line])
     with E.attempts_lock():
         free, why_not = design_hosts(line, probe=False)

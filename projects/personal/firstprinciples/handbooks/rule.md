@@ -24,6 +24,16 @@
 
 缓存要小。评估的对局进程里坐着你的版本和对手池的规则，每次全量垃圾回收都要走遍每个缓存的每一条：缓存到几十万条时一次回收停一秒以上，停在谁的决策上谁就超时，平均耗时也被回收拖慢。`lru_cache` 上限取几千条，缓存值用数字和元组（列表、字典、集合会一直被回收器跟踪）。短测的每决策耗时看不出这一点，因为缓存还没填满，结果里的超时次数才是信号。只为减少超时、不改决策的版本走等价替换：最好版本的开发集有超时时，新代码会自己重打开发集，少掉的超时直接体现在分数上。
 
+### 用 C 写热路径
+
+`rule/` 里可以放 `native.c`（以及它 include 的同目录 `.h`），和 `strategy.py` 一起冻结（[ADR-0017](../../../../docs/adr/0017-rule-candidates-carry-their-own-c.md)）。策略里写 `native = _fast.load_native(__file__)`，得到它编译出的模块：模块名 `native`，入口 `PyInit_native`，每台机器按源码只编一次，缓存在包外。start 开跑前会在对手池运行时下先编一遍，编不过就不开跑，并给出编译器报错。
+
+- 新想法的估值、枚举、递归这类热路径直接写进 C，Python 只负责组织流程和解析观察。可以先在 scratchpad 里用 Python 把想法写清楚、测一测，但提交的版本就是 C 版，不要先交 Python 版、事后再补提速。
+- `#include "_fast.c"` 可以直接调用运行时的全部 C 原语：向听 `shanten_raw`/`shanten_keyed`、进张分析 `race_analyze_values`、面子表、竞速估值 `race_waiting`/`race_reshaped` 等。这时 `PyInit_native` 里要先调用 `fast_keys()`。
+- 编译参数是 `-O3 -ffp-contract=off`，浮点按书写顺序舍入：照 Python 的运算顺序写，结果就逐位相同。遍历 Python 的 set、dict 时顺序由你自己保证，可参考 `_fast.c` 里的 `py_set_order`。
+- 约束和 Python 代码一样：不开进程和线程、不加载别的代码、不回头调用 Python 解释器执行或导入代码。start 会检查 C 源码。
+- 把现有的 Python 模块搬进 C 而不改决策，走下面的等价替换。
+
 ### 等价替换
 
 只提速、不改决策的改动（重写实现、剪枝、缓存、删掉无用代码）加 `--equivalent` 开跑：

@@ -46,6 +46,7 @@ import json
 import math
 import os
 import random
+import re
 import shutil
 import sys
 import time
@@ -528,6 +529,11 @@ BUILTINS = ("__import__", "eval", "exec")  # would hide the rest from this check
 # os functions that start processes or change scheduling.
 FORBIDDEN_OS = ("system", "popen", "fork", "forkpty", "posix_spawn", "posix_spawnp", "nice",
                 "setpriority", "sched_setaffinity")
+# The same in a package's own C (native.c and headers beside it), and C reaching back into Python
+# to run or import code the check above never saw.
+FORBIDDEN_C = re.compile(r"\b(fork|vfork|forkpty|system|popen|clone|dlopen|pthread_create|thrd_create|posix_spawnp?"
+                         r"|sched_setaffinity|setpriority|nice|exec[lv]p?e?|PyRun_\w+|PyImport_\w+|Py_CompileString\w*"
+                         r"|PyEval_EvalCode\w*)\s*\(|#\s*pragma\s+omp|<omp\.h>")
 
 
 def check_source(package, imports=()):
@@ -557,7 +563,26 @@ def check_source(package, imports=()):
                      and (node.attr in FORBIDDEN_OS or node.attr.startswith(("exec", "spawn"))))
             if word in FORBIDDEN_NAMES or spawn or (isinstance(node, ast.Name) and word in BUILTINS):
                 problems.append(f"{name}:{node.lineno} 用了 {word}")
+    for path in sorted([*package.rglob("*.c"), *package.rglob("*.h")]):
+        for number, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+            for found in FORBIDDEN_C.finditer(line):
+                problems.append(f"{path.relative_to(package)}:{number} 用了 {found.group(1) or found.group(0).strip()}")
     return problems
+
+
+def build_native(package):
+    """Compile a rule package's native.c the way its strategy loads it (_fast.load_native under the pool's
+    runtime), filling this machine's cache for the evaluation; the compiler's complaint, or None."""
+    import subprocess
+
+    package = Path(package)
+    if not (package / "native.c").is_file():
+        return None
+    done = subprocess.run(
+        [sys.executable, "-c", f"from mahjong_ai import _fast; _fast.load_native({str(package / 'strategy.py')!r})"],
+        env=dict(os.environ, PYTHONPATH=load_pool()["runtime_path"], PYTHONDONTWRITEBYTECODE="1"),
+        capture_output=True, text=True, timeout=900)
+    return None if done.returncode == 0 else (done.stderr or done.stdout)[-4000:]
 
 
 def freeze_rule(attempt_id):
