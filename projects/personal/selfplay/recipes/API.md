@@ -63,7 +63,7 @@
 
 评估时不调用任何钩子，Actor 取概率最大的动作。
 
-在同一学习步里多次采集且 Actor、对手权重均不变时，可用 `with guided.collection_session.InferenceSession(actor) as session`，将 `inference_session=session` 传给各次 `ctx.collect`。会话只复用设备端推理快照与 CUDA Graph；每次采集仍创建独立游戏和规则策略，保持各自的 seed、完整收尾与预算统计。参数、buffer、模型对象或推理配置在会话内改变会报错。必须在训练更新前退出会话，释放推理显存；不能用 `.data` 等绕过版本计数的方式修改会话内权重。
+在同一学习步里多次采集且 Actor、对手权重均不变时，可用 `with guided.collection_session.InferenceSession(actor) as session`，将 `inference_session=session` 传给各次 `ctx.collect`。会话只复用设备端推理快照与 CUDA Graph；每次采集仍创建独立游戏和规则策略，保持各自的 seed、完整收尾与预算统计。参数、buffer、模型对象或推理配置在会话内改变会报错。必须在训练更新前退出会话；不能用 `.data` 等绕过版本计数的方式修改会话内权重。推理快照与 CUDA Graph 会跨学习步保留（带不带会话都一样），每次采集开始时把 Actor 当前的全部参数与 buffer 原位复制进快照再复用，对手、推理配置或结构变了才重建；这部分显存在训练期间一直占用。
 
 ## 约定
 

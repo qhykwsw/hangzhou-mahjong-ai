@@ -3,7 +3,7 @@
 import copy
 import pytest
 import torch
-from guided.collection_session import InferenceSession
+from guided.collection_session import InferenceSession, persistent_inference
 
 
 @pytest.mark.parametrize(
@@ -41,6 +41,88 @@ def test_session_rejects_changed_policy_state(changed):
     assert session.state is None and session.actor is None
     with pytest.raises(RuntimeError, match="closed"):
         session.resolve(actor, models, options, lambda: None)
+
+
+class Graphs:
+    """Stands in for captured CUDA graphs: only snapshots with graphs persist."""
+
+
+def test_later_scopes_reuse_the_snapshot_with_updated_weights(monkeypatch):
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda *_: None)  # closing waits for the graphs
+    actor = torch.nn.Linear(3, 2)
+    made = []
+
+    def factory():
+        made.append((Graphs(), copy.deepcopy(actor).requires_grad_(False)))
+        return made[-1]
+
+    with InferenceSession(actor) as session:
+        first = session.resolve(actor, {}, (), factory)
+    addresses = [p.data_ptr() for p in first[1].parameters()]
+    actor.weight.data.add_(1)  # even an update the version counter misses
+    with InferenceSession(actor) as session:
+        second = session.resolve(actor, {}, (), factory)
+    assert len(made) == 1 and second is first
+    assert [p.data_ptr() for p in second[1].parameters()] == addresses
+    assert torch.equal(second[1].weight, actor.weight)
+
+
+def test_refreshed_snapshot_is_bitwise_a_fresh_one():
+    from guided.inference import prepare_frozen
+    from guided.networks import Actor
+
+    torch.manual_seed(491)
+    actor = Actor(32, 1, 4).eval()
+
+    def factory():
+        # "cuda" only selects the fp16 precast; the tensors stay on the CPU.
+        return Graphs(), prepare_frozen(copy.deepcopy(actor).requires_grad_(False), "cuda")
+
+    reused = persistent_inference(actor, {}, (), factory)[1]
+    with torch.no_grad():
+        for parameter in actor.parameters():
+            parameter.add_(0.0013)
+        actor.encoder.positions.add_(0.005)  # a nonpersistent buffer
+    assert persistent_inference(actor, {}, (), factory)[1] is reused
+    fresh = factory()[1]
+    expected = dict((*fresh.named_parameters(), *fresh.named_buffers()))
+    for key, value in (*reused.named_parameters(), *reused.named_buffers()):
+        assert value.dtype == expected[key].dtype
+        assert value.detach().numpy().tobytes() == expected[key].detach().numpy().tobytes(), key
+
+
+@pytest.mark.parametrize("change", ["opponent", "options", "schema"])
+def test_other_opponents_options_or_tensors_rebuild(change):
+    actor = torch.nn.Linear(3, 2)
+    history = {"other": torch.nn.Linear(3, 2)}
+
+    def factory():
+        return Graphs(), copy.deepcopy(actor).requires_grad_(False)
+
+    first = persistent_inference(actor, history, (), factory)
+    options = ()
+    if change == "opponent":
+        with torch.no_grad():
+            history["other"].weight.add_(1)
+    elif change == "options":
+        options = ("new",)
+    else:
+        actor.register_buffer("new_buffer", torch.ones(1))
+    assert persistent_inference(actor, history, options, factory) is not first
+
+
+def test_snapshot_goes_with_its_actor():
+    import gc
+    import weakref
+    from guided.collection_session import _PERSISTENT
+
+    actor = torch.nn.Linear(3, 2)
+    persistent_inference(actor, {}, (), lambda: (Graphs(), copy.deepcopy(actor)))
+    assert actor in _PERSISTENT
+    reference = weakref.ref(actor)
+    del actor
+    gc.collect()
+    assert reference() is None
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA graph validation")

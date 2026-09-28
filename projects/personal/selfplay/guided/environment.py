@@ -5,6 +5,7 @@ binds the immutable rules runtime supplied with its teachers.
 """
 
 import copy
+import gc
 import importlib
 from pathlib import Path
 import random
@@ -346,6 +347,9 @@ class External:
 
 def worker(conn, cfg, bundle_path, panel_path, worker_index, command):
     """One bounded collection/evaluation job; no policy crosses job boundaries."""
+    # Automatic collections trigger every few hundred allocations and cost
+    # about 5% of a game; a full one every 100 games bounds the cycles instead.
+    gc.disable()
     try:
         from .artifacts import read_bundle, bind_runtime
 
@@ -451,6 +455,8 @@ def worker(conn, cfg, bundle_path, panel_path, worker_index, command):
                 if request is None:
                     external.release(game.borrowed)
                     completed_games += 1
+                    if completed_games % 100 == 0:
+                        gc.collect()
                     completed_samples += len(game.rows)
                     finished.append(
                         {

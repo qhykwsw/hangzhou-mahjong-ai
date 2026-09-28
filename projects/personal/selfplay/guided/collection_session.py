@@ -1,5 +1,57 @@
 """Scoped inference state for consecutive rollouts with unchanged policies."""
 
+import weakref
+
+# Frozen inference snapshots (with their CUDA graphs) kept across learning
+# steps, keyed weakly by the learning Actor so they go when it goes.
+_PERSISTENT = weakref.WeakKeyDictionary()
+
+
+def _tensors(model):
+    return dict((*model.named_parameters(), *model.named_buffers()))
+
+
+def persistent_inference(actor, history, options, factory):
+    """The frozen snapshot of an earlier rollout, refreshed to the current weights.
+
+    Capturing CUDA graphs costs about a second per rollout. Between drained
+    rollouts the snapshot keeps its tensor addresses, so the captured graphs
+    stay valid: every parameter and buffer (nonpersistent ones included) is
+    copied in place, with the same cast prepare_frozen applies. The copy takes
+    about a millisecond and runs on every reuse, so no way of updating the
+    weights goes unseen. Other opponents, options or architecture rebuild.
+    """
+    source = _tensors(actor)
+    signature = (
+        options,
+        repr(actor),
+        tuple((key, _stamp(value)) for key, value in sorted(history.items())),
+        tuple((key, tuple(t.shape), t.dtype, t.device) for key, t in source.items()),
+    )
+    cached = _PERSISTENT.get(actor)
+    if cached is None or cached["signature"] != signature:
+        _PERSISTENT.pop(actor, None)
+        state = factory()
+        # Only frozen snapshots with graphs are worth keeping, and the cache
+        # must not hold the Actor itself (it is the weak key).
+        if (state[0] is not None and state[1] is not actor
+                and all(model is not actor for model in history.values())):
+            _PERSISTENT[actor] = dict(state=state, signature=signature)
+        return state
+    import torch
+
+    state = cached["state"]
+    device = next(state[1].parameters()).device
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+    target = _tensors(state[1])
+    with torch.no_grad():
+        for key, value in source.items():
+            target[key].copy_(value)
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+    return state
+
 
 def _stamp(model):
     return id(model), tuple(
@@ -9,11 +61,12 @@ def _stamp(model):
 
 
 class InferenceSession:
-    """Own CUDA captures only until the current on-policy learning step ends.
+    """Pin one inference snapshot for the rollouts of one on-policy learning step.
 
-    Parameters and buffers must stay unchanged throughout the scope. Closing
-    releases the frozen Actor and its graphs before Critic/Actor training needs
-    device memory. Rule policy instances and games never cross rollout jobs.
+    Parameters and buffers must stay unchanged throughout the scope. The frozen
+    Actor and its graphs outlive it (persistent_inference) and take the updated
+    weights in the next scope. Rule policy instances and games never cross
+    rollout jobs.
     """
 
     def __init__(self, actor):
@@ -37,7 +90,7 @@ class InferenceSession:
                 "opponents or inference options changed within a session"
             )
         if self.state is None:
-            self.state = factory()
+            self.state = persistent_inference(actor, history, options, factory)
             self.signature = signature
         return self.state
 

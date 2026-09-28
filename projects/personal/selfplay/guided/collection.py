@@ -64,15 +64,17 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
             inference_actor = prepare_frozen(copy.deepcopy(actor).requires_grad_(False), device)
         return graphs, inference_actor
 
+    options = (
+        command["kind"], id(critic), cfg["bc_only"],
+        cfg.get("cuda_graphs", True), cfg.get("fine_graph_batches", False),
+        cfg.get("inference_history_band", 0), cfg.get("precast_collection", True),
+        tuple((key, id(value)) for key, value in sorted(hooks.items())),
+    )
     if inference_session is None:
-        graphs, inference_actor = prepare_inference()
+        from .collection_session import persistent_inference
+
+        graphs, inference_actor = persistent_inference(actor, history, options, prepare_inference)
     else:
-        options = (
-            command["kind"], id(critic), cfg["bc_only"],
-            cfg.get("cuda_graphs", True), cfg.get("fine_graph_batches", False),
-            cfg.get("inference_history_band", 0), cfg.get("precast_collection", True),
-            tuple((key, id(value)) for key, value in sorted(hooks.items())),
-        )
         graphs, inference_actor = inference_session.resolve(actor, history, options, prepare_inference)
     # Custom hooks keep their original batches; they may couple their rows.
     history_band = graphs.history_band if graphs else 0
