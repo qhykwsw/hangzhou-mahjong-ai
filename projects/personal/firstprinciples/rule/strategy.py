@@ -22,7 +22,10 @@ option for the waits it leads to, pricing each wait there as a plain race
 equal value keep the hand whose tiles connect to more live tiles. When the hand is already baotou (every draw wins), a win now is traded for a
 doubling that keeps the certain win: a kong whose replacement draw still wins,
 else a white discard that scores piao. A call from a baotou wait is priced with
-the piao its white discard scores when the wait stays baotou.
+the piao its white discard scores when the wait stays baotou. At a win, giving
+it up for a bigger one is priced with the opponents' own chance to win before
+my next draw, read from their melds and recent discards, in place of the
+generic one.
 """
 COMBINATION = "firstprinciples-rule"
 
@@ -44,6 +47,15 @@ Q_EARLY = 0.10
 Q_LATE = 0.30
 OPTION_REACH = 1.35  # the largest measured ratio was 1.30
 TIE = 1e-7  # weight of shape potential, which only separates equal values
+# Measured against the fixed pool: the chance one opponent self-draws before my
+# next draw, by stage (my draws left 13+, 9-12, fewer), its melds (0-3+) and how
+# many of its last three discards were middle suit tiles (first entry: fewer
+# than three discards yet; then 0-3).
+OPPONENT_HAZARD = (
+    ((0.003, 0.004, 0.017, 0.030, 0.020), (0.014, 0.009, 0.033, 0.069, 0.055), (0.042, 0.036, 0.059, 0.059, 0.050), (0.075, 0.065, 0.119, 0.047, 0.070)),
+    ((0.024, 0.013, 0.033, 0.044, 0.074), (0.046, 0.029, 0.052, 0.071, 0.082), (0.074, 0.049, 0.074, 0.091, 0.129), (0.131, 0.101, 0.133, 0.148, 0.159)),
+    ((0.060, 0.048, 0.060, 0.074, 0.058), (0.083, 0.069, 0.084, 0.093, 0.089), (0.105, 0.093, 0.106, 0.109, 0.121), (0.164, 0.133, 0.161, 0.173, 0.225)),
+)
 
 
 LONG = 16  # more draws of mine than any hand holds
@@ -56,22 +68,40 @@ def repeat(stay, draws):
     return (1 - stay**draws) / (1 - stay)
 
 
-def tenpai_hazard(draws):
+def tenpai_hazard(draws, speed=1.0):
     """Opponents close in as the wall runs down: the race gets harder late."""
-    return min(Q_LATE, max(Q_EARLY, 0.35 - 0.018 * draws))
+    return min(Q_LATE, max(Q_EARLY, 0.35 - 0.018 * draws)) * speed
 
 
-def race(p, e, draws=LONG):
-    return e * repeat((1 - p) * (1 - tenpai_hazard(draws)), draws)
+def opponent_speed(obs, draws):
+    """The opponents' chance to win before my next draw, read from their melds
+    and recent discards, as a multiple of the generic tenpai_hazard, in steps
+    of 0.05 within 0.1-2."""
+    stage = 0 if draws >= 13 else (1 if draws >= 9 else 2)
+    stay = 1.0
+    for seat in range(4):
+        if seat == obs.stage.seat:
+            continue
+        last = obs.discards[seat][-3:]
+        middle = sum(1 for t in last if t < 27 and 2 <= t % 9 <= 6) if len(last) == 3 else -1
+        stay *= 1 - OPPONENT_HAZARD[stage][min(3, len(obs.melds[seat]))][middle + 1]
+    ratio = (1 - stay) / tenpai_hazard(draws)
+    return min(2.0, max(0.1, round(ratio * 20) / 20))
+
+
+def race(p, e, draws=LONG, speed=1.0):
+    return e * repeat((1 - p) * (1 - tenpai_hazard(draws, speed)), draws)
 
 
 @lru_cache(maxsize=2000)
-def waiting_value(hand, opened, available, chain=0, piao=0, draws=LONG, options=False):
-    """Expected fan of a 13-tile hand just before my next draw."""
+def waiting_value(hand, opened, available, chain=0, piao=0, draws=LONG, options=False, speed=1.0):
+    """Expected fan of a 13-tile hand just before my next draw; speed scales
+    the opponents' chance to win first."""
+    q = Q * speed
     unseen = max(1, sum(available))
     if is_baotou(hand, opened):
         copies, fan = baotou_draw_fans(hand, opened, available, chain, piao)
-        return race(copies / unseen, (fan + SAVED * copies) / unseen, draws)
+        return race(copies / unseen, (fan + SAVED * copies) / unseen, draws, speed)
     row = examined(hand, opened, available, chain, piao)
     if row[SHANTEN] <= 0:
         copies = row[COPIES]
@@ -85,16 +115,16 @@ def waiting_value(hand, opened, available, chain=0, piao=0, draws=LONG, options=
             if available[WHITE] > 0 and WHITE in fans:
                 best = max(
                     (
-                        waiting_value(rest, opened, available, draws=draws - 1)
+                        waiting_value(rest, opened, available, draws=draws - 1, speed=speed)
                         for rest in baotou_rests(hand, opened, WHITE)
                     ),
                     default=0.0,
                 )
-                extra += available[WHITE] * max(0.0, (1 - Q) * best - fans[WHITE] - SAVED)
+                extra += available[WHITE] * max(0.0, (1 - q) * best - fans[WHITE] - SAVED)
             for tile in set(hand):
                 if hand.count(tile) == 3 and available[tile] > 0 and tile not in fans:
                     extra += available[tile] * kong_draw_value(hand, opened, available, tile)
-            return race(copies / unseen, (gain + extra) / unseen, draws)
+            return race(copies / unseen, (gain + extra) / unseen, draws, speed)
         # A draw that frees a white lets a discard turn the wait into baotou,
         # which may beat winning on it at once.
         fans = dict(row[FANS])
@@ -117,16 +147,16 @@ def waiting_value(hand, opened, available, chain=0, piao=0, draws=LONG, options=
                         rest.remove(drop)
                         best = max(
                             best,
-                            waiting_value(tuple(rest), opened, available, draws=draws - 1),
+                            waiting_value(tuple(rest), opened, available, draws=draws - 1, speed=speed),
                         )
                     held[drop] += 1
                 held[tile] -= 1
             if tile in fans:
-                gain += available[tile] * max(fans[tile] + SAVED, (1 - Q) * best)
+                gain += available[tile] * max(fans[tile] + SAVED, (1 - q) * best)
             elif best:
-                gain += available[tile] * (1 - Q) * best
+                gain += available[tile] * (1 - q) * best
                 reach += available[tile]
-        stay = (1 - tenpai_hazard(draws)) * (1 - (copies + reach) / unseen)
+        stay = (1 - tenpai_hazard(draws, speed)) * (1 - (copies + reach) / unseen)
         return gain / unseen * repeat(stay, draws)
     u = row[UKEIRE] / unseen
     if row[SHANTEN] == 1:
@@ -143,18 +173,18 @@ def waiting_value(hand, opened, available, chain=0, piao=0, draws=LONG, options=
                 if _fast.shanten_raw(held, opened) <= 0:
                     rest = sorted((*hand, tile))
                     rest.remove(drop)
-                    value = tenpai_value(tuple(rest), opened, available, draws - 1)
+                    value = tenpai_value(tuple(rest), opened, available, draws - 1, speed)
                     if value > best:
                         best, target = value, tuple(rest)
                 held[drop] += 1
             held[tile] -= 1
             if options and target is not None and chain == 0:
-                best += reshape_gain(target, opened, available, draws - 1)
+                best += reshape_gain(target, opened, available, draws - 1, speed)
             weighted += available[tile] * best
         # Improving draws move to a waiting hand; the others are thrown back.
-        stay = (1 - u) * (1 - Q)
-        return (1 - Q) * (weighted / unseen) * repeat(stay, draws - 1)
-    step = (1 - Q) * u * repeat((1 - u) * (1 - Q), draws - row[SHANTEN])
+        stay = (1 - u) * (1 - q)
+        return (1 - q) * (weighted / unseen) * repeat(stay, draws - 1)
+    step = (1 - q) * u * repeat((1 - u) * (1 - q), draws - row[SHANTEN])
     return step * ONE_STEP * FAR_STEP ** (row[SHANTEN] - 2)
 
 
@@ -237,28 +267,28 @@ def kong_draw_value(hand, opened, available, tile):
 
 
 @lru_cache(maxsize=2000)
-def tenpai_value(hand, opened, available, draws=LONG):
+def tenpai_value(hand, opened, available, draws=LONG, speed=1.0):
     row = examined(hand, opened, available)
     if row[SHANTEN] > 0 or draws < 1:
         return 0.0
-    return waiting_value(hand, opened, available, draws=draws)
+    return waiting_value(hand, opened, available, draws=draws, speed=speed)
 
 
 @lru_cache(maxsize=2000)
-def reshaped_value(hand, opened, available, draws, options=True):
+def reshaped_value(hand, opened, available, draws, options=True, speed=1.0):
     """A waiting hand with the option to trade a non-winning draw for a better wait."""
     distance = shanten(hand, opened)
     if distance > 0:
         return waiting_value(
-            hand, opened, available, draws=draws, options=options and distance == 1
+            hand, opened, available, draws=draws, options=options and distance == 1, speed=speed
         )
-    value = waiting_value(hand, opened, available, draws=draws)
+    value = waiting_value(hand, opened, available, draws=draws, speed=speed)
     if draws < 2:
         return value
     unseen = max(1, sum(available))
     row = examined(hand, opened, available)
     wins = {tile for tile, _ in row[FANS]}
-    stay = waiting_value(hand, opened, available, draws=draws - 1)
+    stay = waiting_value(hand, opened, available, draws=draws - 1, speed=speed)
     gain, reach = 0.0, 0
     held = list(_fast.counts(hand))
     kinds = [t for t in range(34) if held[t]]
@@ -275,27 +305,27 @@ def reshaped_value(hand, opened, available, draws, options=True):
                 rest = sorted((*hand, tile))
                 rest.remove(drop)
                 best = max(
-                    best, waiting_value(tuple(rest), opened, available, draws=draws - 1)
+                    best, waiting_value(tuple(rest), opened, available, draws=draws - 1, speed=speed)
                 )
             held[drop] += 1
         held[tile] -= 1
         if best > stay:
             gain += available[tile] * (best - stay)
             reach += available[tile]
-    survive = (1 - Q) * (1 - (row[COPIES] + reach) / unseen)
-    return value + (1 - Q) * gain / unseen * repeat(survive, draws - 1)
+    survive = (1 - Q * speed) * (1 - (row[COPIES] + reach) / unseen)
+    return value + (1 - Q * speed) * gain / unseen * repeat(survive, draws - 1)
 
 
 @lru_cache(maxsize=2000)
-def plain_value(hand, opened, available, draws):
+def plain_value(hand, opened, available, draws, speed=1.0):
     """A waiting hand's race, without the white upgrade option."""
     row = examined(hand, opened, available)
     unseen = max(1, sum(available))
-    return race(row[COPIES] / unseen, (row[FAN_VALUE] + SAVED * row[COPIES]) / unseen, draws)
+    return race(row[COPIES] / unseen, (row[FAN_VALUE] + SAVED * row[COPIES]) / unseen, draws, speed)
 
 
 @lru_cache(maxsize=2000)
-def reshape_gain(hand, opened, available, draws):
+def reshape_gain(hand, opened, available, draws, speed=1.0):
     """The trade option of reshaped_value for a wait one step ahead, pricing
     every wait there as a plain race."""
     if draws < 2:
@@ -303,7 +333,7 @@ def reshape_gain(hand, opened, available, draws):
     unseen = max(1, sum(available))
     row = examined(hand, opened, available)
     wins = {tile for tile, _ in row[FANS]}
-    stay = plain_value(hand, opened, available, draws - 1)
+    stay = plain_value(hand, opened, available, draws - 1, speed)
     gain, reach = 0.0, 0
     held = list(_fast.counts(hand))
     kinds = [t for t in range(34) if held[t]]
@@ -320,14 +350,14 @@ def reshape_gain(hand, opened, available, draws):
                 # plain_value of the wait these counts spell, straight from C.
                 terms = _fast.analyze_counts(held, opened, available, 0, 0, 0)
                 copies = terms[5]
-                best = max(best, race(copies / unseen, (terms[6] + SAVED * copies) / unseen, draws - 1))
+                best = max(best, race(copies / unseen, (terms[6] + SAVED * copies) / unseen, draws - 1, speed))
             held[drop] += 1
         held[tile] -= 1
         if best > stay:
             gain += available[tile] * (best - stay)
             reach += available[tile]
-    survive = (1 - Q) * (1 - (row[COPIES] + reach) / unseen)
-    return (1 - Q) * gain / unseen * repeat(survive, draws - 1)
+    survive = (1 - Q * speed) * (1 - (row[COPIES] + reach) / unseen)
+    return (1 - Q * speed) * gain / unseen * repeat(survive, draws - 1)
 
 
 def swap_candidates(held, kinds, opened, available):
@@ -405,7 +435,7 @@ class Race:
             catch_exempt=obs.catch_play and not obs.catch_restricted,
         )
 
-    def value(self, obs, action, opened, available, options=True):
+    def value(self, obs, action, opened, available, options=True, speed=1.0):
         hand = list(obs.hand)
         # My draws left before the wall is down to its last 20 tiles.
         draws = max(1, -(-(obs.wall_remaining - LAST_WALL) // 4))
@@ -428,10 +458,10 @@ class Race:
             else:
                 chain, piao = 0, 0
             if chain:
-                value = waiting_value(rest, opened, available, chain, piao, draws)
+                value = waiting_value(rest, opened, available, chain, piao, draws, speed=speed)
             else:
-                value = reshaped_value(rest, opened, available, draws, options)
-            return (1 - Q) * value + TIE * potential(rest, available)
+                value = reshaped_value(rest, opened, available, draws, options, speed)
+            return (1 - Q * speed) * value + TIE * potential(rest, available)
         if action.action in ("peng", "chi"):
             used = action.tiles if action.action == "chi" else (action.tile,) * 2
             for tile in used:
@@ -457,14 +487,14 @@ class Race:
             rest = tuple(sorted(hand))
             row = analyze(rest, after, available, obs.chain_count + 1, obs.piao_count)
             if row["shanten"] > 0:
-                return waiting_value(rest, after, available, draws=draws)
+                return waiting_value(rest, after, available, draws=draws, speed=speed)
             # The replacement draw comes at once and carries the kong's doubling.
             unseen = max(1, sum(available))
             copies = row["winning_copies"]
             now = (row["fan_value"] + SAVED * copies) / unseen
             miss = 1 - copies / unseen
-            return now + miss * (1 - Q) * waiting_value(
-                rest, after, available, draws=draws
+            return now + miss * (1 - Q * speed) * waiting_value(
+                rest, after, available, draws=draws, speed=speed
             )
         return float("-inf")
 
@@ -489,17 +519,22 @@ class Race:
     def act(self, obs):
         available = remaining_tiles(obs)
         opened = len(obs.melds[obs.stage.seat])
+        speed = 1.0
         if any(a.action == "hu" for a in obs.legal_actions):
             double = self.certain_double(obs, opened)
             if double is not None:
                 return double
+            # Whether to give up this win for a bigger one depends on how
+            # soon the opponents are likely to win: read it from their table.
+            draws = max(1, -(-(obs.wall_remaining - LAST_WALL) // 4))
+            speed = opponent_speed(obs, draws)
         # The trade option one step away adds at most about a quarter to a
         # hand's value, so only discards that close to the best need it.
-        values = [self.value(obs, a, opened, available, False) for a in obs.legal_actions]
+        values = [self.value(obs, a, opened, available, False, speed) for a in obs.legal_actions]
         top = max(values)
         for i, a in enumerate(obs.legal_actions):
             if a.action == "discard" and values[i] * OPTION_REACH >= top:
-                values[i] = self.value(obs, a, opened, available)
+                values[i] = self.value(obs, a, opened, available, True, speed)
         return obs.legal_actions[max(range(len(values)), key=values.__getitem__)]
 
 
