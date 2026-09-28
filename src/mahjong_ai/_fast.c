@@ -1231,14 +1231,17 @@ fail:
     return NULL;
 }
 
+
 /* ---------- race valuation of the first-principles rule strategies ---------- */
 
 /* waiting_value and reshaped_value of the rule strategies that value a hand by
  * racing the opponents to a win (firstprinciples fp-rule-033 and the fixed
  * pool's members built on it), ported with the same arithmetic in the same
  * order so the results equal the Python ones bit for bit. A profile holds a
- * strategy's constants. Values are memoised per hand, availability, profile
- * and the other arguments; the memo only saves recomputation. A hand the
+ * strategy's constants. Whether tiles meld, win or wait on baotou is read
+ * from per-suit meld tables (meld_tables) instead of meldable's search.
+ * Values are memoised per hand, availability, profile and the other
+ * arguments; the memo only saves recomputation. A hand the
  * extension counts as complete although it waits (a white-joker boundary)
  * is analysed by the caller's Python function, as sdk.shape.analyze does. */
 
@@ -1333,140 +1336,335 @@ static PyObject *py_race_baotou_fans(PyObject *self, PyObject *args) {
     return Py_BuildValue("ll", copies, value);
 }
 
-/* The natural tiles d whose removal leaves c meldable with the jokers, as bit
- * d: meldable's search, where the tile left over may be the first tile, or
- * a tile of the first tile's sequence whose place a joker takes, or come
- * later. Keys as meldable's (shanten_key of the counts with the jokers). */
-#define LEFT_CACHE_BITS 17
+/* Meld tables. Per group of tiles (a numbered suit, or one honor), the fewest
+ * jokers that complete its tiles into melds (triplets, and sequences within
+ * a suit, a joker in the place of each missing tile), and the fewest that
+ * do so with one pair among them: meldable's search, answered per group from
+ * a table. A move of that search (the group of the lowest tile) costs 3 less
+ * the tiles it takes, so the tiles and jokers left keep their count modulo
+ * three, and by induction c melds with J jokers exactly when its tiles and
+ * the jokers make whole melds (a multiple of three) and its groups' needs sum
+ * to at most J: the jokers to spare meld on their own. Needs are capped at
+ * MELD_FAR, more than the four whites there are, so every J passed is at
+ * most four. A numbered suit's nine counts index its table in base five.
+ * Whites are never natural here: callers pass counts without them. */
+#define MELD_FAR 5
+#define MELD_SUITS 1953125
 
-typedef struct { uint64_t k0, k1, mask; } left_slot;
+static uint8_t *meld_table; /* need | pair need << 4, built on first use */
+static const int meld_pow5[9] = {1, 5, 25, 125, 625, 3125, 15625, 78125, 390625};
+/* An honor's copies: 0..4 */
+static const uint8_t meld_honor[5] = {0 | MELD_FAR << 4, 2 | 1 << 4, 1 | 0 << 4, 0 | 2 << 4, 2 | 1 << 4};
 
-static left_slot left_cache[1 << LEFT_CACHE_BITS];
+static int meld_tables(void) {
+    if (meld_table) return 0;
+    uint8_t *t = PyMem_RawMalloc(MELD_SUITS);
+    if (!t) {
+        PyErr_NoMemory();
+        return -1;
+    }
+    int d[9] = {0};
+    t[0] = 0 | MELD_FAR << 4;
+    for (int x = 1; x < MELD_SUITS; x++) {
+        for (int i = 0; ++d[i] == 5; i++) d[i] = 0;
+        int f = 0;
+        while (!d[f]) f++;
+        int need = MELD_FAR, pair = MELD_FAR;
+        for (int take = d[f] < 3 ? d[f] : 3; take >= 1; take--) {
+            int v = 3 - take + (t[x - take * meld_pow5[f]] & 15);
+            if (v < need) need = v;
+        }
+        for (int s = f > 2 ? f - 2 : 0; s <= f && s <= 6; s++) {
+            int y = x, missing = 0;
+            for (int i = s; i < s + 3; i++) {
+                if (d[i]) y -= meld_pow5[i];
+                else missing++;
+            }
+            int v = missing + (t[y] & 15);
+            if (v < need) need = v;
+        }
+        for (int i = f; i < 9; i++) {
+            if (!d[i]) continue;
+            int v = 1 + (t[x - meld_pow5[i]] & 15);
+            if (d[i] >= 2 && (t[x - 2 * meld_pow5[i]] & 15) < v) v = t[x - 2 * meld_pow5[i]] & 15;
+            if (v < pair) pair = v;
+        }
+        t[x] = (uint8_t)(need | pair << 4);
+    }
+    meld_table = t;
+    return 0;
+}
 
-static uint64_t meld_leftovers(const int *c, int jokers, uint64_t k0, uint64_t k1) {
-    uint64_t h = (k0 * 0xD6E8FEB86659FD93ULL) ^ (k1 * 0x9E3779B97F4A7C15ULL);
-    h ^= h >> 29;
-    left_slot *slot = &left_cache[h >> (64 - LEFT_CACHE_BITS)];
-    if (slot->k0 == k0 && slot->k1 == (k1 | KEY_USED)) return slot->mask;
+typedef struct {
+    int index[3];         /* the suits' table indices */
+    int need[4], pair[4]; /* three suits, then the honors together */
+    int total, tiles;     /* the needs summed; the natural tiles */
+} meld_groups;
+
+static void meld_honors(const int *c, meld_groups *g) {
+    int need = 0, delta = MELD_FAR;
+    for (int t = 27; t < WHITE; t++) {
+        uint8_t e = meld_honor[c[t]];
+        need += e & 15;
+        if ((e >> 4) - (e & 15) < delta) delta = (e >> 4) - (e & 15);
+    }
+    g->need[3] = need;
+    g->pair[3] = need + delta;
+}
+
+static void meld_groups_of(const int *c, meld_groups *g) {
+    g->tiles = 0;
+    for (int s = 0; s < 3; s++) {
+        int x = 0;
+        for (int i = 8; i >= 0; i--) {
+            x = x * 5 + c[9 * s + i];
+            g->tiles += c[9 * s + i];
+        }
+        g->index[s] = x;
+        g->need[s] = meld_table[x] & 15;
+        g->pair[s] = meld_table[x] >> 4;
+    }
+    for (int t = 27; t < WHITE; t++) g->tiles += c[t];
+    meld_honors(c, g);
+    g->total = g->need[0] + g->need[1] + g->need[2] + g->need[3];
+}
+
+/* g with one natural tile t more (c: the counts g was made of, t added). */
+static void meld_groups_add(meld_groups *g, const int *c, int t) {
+    g->tiles++;
+    if (t < 27) {
+        int s = t / 9;
+        g->index[s] += meld_pow5[t - 9 * s];
+        uint8_t e = meld_table[g->index[s]];
+        g->total += (e & 15) - g->need[s];
+        g->need[s] = e & 15;
+        g->pair[s] = e >> 4;
+    } else {
+        g->total -= g->need[3];
+        meld_honors(c, g);
+        g->total += g->need[3];
+    }
+}
+
+/* meldable(c, jokers): the naturals of c meld with the jokers. */
+static int meld_groups_meld(const meld_groups *g, int jokers) {
+    return (g->tiles + jokers) % 3 == 0 && g->total <= jokers;
+}
+
+/* hu_shape's standard shape: a pair (two jokers, or a group's) and melds. */
+static int meld_groups_hu(const meld_groups *g, int jokers) {
+    if (jokers >= 2 && g->total + 2 <= jokers) return 1;
+    for (int s = 0; s < 4; s++)
+        if (g->total - g->need[s] + g->pair[s] <= jokers) return 1;
+    return 0;
+}
+
+/* The natural tiles d whose removal leaves c meldable with the jokers, as bit d. */
+static uint64_t meld_groups_leftovers(const meld_groups *g, const int *c, int jokers) {
+    if ((g->tiles - 1 + jokers) % 3) return 0;
     uint64_t mask = 0;
-    int first = -1;
-    for (int i = 0; i < 34; i++) {
-        if (c[i]) {
-            first = i;
-            break;
+    for (int s = 0; s < 3; s++) {
+        int rest = g->total - g->need[s];
+        if (rest > jokers) continue;
+        for (int i = 0; i < 9; i++)
+            if (c[9 * s + i] && rest + (meld_table[g->index[s] - meld_pow5[i]] & 15) <= jokers)
+                mask |= 1ULL << (9 * s + i);
+    }
+    for (int t = 27; t < WHITE; t++)
+        if (c[t] && g->total - (meld_honor[c[t]] & 15) + (meld_honor[c[t] - 1] & 15) <= jokers) mask |= 1ULL << t;
+    return mask;
+}
+
+/* hu_shape(counts, open_melds), with the tables. */
+static int race_hu(const int *counts, int open_melds) {
+    if (open_melds < 0 || open_melds > 4) return 0;
+    int total = 0;
+    for (int i = 0; i < NTILES; i++) total += counts[i];
+    if (total != 14 - 3 * open_melds) return 0;
+    int jokers = counts[WHITE];
+    if (open_melds == 0) {
+        int odd = 0;
+        for (int i = 0; i < WHITE; i++) odd += counts[i] % 2;
+        if (odd <= jokers) return 1;
+    }
+    meld_groups g;
+    meld_groups_of(counts, &g);
+    return meld_groups_hu(&g, jokers);
+}
+
+/* baotou_shape(waiting, open_melds), with the tables: the same tests. */
+static int race_baotou_shape(const int *waiting, int open_melds) {
+    if (waiting[WHITE] == 0) return 0;
+    int total = 0;
+    for (int i = 0; i < NTILES; i++) total += waiting[i];
+    if (total != 13 - 3 * open_melds) return 0;
+    if (open_melds == 2 && waiting[WHITE] == 4) {
+        for (int t = 0; t < WHITE; t++) if (waiting[t] == 3) return 0;
+    }
+    int odd = 0;
+    for (int i = 0; i < WHITE; i++) odd += waiting[i] % 2;
+    meld_groups g;
+    meld_groups_of(waiting, &g);
+    for (int t = 27; t < WHITE; t++) {
+        if (waiting[t] == 0) {
+            int jokers = waiting[WHITE] - 1;
+            if (open_melds == 0 && odd <= jokers) return 1;
+            return meld_groups_meld(&g, jokers);
         }
     }
-    if (first >= 0) {
-        int x[34];
-        uint64_t n0 = first < 21 ? k0 - (1ULL << (3 * first)) : k0;
-        uint64_t n1 = first < 21 ? k1 : k1 - (1ULL << (3 * (first - 21)));
-        memcpy(x, c, sizeof(x));
-        x[first] -= 1;
-        if (meldable(x, jokers, n0, n1)) mask |= 1ULL << first;
-        int most = c[first] < 3 ? c[first] : 3;
-        for (int take = most; take >= 1; take--) {
-            int need = 3 - take;
-            if (need > jokers) continue;
-            memcpy(x, c, sizeof(x));
-            x[first] -= take;
-            n0 = first < 21 ? k0 - ((uint64_t)take << (3 * first)) : k0;
-            n1 = first < 21 ? k1 : k1 - ((uint64_t)take << (3 * (first - 21)));
-            n1 -= (uint64_t)need << 39;
-            mask |= meld_leftovers(x, jokers - need, n0, n1);
-        }
-        if (first < 27) {
-            int suit = first / 9 * 9;
-            int low = suit > first - 2 ? suit : first - 2;
-            int high = (suit + 6) < first ? (suit + 6) : first;
-            for (int start = low; start <= high; start++) {
-                memcpy(x, c, sizeof(x));
-                int missing = 0, held[3];
-                n0 = k0;
-                n1 = k1;
-                for (int t = start; t < start + 3; t++) {
-                    held[t - start] = x[t] > 0;
-                    if (x[t]) {
-                        x[t] -= 1;
-                        if (t < 21) n0 -= 1ULL << (3 * t);
-                        else n1 -= 1ULL << (3 * (t - 21));
-                    } else {
-                        missing += 1;
-                    }
-                }
-                if (missing > jokers) continue;
-                n1 -= (uint64_t)missing << 39;
-                mask |= meld_leftovers(x, jokers - missing, n0, n1);
-                /* A held tile of the sequence left over, a joker in its place. */
-                if (missing + 1 <= jokers) {
-                    for (int t = start; t < start + 3; t++) {
-                        if (t == first || !held[t - start] || mask >> t & 1) continue;
-                        if (meldable(x, jokers - missing - 1, n0, n1 - (1ULL << 39))) mask |= 1ULL << t;
-                    }
-                }
+    /* Every draw must win. */
+    int jokers = waiting[WHITE], w[NTILES];
+    memcpy(w, waiting, sizeof(w));
+    for (int t = 0; t < NTILES; t++) {
+        if (waiting[t] >= 4) continue;
+        int ok;
+        if (t == WHITE) {
+            ok = (open_melds == 0 && odd <= jokers + 1) || meld_groups_hu(&g, jokers + 1);
+        } else {
+            int o = odd + (waiting[t] % 2 ? -1 : 1);
+            if (open_melds == 0 && o <= jokers) {
+                ok = 1;
+            } else {
+                meld_groups d = g;
+                w[t]++;
+                meld_groups_add(&d, w, t);
+                w[t]--;
+                ok = meld_groups_hu(&d, jokers);
             }
         }
+        if (!ok) return 0;
     }
+    return 1;
+}
+
+static baotou_slot race_baotou_cache[BAOTOU_CACHE_SIZE];
+
+static int race_baotou_keyed(uint64_t k0, uint64_t k1, const int *counts, int open_melds) {
+    uint64_t h = (k0 * 0xC2B2AE3D27D4EB4FULL) ^ (k1 * 0x9E3779B97F4A7C15ULL);
+    h ^= h >> 29;
+    baotou_slot *slot = &race_baotou_cache[h >> (64 - BAOTOU_CACHE_BITS)];
+    if (slot->k0 == k0 && (slot->k1 & (KEY1_BITS | KEY_USED)) == (k1 | KEY_USED))
+        return (int)(slot->k1 >> VALUE_SHIFT);
+    int value = race_baotou_shape(counts, open_melds);
     slot->k0 = k0;
-    slot->k1 = k1 | KEY_USED;
-    slot->mask = mask;
-    return mask;
+    slot->k1 = k1 | KEY_USED | ((uint64_t)value << VALUE_SHIFT);
+    return value;
+}
+
+static int race_baotou_cached(const int *counts, int open_melds) {
+    uint64_t k0, k1;
+    shanten_key(counts, open_melds, &k0, &k1);
+    return race_baotou_keyed(k0, k1, counts, open_melds);
+}
+
+/* fan_value with the tables. */
+static long race_fan_value(int *counts, int drawn_tile, int open_melds, int chain_count, int piao_count) {
+    if (drawn_tile < 0 || drawn_tile >= NTILES || counts[drawn_tile] <= 0 || !race_hu(counts, open_melds))
+        return 0;
+    counts[drawn_tile]--;
+    int bt = race_baotou_cached(counts, open_melds);
+    counts[drawn_tile]++;
+    long fan = 1;
+    if (open_melds == 0) {
+        int odd = 0, luxury = 0;
+        for (int i = 0; i < WHITE; i++) {
+            odd += counts[i] % 2;
+            if (counts[i] == 4) luxury++;
+        }
+        if (odd <= counts[WHITE]) {
+            if (counts[WHITE] == 4 && odd == 0) luxury++;
+            fan = 1L << (1 + luxury);
+        }
+    }
+    if (chain_count > 0) fan *= 1L << chain_count;
+    if (counts[WHITE] + piao_count == 4) fan *= 2;
+    if (bt) fan *= 2;
+    return fan;
 }
 
 /* Bit d set when the waiting hand c plus tile, less one d (a kind c holds,
  * other than tile), is baotou: baotou_shape's test, answered for all d at
  * once where a non-white honor is absent from the result (the common case:
  * the natural tiles must meld with the whites but one as jokers, or form
- * pairs), and by baotou_keyed itself otherwise. k0, k1: shanten_key(c, opened). */
-static uint64_t upgrade_drops(int *c, int opened, int tile, uint64_t k0, uint64_t k1) {
-    int nat[NTILES], whites = c[WHITE], odd = 0, absent = 0;
-    memcpy(nat, c, sizeof(nat));
-    nat[WHITE] = 0;
-    for (int i = 0; i < WHITE; i++) odd += nat[i] % 2;
-    for (int h = 27; h < WHITE; h++) absent += c[h] == 0;
+ * pairs), and by race_baotou_keyed itself otherwise. What depends on the hand
+ * alone is prepared once for all its draws. */
+typedef struct {
+    int nat[NTILES], kinds[NTILES], n_kinds, whites, odd, absent, opened;
+    uint64_t k0, k1;  /* shanten_key(c, opened) */
+    meld_groups g;    /* of nat */
+    uint64_t kind_mask, odd_mask; /* the kinds c holds; the naturals held an odd number of times */
+} upgrade_ctx;
+
+static void upgrade_prepare(const int *c, int opened, uint64_t k0, uint64_t k1, upgrade_ctx *u) {
+    memcpy(u->nat, c, sizeof(u->nat));
+    u->nat[WHITE] = 0;
+    u->whites = c[WHITE];
+    u->odd = u->absent = u->n_kinds = 0;
+    for (int i = 0; i < WHITE; i++) u->odd += u->nat[i] % 2;
+    for (int h = 27; h < WHITE; h++) u->absent += c[h] == 0;
+    u->kind_mask = u->odd_mask = 0;
+    for (int d = 0; d < NTILES; d++) {
+        if (c[d]) {
+            u->kinds[u->n_kinds++] = d;
+            u->kind_mask |= 1ULL << d;
+        }
+        if (d < WHITE && c[d] % 2) u->odd_mask |= 1ULL << d;
+    }
+    u->opened = opened;
+    u->k0 = k0;
+    u->k1 = k1;
+    meld_groups_of(u->nat, &u->g);
+}
+
+static uint64_t upgrade_drops_slow(upgrade_ctx *u, int *c, int tile) {
+    int opened = u->opened, whites = u->whites;
     uint64_t drops = 0, left = 0, d0, d1;
     int left_ready = 0;
-    shanten_key_draw(k0, k1, tile, &d0, &d1);
-    for (int d = 0; d < NTILES; d++) {
-        if (d == tile || !c[d]) continue;
+    shanten_key_draw(u->k0, u->k1, tile, &d0, &d1);
+    /* The naturals' groups with the drawn tile, when it is natural. */
+    meld_groups g = u->g;
+    if (tile != WHITE) {
+        u->nat[tile]++;
+        meld_groups_add(&g, u->nat, tile);
+        u->nat[tile]--;
+    }
+    int tile_honor_new = tile >= 27 && tile < WHITE && c[tile] == 0;
+    for (int k = 0; k < u->n_kinds; k++) {
+        int d = u->kinds[k];
+        if (d == tile) continue;
         int rest_whites = whites + (tile == WHITE) - (d == WHITE);
         if (rest_whites == 0) continue;
-        int missing = absent - (tile >= 27 && tile < WHITE && c[tile] == 0) + (d >= 27 && d < WHITE && c[d] == 1);
+        int missing = u->absent - tile_honor_new + (d >= 27 && d < WHITE && c[d] == 1);
         int ok;
         if (missing == 0 || (opened == 2 && rest_whites == 4)) {
             c[tile]++;
             c[d]--;
             uint64_t r0 = d < 21 ? d0 - (1ULL << (3 * d)) : d0;
             uint64_t r1 = d < 21 ? d1 : d1 - (1ULL << (3 * (d - 21)));
-            ok = baotou_keyed(r0, r1, c, opened);
+            ok = race_baotou_keyed(r0, r1, c, opened);
             c[d]++;
             c[tile]--;
         } else {
             int pairs = 0;
             if (opened == 0) {
-                int o = odd;
-                if (tile != WHITE) o += nat[tile] % 2 ? -1 : 1;
-                if (d != WHITE) o += nat[d] % 2 ? -1 : 1;
+                int o = u->odd;
+                if (tile != WHITE) o += u->nat[tile] % 2 ? -1 : 1;
+                if (d != WHITE) o += u->nat[d] % 2 ? -1 : 1;
                 pairs = o <= rest_whites - 1;
             }
             if (pairs) {
                 ok = 1;
             } else if (d == WHITE) {
                 /* The naturals with the drawn tile, one white fewer. */
-                nat[tile]++;
-                uint64_t m0, m1;
-                shanten_key(nat, whites - 2, &m0, &m1);
-                ok = meldable(nat, whites - 2, m0, m1);
-                nat[tile]--;
+                ok = meld_groups_meld(&g, whites - 2);
             } else {
                 if (!left_ready) {
                     /* Draw a natural tile: its naturals, the whites but one as
                      * jokers. Draw a white: the naturals, every white a joker. */
                     int jokers = tile == WHITE ? whites : whites - 1;
-                    if (tile != WHITE) nat[tile]++;
-                    uint64_t m0, m1;
-                    shanten_key(nat, jokers, &m0, &m1);
-                    left = meld_leftovers(nat, jokers, m0, m1);
-                    if (tile != WHITE) nat[tile]--;
+                    if (tile != WHITE) u->nat[tile]++;
+                    left = meld_groups_leftovers(&g, u->nat, jokers);
+                    if (tile != WHITE) u->nat[tile]--;
                     left_ready = 1;
                 }
                 ok = (int)(left >> d & 1);
@@ -1477,14 +1675,223 @@ static uint64_t upgrade_drops(int *c, int opened, int tile, uint64_t k0, uint64_
     return drops;
 }
 
+/* upgrade_drops_slow's answer where no drop can leave every other honor
+ * present (nor four whites beside two open melds): then each d is decided by
+ * the pairs or the melds alone, for all d at once as bit masks. */
+static uint64_t upgrade_drops_of(upgrade_ctx *u, int *c, int tile) {
+    int opened = u->opened, whites = u->whites;
+    int tile_honor_new = tile >= 27 && tile < WHITE && c[tile] == 0;
+    int draw_whites = whites + (tile == WHITE);
+    if (u->absent - tile_honor_new == 0 || (opened == 2 && draw_whites == 4))
+        return upgrade_drops_slow(u, c, tile);
+    uint64_t drops = 0;
+    int o = u->odd;
+    if (tile != WHITE) o += u->nat[tile] % 2 ? -1 : 1;
+    meld_groups g = u->g;
+    if (tile != WHITE) {
+        u->nat[tile]++;
+        meld_groups_add(&g, u->nat, tile);
+        u->nat[tile]--;
+    }
+    uint64_t naturals = u->kind_mask & ~(1ULL << tile) & ~(1ULL << WHITE);
+    if (draw_whites >= 1 && naturals) {
+        uint64_t pairs = 0;
+        if (opened == 0) {
+            /* Dropping d changes the odd count by one: down for an odd d. */
+            if (o - 1 <= draw_whites - 1) pairs |= naturals & u->odd_mask;
+            if (o + 1 <= draw_whites - 1) pairs |= naturals & ~u->odd_mask;
+        }
+        drops |= pairs;
+        uint64_t rest = naturals & ~pairs;
+        if (rest) {
+            /* The whites but one as jokers (every white, when a white is drawn). */
+            if (tile != WHITE) u->nat[tile]++;
+            drops |= rest & meld_groups_leftovers(&g, u->nat, draw_whites - 1);
+            if (tile != WHITE) u->nat[tile]--;
+        }
+    }
+    if ((u->kind_mask >> WHITE & 1) && tile != WHITE && whites >= 2) {
+        if ((opened == 0 && o <= whites - 2) || meld_groups_meld(&g, whites - 2)) drops |= 1ULL << WHITE;
+    }
+    return drops;
+}
+
+static uint64_t upgrade_drops(int *c, int opened, int tile, uint64_t k0, uint64_t k1) {
+    upgrade_ctx u;
+    upgrade_prepare(c, opened, k0, k1, &u);
+    return upgrade_drops_of(&u, c, tile);
+}
+
 static PyObject *py_race_upgrade_drops(PyObject *self, PyObject *args) {
     PyObject *counts_obj;
     int opened, tile, c[NTILES];
     if (!PyArg_ParseTuple(args, "Oii", &counts_obj, &opened, &tile)) return NULL;
-    if (parse_counts(counts_obj, c) < 0) return NULL;
+    if (parse_counts(counts_obj, c) < 0 || meld_tables() < 0) return NULL;
     uint64_t k0, k1;
     shanten_key(c, opened, &k0, &k1);
     return PyLong_FromUnsignedLongLong(upgrade_drops(c, opened, tile, k0, k1));
+}
+
+/* draw_distances for the race valuation, with the same values: a draw only
+ * changes its own group (a suit, or the honors), so the other three groups
+ * are combined once per hand and each draw costs one group lookup and one
+ * combining step instead of shape_value's four of each. */
+typedef struct { int g[5][2]; } race_groups;
+
+static void race_groups_add(const race_groups *in, const suit_res *r, race_groups *out) {
+    for (int m = 0; m < 5; m++)
+        for (int p = 0; p < 2; p++) out->g[m][p] = -1;
+    for (int m = 0; m < 5; m++) {
+        for (int p = 0; p < 2; p++) {
+            if (in->g[m][p] < 0) continue;
+            for (int dm = 0; m + dm < 5; dm++) {
+                for (int dp = 0; p + dp < 2; dp++) {
+                    uint8_t v = r->t[dm][dp];
+                    if (v == UNREACHABLE) continue;
+                    int nv = in->g[m][p] + (int)v;
+                    if (nv > 4) nv = 4;
+                    if (out->g[m + dm][p + dp] < nv) out->g[m + dm][p + dp] = nv;
+                }
+            }
+        }
+    }
+}
+
+static int race_groups_value(const race_groups *g) {
+    int best = 0x7FFFFF;
+    for (int m = 0; m < 5; m++) {
+        for (int p = 0; p < 2; p++) {
+            if (g->g[m][p] < 0) continue;
+            int capped = g->g[m][p] < 4 - m ? g->g[m][p] : 4 - m;
+            if (capped < 0) capped = 0;
+            int value = 8 - 2 * m - capped - p;
+            if (value < best) best = value;
+        }
+    }
+    return best;
+}
+
+static const suit_res *race_group_table(const int *natural, int s, suit_res *buf) {
+    *buf = suit_table(natural + (s < 3 ? s * 9 : 27), s < 3 ? 9 : 7, s < 3);
+    return buf;
+}
+
+/* shanten_uncached from the naturals' shape value: less the jokers, or seven
+ * pairs when nothing is open. */
+static inline int race_distance(int shape, int jokers, int pairs, int singles, int open_melds) {
+    int normal = shape - jokers;
+    if (open_melds == 0) {
+        int room = 7 - pairs;
+        int capped = singles < room ? singles : room;
+        int seven = 14 - (2 * pairs + capped) - jokers - 1;
+        if (seven < normal) normal = seven;
+    }
+    return normal;
+}
+
+#define RACE_DRAW_BITS 17
+
+static draw_slot race_draw_cache[1 << RACE_DRAW_BITS];
+
+static const draw_slot *race_draws(const int *counts, int open_melds) {
+    uint64_t k0, k1;
+    shanten_key(counts, open_melds, &k0, &k1);
+    uint64_t h = (k0 * 0x9E3779B97F4A7C15ULL) ^ (k1 * 0xD6E8FEB86659FD93ULL);
+    h ^= h >> 31;
+    draw_slot *slot = &race_draw_cache[h >> (64 - RACE_DRAW_BITS)];
+    if (slot->k0 == k0 && slot->k1 == (k1 | KEY_USED)) return slot;
+    int natural[NTILES];
+    memcpy(natural, counts, sizeof(natural));
+    int jokers = natural[WHITE];
+    natural[WHITE] = 0;
+    suit_res tables[4], drawn;
+    for (int s = 0; s < 4; s++) race_group_table(natural, s, &tables[s]);
+    /* others[s]: every group but s, from the open melds. */
+    race_groups start, others[4], tmp, full;
+    for (int m = 0; m < 5; m++)
+        for (int p = 0; p < 2; p++) start.g[m][p] = -1;
+    start.g[open_melds][0] = 0;
+    for (int s = 0; s < 4; s++) {
+        race_groups acc = start;
+        for (int o = 0; o < 4; o++) {
+            if (o == s) continue;
+            race_groups_add(&acc, &tables[o], &tmp);
+            acc = tmp;
+        }
+        others[s] = acc;
+    }
+    race_groups_add(&others[3], &tables[3], &full);
+    int shape = race_groups_value(&full);
+    int pairs = 0, singles = 0;
+    if (open_melds == 0) {
+        for (int i = 0; i < NTILES; i++) {
+            pairs += natural[i] / 2;
+            singles += natural[i] % 2;
+        }
+    }
+    slot->k0 = k0;
+    slot->k1 = k1 | KEY_USED;
+    slot->distance = (int8_t)race_distance(shape, jokers, pairs, singles, open_melds);
+    for (int t = 0; t < NTILES; t++) {
+        if (counts[t] >= 4) {
+            slot->draw[t] = NO_DRAW;
+            continue;
+        }
+        if (t == WHITE) {
+            slot->draw[t] = (int8_t)race_distance(shape, jokers + 1, pairs, singles, open_melds);
+            continue;
+        }
+        int s = t < 27 ? t / 9 : 3;
+        natural[t]++;
+        race_group_table(natural, s, &drawn);
+        natural[t]--;
+        race_groups_add(&others[s], &drawn, &tmp);
+        int odd = natural[t] % 2;
+        slot->draw[t] = (int8_t)race_distance(race_groups_value(&tmp), jokers, pairs + odd, singles + (odd ? -1 : 1), open_melds);
+    }
+    return slot;
+}
+
+/* analyze_values over race_draws. */
+static void race_analyze_values(const int *counts, const int *avail, int open_melds,
+                           int chain_count, int piao_count, analysis_row *out) {
+    int drawn[NTILES];
+    const draw_slot *table = race_draws(counts, open_melds);
+    int distance = table->distance;
+    int improving[NTILES], wins[NTILES];
+    long fans[NTILES];
+    int n_improving = 0, n_wins = 0;
+    for (int t = 0; t < NTILES; t++) {
+        if (avail[t] <= 0 || counts[t] >= 4) continue;
+        int d = table->draw[t];
+        if (d < distance) improving[n_improving++] = t;
+        if (d < 0) {
+            memcpy(drawn, counts, sizeof(drawn));
+            drawn[t]++;
+            long fan = race_fan_value(drawn, t, open_melds, chain_count, piao_count);
+            if (fan) {
+                wins[n_wins] = t;
+                fans[n_wins++] = fan;
+            }
+        }
+    }
+    /* The availability-weighted sums sdk.shape.analyze reports, so the
+     * Python side builds its result without iterating the tuples again. */
+    long ukeire = 0, copies = 0, value = 0;
+    for (int i = 0; i < n_improving; i++) ukeire += avail[improving[i]];
+    for (int i = 0; i < n_wins; i++) {
+        copies += avail[wins[i]];
+        value += avail[wins[i]] * fans[i];
+    }
+    out->distance = distance;
+    out->n_improving = n_improving;
+    out->n_wins = n_wins;
+    out->ukeire = ukeire;
+    out->copies = copies;
+    out->value = value;
+    memcpy(out->improving, improving, n_improving * sizeof(int));
+    memcpy(out->wins, wins, n_wins * sizeof(int));
+    memcpy(out->fans, fans, n_wins * sizeof(long));
 }
 
 /* The memo key: 3 bits per count and per available copy, and the rest. */
@@ -1563,7 +1970,7 @@ static int race_fallback(race_ctx *x, const int *c, int chain, int piao, analysi
 }
 
 static int race_analysis(race_ctx *x, const int *c, int chain, int piao, analysis_row *row) {
-    analyze_values(c, x->avail, x->opened, chain, piao, 0, row);
+    race_analyze_values(c, x->avail, x->opened, chain, piao, row);
     return row->distance < 0 ? race_fallback(x, c, chain, piao, row) : 0;
 }
 
@@ -1583,7 +1990,7 @@ static int race_waiting(race_ctx *x, int *c, int chain, int piao, int draws, dou
     uint64_t k0, k1;
     shanten_key(c, opened, &k0, &k1);
     analysis_row row;
-    if (c[WHITE] && baotou_keyed(k0, k1, c, opened)) {
+    if (c[WHITE] && race_baotou_keyed(k0, k1, c, opened)) {
         /* A baotou wait wins on every drawable tile: the Python loop's copies
          * and fan-weighted copies over fan_value. */
         long copies, fan;
@@ -1606,10 +2013,12 @@ static int race_waiting(race_ctx *x, int *c, int chain, int piao, int draws, dou
                 }
                 double total = 0.0;
                 long reach = 0;
+                upgrade_ctx up;
+                upgrade_prepare(c, opened, k0, k1, &up);
                 for (int tile = 0; tile < NTILES; tile++) {
                     if (avail[tile] <= 0 || c[tile] >= 4) continue;
                     double best = 0.0;
-                    uint64_t drops = upgrade_drops(c, opened, tile, k0, k1);
+                    uint64_t drops = upgrade_drops_of(&up, c, tile);
                     c[tile]++;
                     for (int drop = 0; drops; drop++, drops >>= 1) {
                         if (!(drops & 1)) continue;
@@ -1752,6 +2161,7 @@ static int race_reshaped(race_ctx *x, int *c, int draws, double *out) {
 
 /* The availability (and its memo key part), the profile and the fallback of a context. */
 static int race_bind(race_ctx *x, PyObject *available, int profile, PyObject *fallback) {
+    if (meld_tables() < 0) return -1;
     if (parse_vector(available, x->avail, 1000000, "available") < 0) return -1;
     long unseen = 0;
     x->keyed = 1;
@@ -1981,13 +2391,13 @@ static int parse_action(PyObject *a, race_action *out) {
 static int sdk_shanten(const int *c, int opened) {
     int raw = shanten_raw(c, opened);
     if (raw >= 0) return raw;
-    return hu_shape(c, opened) ? -1 : 0;
+    return race_hu(c, opened) ? -1 : 0;
 }
 
 /* rules.is_baotou for counts of a hand of `size` tiles. */
 static int is_baotou_counts(const int *c, int size, int opened) {
     if (size != 13 - 3 * opened || !c[WHITE]) return 0;
-    return baotou_cached(c, opened);
+    return race_baotou_cached(c, opened);
 }
 
 static void ctx_at(race_act_ctx *A, int opened) {

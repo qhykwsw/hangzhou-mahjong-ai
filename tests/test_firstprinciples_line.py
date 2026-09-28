@@ -417,7 +417,19 @@ def test_a_best_version_replays_the_development_set_under_the_current_conditions
     assert labels[-1][1] == "dev-refresh2"  # a later refresh never reuses the earlier one's jobs
 
 
-@pytest.mark.parametrize("new, refused", [("a\nB\nc\n", "改动了现役运行时的原有代码"), ("a\nb\nc\n", "没有可升级的内容")])
+def test_only_the_race_section_of_the_pool_runtime_may_change(harness):
+    E, _, _ = harness
+    banner, table = E.RACE_SECTION
+    old = f"a\n{banner}\nr1\nr2\n{table}\nm\n"
+    assert E.runtime_changes(old, old) is None
+    assert E.runtime_changes(old, old.replace("a\n", "a\nnew\n")) == ([], [])
+    assert E.runtime_changes(old, old.replace("r2", "R2")) == ([], [("replace", 4, 4)])
+    assert E.runtime_changes(old, old.replace("m\n", "")) == ([("delete", 6, 6)], [])
+    assert E.runtime_changes(old, old.replace(banner, "x"))[0]  # the banner itself stays
+    assert E.runtime_changes("a\nb\n", "a\nB\n") == ([("replace", 2, 2)], [])  # no race section: nothing may change
+
+
+@pytest.mark.parametrize("new, refused", [("a\nB\nc\n", "竞速部分以外的原有代码"), ("a\nb\nc\n", "没有可升级的内容")])
 def test_the_pool_runtime_takes_only_added_functions(harness, monkeypatch, tmp_path, new, refused):
     E, _, _ = harness
     old = tmp_path / "old-runtime"

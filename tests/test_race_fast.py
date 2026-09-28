@@ -62,6 +62,16 @@ def near_hand(rng, opened):
     return hand if max(counts(hand)) <= 4 else None
 
 
+def honor_hand(rng, opened):
+    """A white-holding hand with every other honor: baotou must then win on every draw."""
+    size = 13 - 3 * opened
+    hand = [WHITE] * rng.choice((1, 2, 3)) + list(range(27, WHITE))
+    while len(hand) < size:
+        hand.append(rng.randrange(WHITE))
+    hand = tuple(sorted(hand[:size]))
+    return hand if max(counts(hand)) <= 4 and WHITE in hand else None
+
+
 def availability(rng, hand):
     held = counts(hand)
     return tuple(max(0, 4 - held[t] - rng.choice((0, 0, 0, 1, 2, 4))) for t in range(34))
@@ -92,9 +102,9 @@ def test_baotou_fans_and_upgrade_drops_are_the_python_ones():
     ref, _, _ = load("peng-speed")
     rng = random.Random(11)
     baotou = 0
-    for _ in range(3000):
+    for n in range(3000):
         opened = rng.choice((0, 0, 1, 2, 3))
-        hand = near_hand(rng, opened)
+        hand = honor_hand(rng, min(opened, 2)) if n % 5 == 0 else near_hand(rng, opened)
         if hand is None or WHITE not in hand:
             continue
         held = list(counts(hand))

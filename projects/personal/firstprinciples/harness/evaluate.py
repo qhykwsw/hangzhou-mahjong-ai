@@ -147,6 +147,9 @@ def freeze_runtime():
 
 
 UPGRADE_BLOCKS = override("FP_UPGRADE_BLOCKS", 64)  # development blocks replayed under both runtimes
+# The C members' functions in _fast.c: from this banner up to the method table.
+RACE_SECTION = ("/* ---------- race valuation of the first-principles rule strategies ---------- */",
+                "static PyMethodDef fast_methods[] = {")
 
 # Compile the accelerator of the runtime tree in the working directory, as the hosts do.
 NATIVE = r"""
@@ -161,32 +164,52 @@ with tempfile.TemporaryDirectory() as folder:
 """
 
 
-def upgrade_runtime():
-    """Move the pool onto its runtime plus the new functions of src/mahjong_ai/_fast.c (maintainer).
-
-    The new runtime is the pool's own with the repository's _fast.c, which must
-    keep every line of the old one in order: functions are only added, so every
-    game plays as before. The rule line's best version then replays the same
-    development blocks under both runtimes and must score the same in each.
-    The pool keeps its id, development set and records; the maintainer reseals
-    afterwards, then registers member implementations that use the functions.
-    """
+def runtime_changes(old, new):
+    """The old _fast.c lines the new one changes or drops, as (tag, first, last) 1-based: (outside, inside) the race section."""
     import difflib
+
+    old, new = old.splitlines(), new.splitlines()
+    ops = difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes()
+    if all(tag == "equal" for tag, *_ in ops):
+        return None
+    begin = old.index(RACE_SECTION[0]) if RACE_SECTION[0] in old else None
+    end = old.index(RACE_SECTION[1]) if begin is not None and RACE_SECTION[1] in old[begin:] else None
+    changed = [(tag, i1 + 1, i2) for tag, i1, i2, _, _ in ops if tag not in ("equal", "insert")]
+    inside = [c for c in changed if end is not None and begin < c[1] - 1 and c[2] <= end]
+    return [c for c in changed if c not in inside], inside
+
+
+def upgrade_runtime():
+    """Move the pool onto its runtime plus the repository's src/mahjong_ai/_fast.c (maintainer).
+
+    The new runtime is the pool's own with the repository's _fast.c. Outside
+    the race section (the C members' functions) every line of the old file
+    stays, in order: functions are only added, so every game plays as before.
+    Inside it lines may change; then every registered member implementation
+    must again choose what its frozen member chooses in every position, under
+    the new runtime and on as many hands as implement() checks. The rule
+    line's best version replays the same development blocks under both
+    runtimes and must score the same in each. The pool keeps its id,
+    development set and records; the maintainer reseals afterwards, then
+    registers member implementations that use new functions.
+    """
+    import fcntl
     import subprocess
     import tempfile
+
+    from . import equivalence
 
     pool = load_pool()
     check_seal()
     old = Path(pool["runtime_path"])
     code = (REPO / "src" / "mahjong_ai" / "_fast.c").read_text()
-    ops = difflib.SequenceMatcher(None, (old / "mahjong_ai" / "_fast.c").read_text().splitlines(),
-                                  code.splitlines(), autojunk=False).get_opcodes()
-    changed = [(tag, i1 + 1, i2) for tag, i1, i2, _, _ in ops if tag not in ("equal", "insert")]
-    if changed:
-        raise Refused("src/mahjong_ai/_fast.c 改动了现役运行时的原有代码（不只是新增），不能原池升级；"
-                      f"改动的原行：{changed[:5]}。这种情况要换新的对手池。")
-    if all(tag == "equal" for tag, *_ in ops):
+    changes = runtime_changes((old / "mahjong_ai" / "_fast.c").read_text(), code)
+    if changes is None:
         raise Refused("src/mahjong_ai/_fast.c 与现役运行时相同，没有可升级的内容")
+    outside, inside = changes
+    if outside:
+        raise Refused("src/mahjong_ai/_fast.c 改动了现役运行时里竞速部分以外的原有代码（不只是新增），不能原池升级；"
+                      f"改动的原行：{outside[:5]}。这种情况要换新的对手池。")
     store = RESEARCH / ".local/research/runtimes"
     with tempfile.TemporaryDirectory(dir=store, prefix=".upgrading-") as tmp:
         shutil.copytree(old / "mahjong_ai", Path(tmp) / "mahjong_ai",
@@ -204,8 +227,22 @@ def upgrade_runtime():
     champion = best(pool["id"], "rule")
     if champion is None:
         raise Refused("规则线还没有最好版本，没有可重放的对局")
-    blocks = range(UPGRADE_BLOCKS)
     upgraded = dict(pool, runtime_path=str(target))
+    rechecked = {}
+    if inside:
+        with (LOCAL / "evaluation-local.lock").open("w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)  # alone on the Mac, like implement()
+            for cid, impl in sorted((pool.get("implementations") or {}).items()):
+                seed = random.SystemRandom().getrandbits(62)
+                result = equivalence.check(pool["members"][cid]["package_path"], impl["package_path"], seed,
+                                           LOCAL / "pool-implementations" / cid / "check",
+                                           hands=IMPLEMENTATION_HANDS, pool=upgraded)
+                if result["mismatches"]:
+                    raise Refused(f"新运行时下 {cid} 的实现在 {result['decisions']} 个决策里有 {result['mismatches']} 个"
+                                  "与冻结成员不同，不升级：\n" + "\n".join(result["examples"]))
+                rechecked[cid] = {"seed": seed, "hands": result["hands"], "decisions": result["decisions"]}
+                log(f"upgrade {fingerprint[:12]}: {cid} implementation rechecked on {result['hands']} hands")
+    blocks = range(UPGRADE_BLOCKS)
     label = f"upgrade-{fingerprint[:12]}"
     before, _ = play(pool, champion["id"], champion["spec"], blocks, pool["dev_seed"], f"{label}-old", "local")
     after, _ = play(upgraded, champion["id"], champion["spec"], blocks, pool["dev_seed"], f"{label}-new", "local")
@@ -218,7 +255,8 @@ def upgrade_runtime():
     pool["runtime_path"] = str(target)
     pool.setdefault("runtime_upgrades", []).append({
         "from": str(old), "to": str(target), "at": time.time(),
-        "replayed": {"version": champion["id"], "blocks": len(blocks), "games": len(blocks) * 4}})
+        "replayed": {"version": champion["id"], "blocks": len(blocks), "games": len(blocks) * 4},
+        "changed_race_lines": len(inside), "rechecked": rechecked})
     atomic_json(LOCAL / "pool.json", pool)
     atomic_json(LOCAL / "pools" / f"{pool['id']}.json", pool)
     log(f"pool {pool['id']} runtime {old.name[:12]} -> {target.name[:12]}: {champion['id']} replayed {len(blocks)} blocks alike")

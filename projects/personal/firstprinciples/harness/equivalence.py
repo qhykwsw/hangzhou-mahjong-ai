@@ -132,15 +132,16 @@ Path(sys.argv[3]).write_text(json.dumps({
 """
 
 
-def check(best_package, new_package, seed, root, workers=None, hands=None):
+def check(best_package, new_package, seed, root, workers=None, hands=None, pool=None):
     """Both packages on the same fresh positions; returns the counts and the first mismatches.
 
     Mismatching positions (Observation, both actions) are pickled to
     root/mismatches.pickle so the agent can call both versions' act on them.
+    ``pool`` (default: the current one) gives the runtime and the opponents.
     """
     import pickle
 
-    pool = E.load_pool()
+    pool = pool or E.load_pool()
     opponents = {cid: spec for cid, spec in E.playing(pool).items() if spec.get("family") != "model"}
     games = list(range(max(1, (hands or HANDS) // HANDS_PER_GAME)))
     workers = min(workers or E.EVAL_WORKERS["local"], len(games))
