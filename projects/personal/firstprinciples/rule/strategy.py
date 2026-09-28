@@ -30,7 +30,7 @@ from functools import lru_cache
 
 from mahjong_ai.domain.observations import can_discard_piao
 from mahjong_ai import _fast
-from mahjong_ai.domain.rules import WHITE, counts, is_baotou
+from mahjong_ai.domain.rules import WHITE, is_baotou
 from mahjong_ai.sdk.shape import analyze, remaining_tiles, shanten
 
 Q = 0.15  # an opponent self-draws during the three draws between two of mine
@@ -100,7 +100,7 @@ def waiting_value(hand, opened, available, chain=0, piao=0, draws=LONG, options=
         fans = dict(row[FANS])
         gain, reach = 0.0, 0
         outs = baotou_draws(hand, opened)
-        held = list(counts(hand))
+        held = list(_fast.counts(hand))
         kinds = [t for t in range(34) if held[t]]
         for tile in range(34):
             if available[tile] <= 0 or held[tile] >= 4:
@@ -131,7 +131,7 @@ def waiting_value(hand, opened, available, chain=0, piao=0, draws=LONG, options=
     u = row[UKEIRE] / unseen
     if row[SHANTEN] == 1:
         weighted = 0.0
-        held = list(counts(hand))
+        held = list(_fast.counts(hand))
         kinds = [t for t in range(34) if held[t]]
         for tile in row[IMPROVING]:
             held[tile] += 1
@@ -167,37 +167,18 @@ HIGH_BITS = tuple(1 << (t - 17) if t >= 17 else 0 for t in range(34))
 @lru_cache(maxsize=2000)
 def baotou_draws(hand, opened):
     """The tiles whose draw lets a discard leave baotou."""
-    held = counts(hand)
+    held = _fast.counts(hand)
     low = _fast.baotou_outs(held, opened, LOW_BITS)
     high = _fast.baotou_outs(held, opened, HIGH_BITS) << 17
     return tuple(t for t in range(34) if (low | high) >> t & 1)
 
 
 @lru_cache(maxsize=2000)
-def baotou_fans(hand, opened, chain, piao):
-    """The fan a baotou wait scores on each tile it can draw (0 if it cannot)."""
-    held = list(counts(hand))
-    fans = []
-    for tile in range(34):
-        if held[tile] >= 4:
-            fans.append(0)
-            continue
-        held[tile] += 1
-        fans.append(_fast.fan_value(held, tile, opened, chain, piao, False, False))
-        held[tile] -= 1
-    return tuple(fans)
-
-
-@lru_cache(maxsize=2000)
 def baotou_draw_fans(hand, opened, available, chain, piao):
     """Copies and fan-weighted copies of the draws a baotou wait wins on."""
-    fans = baotou_fans(hand, opened, chain, piao)
-    copies = fan = 0
-    for tile in range(34):
-        if available[tile] > 0 and fans[tile]:
-            copies += available[tile]
-            fan += available[tile] * fans[tile]
-    return copies, fan
+    # Every draw completes a baotou wait, so the C analysis prices them all.
+    row = _fast.analyze_counts(_fast.counts(hand), opened, available, chain, piao, 0)
+    return row[5], row[6]
 
 
 # The SDK analysis kept as a tuple of numbers and tuples, which the garbage
@@ -209,6 +190,14 @@ SHANTEN, IMPROVING, UKEIRE, COPIES, FANS, FAN_VALUE = range(6)
 @lru_cache(maxsize=10000)
 def examined(hand, opened, available, chain=0, piao=0):
     """The SDK analysis of a hand, computed once, indexed as above."""
+    if len(hand) == 13 - 3 * opened:
+        # The C analysis behind the SDK's, as numbers and tuples; a shape it
+        # already sees as a win goes through the SDK's reference path instead.
+        distance, improving, wins, fans, ukeire, copies, value = _fast.analyze_counts(
+            _fast.counts(hand), opened, available, chain, piao, 0
+        )
+        if distance >= 0:
+            return distance, improving, ukeire, copies, tuple(zip(wins, fans)), value
     row = analyze(hand, opened, available, chain, piao)
     return (
         row["shanten"],
@@ -223,7 +212,7 @@ def examined(hand, opened, available, chain=0, piao=0):
 @lru_cache(maxsize=2000)
 def baotou_rests(hand, opened, tile):
     """The baotou hands a discard leaves after drawing this tile."""
-    held = list(counts(hand))
+    held = list(_fast.counts(hand))
     held[tile] += 1
     rests = []
     for drop in range(34):
@@ -271,7 +260,7 @@ def reshaped_value(hand, opened, available, draws, options=True):
     wins = {tile for tile, _ in row[FANS]}
     stay = waiting_value(hand, opened, available, draws=draws - 1)
     gain, reach = 0.0, 0
-    held = list(counts(hand))
+    held = list(_fast.counts(hand))
     kinds = [t for t in range(34) if held[t]]
     for tile in range(34):
         if tile in wins or available[tile] <= 0 or held[tile] >= 4:
@@ -316,21 +305,22 @@ def reshape_gain(hand, opened, available, draws):
     wins = {tile for tile, _ in row[FANS]}
     stay = plain_value(hand, opened, available, draws - 1)
     gain, reach = 0.0, 0
-    held = list(counts(hand))
+    held = list(_fast.counts(hand))
     kinds = [t for t in range(34) if held[t]]
+    swaps = swap_candidates(held, kinds, opened, available)
     for tile in range(34):
-        if tile in wins or available[tile] <= 0 or held[tile] >= 4:
+        if tile in wins or available[tile] <= 0 or held[tile] >= 4 or tile not in swaps:
             continue
+        drops = swaps[tile]
         held[tile] += 1
         best = stay
-        for drop in kinds:
-            if drop == tile:
-                continue
+        for drop in drops:
             held[drop] -= 1
             if _fast.shanten_raw(held, opened) <= 0:
-                rest = sorted((*hand, tile))
-                rest.remove(drop)
-                best = max(best, plain_value(tuple(rest), opened, available, draws - 1))
+                # plain_value of the wait these counts spell, straight from C.
+                terms = _fast.analyze_counts(held, opened, available, 0, 0, 0)
+                copies = terms[5]
+                best = max(best, race(copies / unseen, (terms[6] + SAVED * copies) / unseen, draws - 1))
             held[drop] += 1
         held[tile] -= 1
         if best > stay:
@@ -338,6 +328,38 @@ def reshape_gain(hand, opened, available, draws):
             reach += available[tile]
     survive = (1 - Q) * (1 - (row[COPIES] + reach) / unseen)
     return (1 - Q) * gain / unseen * repeat(survive, draws - 1)
+
+
+def swap_candidates(held, kinds, opened, available):
+    """For each draw, the discards (in hand order, never the draw itself) that
+    may leave a wait: a superset of those that do, checked one by one after.
+
+    With a tile the hand lacks, an honor that can only sit alone, in place of
+    the discard, the C analysis gives every draw's distance at once; a draw
+    that cannot bring this hand to one step from winning cannot make a wait
+    without the honor either. The honor itself as a draw keeps every discard.
+    """
+    pad = next((t for t in range(27, 33) if not held[t]), None)
+    if pad is None:
+        return {tile: [d for d in kinds if d != tile] for tile in range(34)}
+    found = {}
+    for drop in kinds:
+        held[drop] -= 1
+        held[pad] += 1
+        distance, improving, _ = _fast.improving(held, opened, available)
+        held[pad] -= 1
+        held[drop] += 1
+        if distance == 1:
+            tiles = improving
+        elif distance <= 0:
+            tiles = range(34)
+        else:
+            continue
+        for tile in tiles:
+            if tile != drop:
+                found.setdefault(tile, []).append(drop)
+    found[pad] = list(kinds)
+    return found
 
 
 def potential(hand, available):
