@@ -10,6 +10,7 @@ import pytest
 from mahjong_ai.domain.engine import HandState, derive_seed
 from mahjong_ai.domain.rules import WHITE, counts
 from mahjong_ai.domain.types import RoundConfig
+from mahjong_ai.sdk.shape import analyze
 
 fast = pytest.importorskip("mahjong_ai._fast", reason="C accelerator not built")
 
@@ -41,6 +42,17 @@ def load(name):
                                 module.Q_LATE, module.HUNT, module.UPGRADE, module.DRAW_RISK, module.TIE,
                                 module.LAST_WALL, style)
     return module, profile, style
+
+
+def load_complete():
+    """A fresh copy of the completed-wait specification (fp-rule-046), and its C profile."""
+    spec = importlib.util.spec_from_file_location(
+        f"race_complete_reference_{next(LOADED)}", Path(__file__).with_name("race_complete_reference.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    profile = fast.race_profile(module.Q, module.SAVED, module.ONE_STEP, module.FAR_STEP, module.Q_EARLY,
+                                module.Q_LATE, 1.0, True, module.DRAW_RISK, module.TIE, module.LAST_WALL, 0, True, True)
+    return module, profile
 
 
 def near_hand(rng, opened):
@@ -105,16 +117,17 @@ def test_baotou_fans_and_upgrade_drops_are_the_python_ones():
     for n in range(3000):
         opened = rng.choice((0, 0, 1, 2, 3))
         hand = honor_hand(rng, min(opened, 2)) if n % 5 == 0 else near_hand(rng, opened)
-        if hand is None or WHITE not in hand:
+        if hand is None:
             continue
         held = list(counts(hand))
-        if ref.is_baotou(hand, opened):
+        if WHITE in hand and ref.is_baotou(hand, opened):
             baotou += 1
             available = availability(rng, hand)
             chain, piao = rng.choice((0, 1, 2)), rng.choice((0, 1, 2))
             packed = ref.baotou_draw_fans(hand, opened, available, chain, piao)
             assert fast.race_baotou_fans(held, opened, available, chain, piao) == (packed >> 32, packed & 0xFFFFFFFF)
-        for tile in range(34):
+        # Without a white, the completed wait asks only about drawing one.
+        for tile in range(34) if WHITE in hand else (WHITE,):
             if held[tile] >= 4:
                 continue
             brute = 0
@@ -126,6 +139,33 @@ def test_baotou_fans_and_upgrade_drops_are_the_python_ones():
                     brute |= bool(fast.baotou(after, opened)) << drop
             assert fast.race_upgrade_drops(held, opened, tile) == brute, (hand, opened, tile)
     assert baotou > 50
+
+
+def test_completed_wait_values_are_the_python_ones():
+    ref, profile = load_complete()
+    rng = random.Random(13)
+    checked = 0
+    while checked < 400:
+        opened = rng.choice((0, 0, 0, 1, 1, 2))
+        hand = near_hand(rng, opened)
+        if hand is None:
+            continue
+        available = availability(rng, hand)
+        draws = rng.randrange(1, 17)
+        chain, piao = rng.choice((0, 0, 1, 2)), rng.choice((0, 0, 1))
+        options, speed = rng.random() < 0.5, rng.choice((1.0, rng.randint(2, 40) / 20))
+        assert fast.race_waiting(hand, opened, available, chain, piao, draws, profile, analyze, options, speed) \
+            == ref.waiting_value(hand, opened, available, chain, piao, draws, options, speed), (hand, opened, draws)
+        assert fast.race_reshaped(hand, opened, available, draws, profile, analyze, options, speed) \
+            == ref.reshaped_value(hand, opened, available, draws, options, speed), (hand, opened, draws)
+        checked += 1
+
+
+def test_sums_over_a_set_add_in_pythons_order():
+    rng = random.Random(5)
+    for _ in range(20000):
+        items = sorted(rng.sample(range(34), rng.randint(1, 34)))
+        assert fast.race_set_order(items) == list(set(items))
 
 
 @pytest.mark.parametrize("name", ["race-classic", "kong-eager", "peng-speed", "chi-speed", "closed-early",

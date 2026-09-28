@@ -1259,6 +1259,11 @@ fail:
 typedef struct {
     double q, saved, one_step, far_step, q_early, q_late, hunt, draw_risk, tie;
     int upgrade, last_wall, style;
+    /* complete: a wait without a white also counts drawing a white that a
+     * discard turns into baotou, and the kong a concealed triplet's last copy
+     * gives (fp-rule-043); guard: no draws left counts no draws (repeat of 0
+     * or fewer is 0, as those strategies write it). */
+    int complete, guard;
 } race_profile;
 
 typedef struct {
@@ -1273,6 +1278,8 @@ static race_slot race_cache[1 << RACE_CACHE_BITS];
 typedef struct {
     const race_profile *p;
     int profile, opened, unseen, size, keyed;
+    double speed;  /* scales the opponents' chance to win first; speed_key * 20 of it, for the memo */
+    int speed_key;
     int avail[NTILES];
     uint64_t a0, a1; /* the availability's part of the memo key */
     PyObject *available, *fallback;
@@ -1288,8 +1295,63 @@ static double race_hazard(const race_profile *p, int draws) {
     return y < p->q_late ? y : p->q_late;        /* min(Q_LATE, y) */
 }
 
-static double race_race(const race_profile *p, double chance, double gain, int draws) {
-    return gain * race_repeat((1 - chance) * (1 - race_hazard(p, draws)), draws);
+/* race_repeat under the profile's guard. */
+static double race_repeat_x(const race_ctx *x, double stay, int draws) {
+    if (x->p->guard && draws <= 0) return 0.0;
+    return race_repeat(stay, draws);
+}
+
+/* tenpai_hazard(draws, speed): the curve, then the speed. */
+static double race_hazard_x(const race_ctx *x, int draws) {
+    return race_hazard(x->p, draws) * x->speed;
+}
+
+static double race_race(const race_ctx *x, double chance, double gain, int draws) {
+    return gain * race_repeat_x(x, (1 - chance) * (1 - race_hazard_x(x, draws)), draws);
+}
+
+/* The order Python iterates a set of small ints built by adding them in the
+ * given order (CPython's open addressing: 8 slots, grown when five in eight
+ * are used, to the power of two above four times the count; a probe checks
+ * the slot and the nine after it when they fit, then moves to i * 5 + 1 +
+ * perturb). A sum over set(hand) adds in this order, and floats added in
+ * another order may round differently. */
+static void py_set_insert(int *table, int mask, int key) {
+    size_t perturb = (size_t)key, i = (size_t)key & (size_t)mask;
+    for (;;) {
+        int probes = i + 9 <= (size_t)mask ? 9 : 0;
+        size_t j = i;
+        do {
+            if (table[j] < 0) {
+                table[j] = key;
+                return;
+            }
+            j++;
+        } while (probes--);
+        perturb >>= 5;
+        i = (i * 5 + 1 + perturb) & (size_t)mask;
+    }
+}
+
+static int py_set_order(const int *items, int n, int *out) {
+    int table[128], old[128], mask = 7, used = 0;
+    for (int i = 0; i < 128; i++) table[i] = -1;
+    for (int k = 0; k < n; k++) {
+        py_set_insert(table, mask, items[k]);
+        if (++used * 5 >= mask * 3) {
+            int size = 8, old_mask = mask;
+            while (size <= used * 4) size <<= 1;
+            memcpy(old, table, sizeof(old));
+            mask = size - 1;
+            for (int i = 0; i < 128; i++) table[i] = -1;
+            for (int i = 0; i <= old_mask; i++)
+                if (old[i] >= 0) py_set_insert(table, mask, old[i]);
+        }
+    }
+    int m = 0;
+    for (int i = 0; i <= mask; i++)
+        if (table[i] >= 0) out[m++] = table[i];
+    return m;
 }
 
 /* fan_value of each draw on a baotou wait, summed as analyze_values does:
@@ -1894,8 +1956,10 @@ static void race_analyze_values(const int *counts, const int *avail, int open_me
     memcpy(out->fans, fans, n_wins * sizeof(long));
 }
 
-/* The memo key: 3 bits per count and per available copy, and the rest. */
-static int race_key(const race_ctx *x, const int *c, int kind, int chain, int piao, int draws, uint64_t *k) {
+/* The memo key: 3 bits per count and per available copy, and the rest.
+ * kind: 0 waiting, 1 reshaped, 2 reshape gain. */
+static int race_key(const race_ctx *x, const int *c, int kind, int chain, int piao, int draws, int options,
+                    uint64_t *k) {
     if (!x->keyed || chain < 0 || chain > 255 || piao < 0 || piao > 255 || draws < -64 || draws > 63) return 0;
     uint64_t k0 = 0, k1 = 0;
     for (int t = 0; t < NTILES; t++) {
@@ -1903,12 +1967,13 @@ static int race_key(const race_ctx *x, const int *c, int kind, int chain, int pi
         if (t < 21) k0 |= (uint64_t)c[t] << (3 * t);
         else k1 |= (uint64_t)c[t] << (3 * (t - 21));
     }
-    k1 |= (uint64_t)x->opened << 39 | (uint64_t)kind << 42 | (uint64_t)(draws + 64) << 43
+    k1 |= (uint64_t)x->opened << 39 | (uint64_t)(kind & 1) << 42 | (uint64_t)(draws + 64) << 43
         | (uint64_t)x->profile << 50 | 1ULL << 63;
     k[0] = k0;
     k[1] = k1;
     k[2] = x->a0;
-    k[3] = x->a1 | (uint64_t)chain << 39 | (uint64_t)piao << 47;
+    k[3] = x->a1 | (uint64_t)chain << 39 | (uint64_t)piao << 47 | (uint64_t)x->speed_key << 55
+         | (uint64_t)(options != 0) << 61 | (uint64_t)(kind >> 1) << 62;
     return 1;
 }
 
@@ -1920,13 +1985,15 @@ static race_slot *race_slot_of(const uint64_t *k) {
 }
 
 /* sdk.shape.analyze for a hand the extension counts as complete: the caller's function. */
-static int race_fallback(race_ctx *x, const int *c, int chain, int piao, analysis_row *row) {
-    PyObject *hand = PyTuple_New(x->size);
+static int race_fallback(race_ctx *x, const int *c, int opened, int chain, int piao, analysis_row *row) {
+    int size = 0;
+    for (int t = 0; t < NTILES; t++) size += c[t];
+    PyObject *hand = PyTuple_New(size);
     if (!hand) return -1;
     int n = 0;
     for (int t = 0; t < NTILES; t++)
         for (int i = 0; i < c[t]; i++) PyTuple_SET_ITEM(hand, n++, PyLong_FromLong(t));
-    PyObject *result = PyObject_CallFunction(x->fallback, "OiOii", hand, x->opened, x->available, chain, piao);
+    PyObject *result = PyObject_CallFunction(x->fallback, "OiOii", hand, opened, x->available, chain, piao);
     Py_DECREF(hand);
     if (!result) return -1;
     int ok = 0;
@@ -1969,15 +2036,100 @@ static int race_fallback(race_ctx *x, const int *c, int chain, int piao, analysi
     return ok ? 0 : -1;
 }
 
-static int race_analysis(race_ctx *x, const int *c, int chain, int piao, analysis_row *row) {
-    race_analyze_values(c, x->avail, x->opened, chain, piao, row);
-    return row->distance < 0 ? race_fallback(x, c, chain, piao, row) : 0;
+static int race_analysis_at(race_ctx *x, const int *c, int opened, int chain, int piao, analysis_row *row) {
+    race_analyze_values(c, x->avail, opened, chain, piao, row);
+    return row->distance < 0 ? race_fallback(x, c, opened, chain, piao, row) : 0;
 }
 
-/* waiting_value(hand, opened, available, chain, piao, draws) */
-static int race_waiting(race_ctx *x, int *c, int chain, int piao, int draws, double *out) {
+static int race_analysis(race_ctx *x, const int *c, int chain, int piao, analysis_row *row) {
+    return race_analysis_at(x, c, x->opened, chain, piao, row);
+}
+
+/* kong_draw_value: after a concealed kong of this tile (three held, the
+ * fourth drawn), the replacement draw wins at double fan (chain 1). */
+static int race_kong_draw(race_ctx *x, int *c, int tile, double *out) {
+    analysis_row row;
+    c[tile] -= 3;
+    int rc = race_analysis_at(x, c, x->opened + 1, 1, 0, &row);
+    c[tile] += 3;
+    if (rc < 0) return -1;
+    *out = row.distance > 0 ? 0.0 : ((double)row.value + x->p->saved * (double)row.copies) / x->unseen;
+    return 0;
+}
+
+static int race_waiting(race_ctx *x, int *c, int chain, int piao, int draws, int options, double *out);
+
+/* reshape_gain(hand, draws): the trade option of reshaped_value for a wait
+ * one step ahead, pricing every wait there as a plain race. */
+static int race_reshape_gain(race_ctx *x, int *c, int draws, double *out) {
+    if (draws < 2) {
+        *out = 0.0;
+        return 0;
+    }
     uint64_t key[4];
-    int keyed = race_key(x, c, 0, chain, piao, draws, key);
+    int keyed = race_key(x, c, 2, 0, 0, draws, 0, key);
+    race_slot *slot = keyed ? race_slot_of(key) : NULL;
+    if (slot && !memcmp(slot->k, key, sizeof(key))) {
+        *out = slot->value;
+        return 0;
+    }
+    const race_profile *p = x->p;
+    const int *avail = x->avail;
+    int opened = x->opened, kinds[NTILES], n_kinds = 0;
+    double unseen = x->unseen, q = p->q * x->speed;
+    analysis_row row, r;
+    if (race_analysis(x, c, 0, 0, &row) < 0) return -1;
+    int wins[NTILES] = {0};
+    for (int i = 0; i < row.n_wins; i++) wins[row.wins[i]] = 1;
+    for (int t = 0; t < NTILES; t++)
+        if (c[t]) kinds[n_kinds++] = t;
+    double stay = race_race(x, (double)row.copies / unseen, ((double)row.value + p->saved * (double)row.copies) / unseen,
+                            draws - 1);
+    uint64_t k0, k1;
+    shanten_key(c, opened, &k0, &k1);
+    double gain = 0.0;
+    long reach = 0;
+    for (int tile = 0; tile < NTILES; tile++) {
+        if (wins[tile] || avail[tile] <= 0 || c[tile] >= 4) continue;
+        uint64_t d0, d1;
+        shanten_key_draw(k0, k1, tile, &d0, &d1);
+        c[tile]++;
+        double best = stay;
+        for (int k = 0; k < n_kinds; k++) {
+            int drop = kinds[k];
+            if (drop == tile) continue;
+            c[drop]--;
+            uint64_t r0 = drop < 21 ? d0 - (1ULL << (3 * drop)) : d0;
+            uint64_t r1 = drop < 21 ? d1 : d1 - (1ULL << (3 * (drop - 21)));
+            if (shanten_keyed(r0, r1, c, opened) <= 0) {
+                /* The C analysis as it is, even past the winning boundary. */
+                race_analyze_values(c, avail, opened, 0, 0, &r);
+                double v = race_race(x, (double)r.copies / unseen,
+                                     ((double)r.value + p->saved * (double)r.copies) / unseen, draws - 1);
+                if (v > best) best = v;
+            }
+            c[drop]++;
+        }
+        c[tile]--;
+        if (best > stay) {
+            gain += (double)avail[tile] * (best - stay);
+            reach += avail[tile];
+        }
+    }
+    double survive = (1 - q) * (1 - (double)(row.copies + reach) / unseen);
+    double result = (1 - q) * gain / unseen * race_repeat_x(x, survive, draws - 1);
+    if (slot) {
+        memcpy(slot->k, key, sizeof(key));
+        slot->value = result;
+    }
+    *out = result;
+    return 0;
+}
+
+/* waiting_value(hand, opened, available, chain, piao, draws, options) at the context's speed */
+static int race_waiting(race_ctx *x, int *c, int chain, int piao, int draws, int options, double *out) {
+    uint64_t key[4];
+    int keyed = race_key(x, c, 0, chain, piao, draws, options, key);
     race_slot *slot = keyed ? race_slot_of(key) : NULL;
     if (slot && !memcmp(slot->k, key, sizeof(key))) {
         *out = slot->value;
@@ -1986,7 +2138,7 @@ static int race_waiting(race_ctx *x, int *c, int chain, int piao, int draws, dou
     const race_profile *p = x->p;
     const int *avail = x->avail;
     int opened = x->opened;
-    double unseen = x->unseen, result;
+    double unseen = x->unseen, result, q = p->q * x->speed;
     uint64_t k0, k1;
     shanten_key(c, opened, &k0, &k1);
     analysis_row row;
@@ -1995,14 +2147,62 @@ static int race_waiting(race_ctx *x, int *c, int chain, int piao, int draws, dou
          * and fan-weighted copies over fan_value. */
         long copies, fan;
         baotou_fans(c, avail, opened, chain, piao, &copies, &fan);
-        result = race_race(p, (double)copies / unseen, ((double)fan + p->saved * (double)copies) / unseen, draws);
+        result = race_race(x, (double)copies / unseen, ((double)fan + p->saved * (double)copies) / unseen, draws);
     } else {
         if (race_analysis(x, c, chain, piao, &row) < 0) return -1;
         if (row.distance <= 0) {
             long copies = row.copies;
             double gain = (double)row.value + p->saved * (double)copies;
-            if (!c[WHITE] || !p->upgrade) {
-                result = race_race(p, (double)copies / unseen, gain / unseen, draws);
+            if (!c[WHITE] && p->complete) {
+                /* Drawing a white wins, or a discard may turn the wait into
+                 * baotou; drawing the last copy of a concealed triplet gives
+                 * a kong and at once an extra draw, which wins at double fan. */
+                int has_fan[NTILES] = {0};
+                long fan_white = 0;
+                for (int i = 0; i < row.n_wins; i++) {
+                    has_fan[row.wins[i]] = 1;
+                    if (row.wins[i] == WHITE) fan_white = row.fans[i];
+                }
+                double extra = 0.0;
+                if (avail[WHITE] > 0 && has_fan[WHITE]) {
+                    upgrade_ctx up;
+                    upgrade_prepare(c, opened, k0, k1, &up);
+                    uint64_t drops = upgrade_drops_of(&up, c, WHITE);
+                    double best = 0.0;
+                    int any = 0;
+                    c[WHITE]++;
+                    for (int drop = 0; drops; drop++, drops >>= 1) {
+                        if (!(drops & 1)) continue;
+                        c[drop]--;
+                        double value;
+                        int rc = race_waiting(x, c, 0, 0, draws - 1, 0, &value);
+                        c[drop]++;
+                        if (rc < 0) {
+                            c[WHITE]--;
+                            return -1;
+                        }
+                        if (!any || value > best) best = value;
+                        any = 1;
+                    }
+                    c[WHITE]--;
+                    double v = (1 - q) * best - (double)fan_white - p->saved;
+                    extra += (double)avail[WHITE] * (v > 0.0 ? v : 0.0);
+                }
+                int held[NTILES], order[NTILES], n = 0;
+                for (int t = 0; t < NTILES; t++)
+                    if (c[t]) held[n++] = t;
+                n = py_set_order(held, n, order);
+                for (int i = 0; i < n; i++) {
+                    int tile = order[i];
+                    if (c[tile] == 3 && avail[tile] > 0 && !has_fan[tile]) {
+                        double kong;
+                        if (race_kong_draw(x, c, tile, &kong) < 0) return -1;
+                        extra += (double)avail[tile] * kong;
+                    }
+                }
+                result = race_race(x, (double)copies / unseen, (gain + extra) / unseen, draws);
+            } else if (!c[WHITE] || !p->upgrade) {
+                result = race_race(x, (double)copies / unseen, gain / unseen, draws);
             } else {
                 /* A draw that frees a white lets a discard turn the wait into baotou. */
                 long fan_of[NTILES];
@@ -2024,7 +2224,7 @@ static int race_waiting(race_ctx *x, int *c, int chain, int piao, int draws, dou
                         if (!(drops & 1)) continue;
                         c[drop]--;
                         double value;
-                        if (race_waiting(x, c, 0, 0, draws - 1, &value) < 0) {
+                        if (race_waiting(x, c, 0, 0, draws - 1, 0, &value) < 0) {
                             c[drop]++;
                             c[tile]--;
                             return -1;
@@ -2034,15 +2234,15 @@ static int race_waiting(race_ctx *x, int *c, int chain, int piao, int draws, dou
                     }
                     c[tile]--;
                     if (has_fan[tile]) {
-                        double win = (double)fan_of[tile] + p->saved, hunt = (1 - p->q) * best * p->hunt;
+                        double win = (double)fan_of[tile] + p->saved, hunt = (1 - q) * best * p->hunt;
                         total += (double)avail[tile] * (hunt > win ? hunt : win);
                     } else if (best != 0.0) {
-                        total += (double)avail[tile] * (1 - p->q) * best * p->hunt;
+                        total += (double)avail[tile] * (1 - q) * best * p->hunt;
                         reach += avail[tile];
                     }
                 }
-                double stay = (1 - race_hazard(p, draws)) * (1 - (double)(copies + reach) / unseen);
-                result = total / unseen * race_repeat(stay, draws);
+                double stay = (1 - race_hazard_x(x, draws)) * (1 - (double)(copies + reach) / unseen);
+                result = total / unseen * race_repeat_x(x, stay, draws);
             }
         } else {
             double u = (double)row.ukeire / unseen;
@@ -2052,6 +2252,7 @@ static int race_waiting(race_ctx *x, int *c, int chain, int piao, int draws, dou
                     int tile = row.improving[i];
                     c[tile]++;
                     double best = 0.0;
+                    int target = -1; /* the discard leaving the best wait */
                     if (draws > 1) {
                         uint64_t d0, d1;
                         shanten_key_draw(k0, k1, tile, &d0, &d1);
@@ -2062,23 +2263,37 @@ static int race_waiting(race_ctx *x, int *c, int chain, int piao, int draws, dou
                             uint64_t r1 = drop < 21 ? d1 : d1 - (1ULL << (3 * (drop - 21)));
                             if (shanten_keyed(r0, r1, c, opened) <= 0) {
                                 double value;
-                                if (race_waiting(x, c, 0, 0, draws - 1, &value) < 0) {
+                                if (race_waiting(x, c, 0, 0, draws - 1, 0, &value) < 0) {
                                     c[drop]++;
                                     c[tile]--;
                                     return -1;
                                 }
-                                if (value > best) best = value;
+                                if (value > best) {
+                                    best = value;
+                                    target = drop;
+                                }
                             }
                             c[drop]++;
                         }
                     }
+                    if (options && target >= 0 && chain == 0) {
+                        double g;
+                        c[target]--;
+                        int rc = race_reshape_gain(x, c, draws - 1, &g);
+                        c[target]++;
+                        if (rc < 0) {
+                            c[tile]--;
+                            return -1;
+                        }
+                        best += g;
+                    }
                     c[tile]--;
                     weighted += (double)avail[tile] * best;
                 }
-                double stay = (1 - u) * (1 - p->q);
-                result = (1 - p->q) * (weighted / unseen) * race_repeat(stay, draws - 1);
+                double stay = (1 - u) * (1 - q);
+                result = (1 - q) * (weighted / unseen) * race_repeat_x(x, stay, draws - 1);
             } else {
-                double step = (1 - p->q) * u * race_repeat((1 - u) * (1 - p->q), draws - row.distance);
+                double step = (1 - q) * u * race_repeat_x(x, (1 - u) * (1 - q), draws - row.distance);
                 result = step * p->one_step * pow(p->far_step, (double)(row.distance - 2));
             }
         }
@@ -2093,9 +2308,9 @@ static int race_waiting(race_ctx *x, int *c, int chain, int piao, int draws, dou
 
 /* reshaped_value(hand, opened, available, draws): a waiting hand with the
  * option to trade a non-winning draw for a better wait. */
-static int race_reshaped(race_ctx *x, int *c, int draws, double *out) {
+static int race_reshaped(race_ctx *x, int *c, int draws, int options, double *out) {
     uint64_t key[4];
-    int keyed = race_key(x, c, 1, 0, 0, draws, key);
+    int keyed = race_key(x, c, 1, 0, 0, draws, options, key);
     race_slot *slot = keyed ? race_slot_of(key) : NULL;
     if (slot && !memcmp(slot->k, key, sizeof(key))) {
         *out = slot->value;
@@ -2104,12 +2319,17 @@ static int race_reshaped(race_ctx *x, int *c, int draws, double *out) {
     const race_profile *p = x->p;
     const int *avail = x->avail;
     int opened = x->opened;
-    double unseen = x->unseen, value, result;
-    if (race_waiting(x, c, 0, 0, draws, &value) < 0) return -1;
+    double unseen = x->unseen, value, result, q = p->q * x->speed;
     uint64_t k0, k1;
     shanten_key(c, opened, &k0, &k1);
-    /* sdk.shape.shanten is positive exactly when the raw distance is. */
-    if (draws < 2 || shanten_keyed(k0, k1, c, opened) > 0) {
+    /* sdk.shape.shanten is positive exactly when the raw distance is, and
+     * then equal to it: one step away, the trade option there is wanted. */
+    int distance = shanten_keyed(k0, k1, c, opened);
+    if (distance > 0) {
+        if (race_waiting(x, c, 0, 0, draws, options && distance == 1, &result) < 0) return -1;
+    } else if (race_waiting(x, c, 0, 0, draws, 0, &value) < 0) {
+        return -1;
+    } else if (draws < 2) {
         result = value;
     } else {
         analysis_row row;
@@ -2117,7 +2337,7 @@ static int race_reshaped(race_ctx *x, int *c, int draws, double *out) {
         int wins[NTILES] = {0};
         for (int i = 0; i < row.n_wins; i++) wins[row.wins[i]] = 1;
         double stay;
-        if (race_waiting(x, c, 0, 0, draws - 1, &stay) < 0) return -1;
+        if (race_waiting(x, c, 0, 0, draws - 1, 0, &stay) < 0) return -1;
         double gain = 0.0;
         long reach = 0;
         for (int tile = 0; tile < NTILES; tile++) {
@@ -2133,7 +2353,7 @@ static int race_reshaped(race_ctx *x, int *c, int draws, double *out) {
                 uint64_t r1 = drop < 21 ? d1 : d1 - (1ULL << (3 * (drop - 21)));
                 if (shanten_keyed(r0, r1, c, opened) <= 0) {
                     double v;
-                    if (race_waiting(x, c, 0, 0, draws - 1, &v) < 0) {
+                    if (race_waiting(x, c, 0, 0, draws - 1, 0, &v) < 0) {
                         c[drop]++;
                         c[tile]--;
                         return -1;
@@ -2148,8 +2368,8 @@ static int race_reshaped(race_ctx *x, int *c, int draws, double *out) {
                 reach += avail[tile];
             }
         }
-        double survive = (1 - p->q) * (1 - (double)(row.copies + reach) / unseen);
-        result = value + (1 - p->q) * gain / unseen * race_repeat(survive, draws - 1);
+        double survive = (1 - q) * (1 - (double)(row.copies + reach) / unseen);
+        result = value + (1 - q) * gain / unseen * race_repeat_x(x, survive, draws - 1);
     }
     if (slot) {
         memcpy(slot->k, key, sizeof(key));
@@ -2174,10 +2394,22 @@ static int race_bind(race_ctx *x, PyObject *available, int profile, PyObject *fa
     }
     x->unseen = unseen < 1 ? 1 : (int)unseen;
     x->p = &race_profiles[profile];
+    x->speed = 1.0;
+    x->speed_key = 20;
     x->profile = profile;
     x->available = available;
     x->fallback = fallback;
     return 0;
+}
+
+/* The opponents' speed of a context: its memo key when speed is n / 20 for
+ * some n in 1..63 (as a strategy's rounding to steps of 0.05 gives), else
+ * the context keeps no memo. */
+static void race_speed(race_ctx *x, double speed) {
+    double n = floor(speed * 20 + 0.5);
+    x->speed = speed;
+    if (n >= 1 && n <= 63 && n / 20 == speed) x->speed_key = (int)n;
+    else x->keyed = 0;
 }
 
 /* Parse (hand, opened, available, profile, fallback) into a context and the hand's counts. */
@@ -2246,9 +2478,9 @@ static PyObject *py_race_potential(PyObject *self, PyObject *args) {
 static PyObject *py_race_profile(PyObject *self, PyObject *args) {
     race_profile p;
     memset(&p, 0, sizeof(p));  /* padding too: profiles are compared with memcmp */
-    if (!PyArg_ParseTuple(args, "dddddddpddii", &p.q, &p.saved, &p.one_step, &p.far_step,
+    if (!PyArg_ParseTuple(args, "dddddddpddii|pp", &p.q, &p.saved, &p.one_step, &p.far_step,
                           &p.q_early, &p.q_late, &p.hunt, &p.upgrade, &p.draw_risk, &p.tie,
-                          &p.last_wall, &p.style)) return NULL;
+                          &p.last_wall, &p.style, &p.complete, &p.guard)) return NULL;
     if (p.style < 0 || p.style > 5) {
         PyErr_SetString(PyExc_ValueError, "unknown race style");
         return NULL;
@@ -2268,11 +2500,14 @@ static PyObject *py_race_waiting(PyObject *self, PyObject *args) {
     int opened, chain, piao, draws, profile, c[NTILES];
     race_ctx x;
     memset(&x, 0, sizeof(x));
-    if (!PyArg_ParseTuple(args, "OiOiiiiO", &hand, &opened, &available, &chain, &piao, &draws,
-                          &profile, &fallback)) return NULL;
+    int options = 0;
+    double speed = 1.0;
+    if (!PyArg_ParseTuple(args, "OiOiiiiO|pd", &hand, &opened, &available, &chain, &piao, &draws,
+                          &profile, &fallback, &options, &speed)) return NULL;
     if (race_setup(&x, c, hand, opened, available, profile, fallback) < 0) return NULL;
+    race_speed(&x, speed);
     double value;
-    if (race_waiting(&x, c, chain, piao, draws, &value) < 0) return NULL;
+    if (race_waiting(&x, c, chain, piao, draws, options, &value) < 0) return NULL;
     return PyFloat_FromDouble(value);
 }
 
@@ -2281,11 +2516,15 @@ static PyObject *py_race_reshaped(PyObject *self, PyObject *args) {
     int opened, draws, profile, c[NTILES];
     race_ctx x;
     memset(&x, 0, sizeof(x));
-    if (!PyArg_ParseTuple(args, "OiOiiO", &hand, &opened, &available, &draws, &profile, &fallback))
+    int options = 0;
+    double speed = 1.0;
+    if (!PyArg_ParseTuple(args, "OiOiiO|pd", &hand, &opened, &available, &draws, &profile, &fallback,
+                          &options, &speed))
         return NULL;
     if (race_setup(&x, c, hand, opened, available, profile, fallback) < 0) return NULL;
+    race_speed(&x, speed);
     double value;
-    if (race_reshaped(&x, c, draws, &value) < 0) return NULL;
+    if (race_reshaped(&x, c, draws, options, &value) < 0) return NULL;
     return PyFloat_FromDouble(value);
 }
 
@@ -2407,7 +2646,7 @@ static void ctx_at(race_act_ctx *A, int opened) {
 
 static int act_waiting(race_act_ctx *A, int *c, int opened, int chain, int piao, int draws, double *out) {
     ctx_at(A, opened);
-    return race_waiting(&A->x, c, chain, piao, draws, out);
+    return race_waiting(&A->x, c, chain, piao, draws, 0, out);
 }
 
 static long potential_counts(const int *c, const int *avail) {
@@ -2575,7 +2814,7 @@ static int act_value(race_act_ctx *A, const race_action *a, double *out) {
             rc = act_waiting(A, c, opened, 0, 0, draws, &v);
         } else {
             ctx_at(A, opened);
-            rc = race_reshaped(&A->x, c, draws, &v);
+            rc = race_reshaped(&A->x, c, draws, 0, &v);
         }
         long pot = potential_counts(c, A->x.avail);
         c[a->tile]++;
@@ -2875,6 +3114,23 @@ done:
     return result;
 }
 
+
+/* race_set_order(items): py_set_order, for the tests to check it against Python's sets. */
+static PyObject *py_race_set_order(PyObject *self, PyObject *args) {
+    PyObject *seq;
+    if (!PyArg_ParseTuple(args, "O", &seq)) return NULL;
+    PyObject *fast = PySequence_Fast(seq, "sequence");
+    if (!fast) return NULL;
+    int n = (int)PySequence_Fast_GET_SIZE(fast), items[64], out[64];
+    if (n > 64) n = 64;
+    for (int i = 0; i < n; i++) items[i] = (int)PyLong_AsLong(PySequence_Fast_GET_ITEM(fast, i));
+    Py_DECREF(fast);
+    int m = py_set_order(items, n, out);
+    PyObject *r = PyList_New(m);
+    for (int i = 0; i < m; i++) PyList_SET_ITEM(r, i, PyLong_FromLong(out[i]));
+    return r;
+}
+
 static PyMethodDef fast_methods[] = {
     {"encode_public_planes", py_encode_public_planes, METH_VARARGS, "Public count feature planes."},
     {"encode_lookahead", py_encode_lookahead, METH_VARARGS, "Public lookahead feature planes."},
@@ -2914,6 +3170,8 @@ static PyMethodDef fast_methods[] = {
      "potential(hand, available): live tiles pairing with or within two of each tile."},
     {"race_act", py_race_act, METH_VARARGS,
      "race_act(obs, profile, analyze): index of the race strategy's action in obs.legal_actions."},
+    {"race_set_order", py_race_set_order, METH_VARARGS,
+     "The order Python iterates a set of small ints added in the given order."},
     {NULL, NULL, 0, NULL},
 };
 
