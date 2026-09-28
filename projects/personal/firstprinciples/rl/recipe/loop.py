@@ -28,7 +28,7 @@ from guided.collection_session import InferenceSession
 
 from .batch import actor_args, make_batch, masked_log_probs, resident_rows
 from .symmetry import SuitPermuter
-from .targets import advantages
+from .targets import advantages, playout_advantages
 
 CONFIG = json.loads(Path(__file__).with_name("config.json").read_text())
 
@@ -151,6 +151,8 @@ def train(ctx):
         # The strongest rule on the fixed pool labels the distillation.
         "teacher": cfg["teacher"],
     }
+    # Policy-gradient rollouts ask for the greedy playout of every deviation.
+    pg_cfg = dict(collect_cfg, playout_baseline=bool(cfg.get("playout_baseline")))
     if cfg["teacher"] not in ctx.teachers:
         raise ValueError(f"teacher {cfg['teacher']} is not in ctx.teachers: {ctx.teachers}")
     # The smoke run (about a minute) must still exercise one whole step.
@@ -176,7 +178,8 @@ def train(ctx):
             while len(rows) < target_rows and hands() and ctx.time_left() > reserve:
                 iteration += 1
                 got, _, _ = ctx.collect(
-                    actor, collect_cfg, samples=min(40000, target_rows), iteration=iteration,
+                    actor, collect_cfg if distilling else pg_cfg, samples=min(40000, target_rows),
+                    iteration=iteration,
                     labels=distilling, inference_session=session,
                 )
                 rows += got
@@ -225,9 +228,12 @@ def train(ctx):
             batch_source = (resident_rows(rows, ctx.device, ctx.resources["gpu_limit_bytes"])
                             if cfg.get("resident_rows", False) else None)
             rollouts += 1
-            weights, stats = advantages(
-                rows, cfg, rng, ctx.device, ctx.seed + 7919 * rollouts, batch_source=batch_source,
-            )
+            if cfg.get("playout_baseline"):
+                weights, stats = playout_advantages(rows, cfg)
+            else:
+                weights, stats = advantages(
+                    rows, cfg, rng, ctx.device, ctx.seed + 7919 * rollouts, batch_source=batch_source,
+                )
             fitted += time.time() - started
             params, grad = gradient(
                 actor, rows, weights, microbatch, ctx.device, batch_source=batch_source,
