@@ -58,7 +58,7 @@ def race(p, e, draws=LONG):
     return e * repeat((1 - p) * (1 - tenpai_hazard(draws)), draws)
 
 
-@lru_cache(maxsize=200000)
+@lru_cache(maxsize=2000)
 def waiting_value(hand, opened, available, chain=0, piao=0, draws=LONG):
     """Expected fan of a 13-tile hand just before my next draw."""
     unseen = max(1, sum(available))
@@ -66,14 +66,14 @@ def waiting_value(hand, opened, available, chain=0, piao=0, draws=LONG):
         copies, fan = baotou_draw_fans(hand, opened, available, chain, piao)
         return race(copies / unseen, (fan + SAVED * copies) / unseen, draws)
     row = examined(hand, opened, available, chain, piao)
-    if row["shanten"] <= 0:
-        copies = row["winning_copies"]
-        gain = row["fan_value"] + SAVED * copies
+    if row[SHANTEN] <= 0:
+        copies = row[COPIES]
+        gain = row[FAN_VALUE] + SAVED * copies
         if WHITE not in hand:
             return race(copies / unseen, gain / unseen, draws)
         # A draw that frees a white lets a discard turn the wait into baotou,
         # which may beat winning on it at once.
-        fans = row["fans"]
+        fans = dict(row[FANS])
         gain, reach = 0.0, 0
         outs = baotou_draws(hand, opened)
         held = list(counts(hand))
@@ -104,24 +104,30 @@ def waiting_value(hand, opened, available, chain=0, piao=0, draws=LONG):
                 reach += available[tile]
         stay = (1 - tenpai_hazard(draws)) * (1 - (copies + reach) / unseen)
         return gain / unseen * repeat(stay, draws)
-    u = row["ukeire"] / unseen
-    if row["shanten"] == 1:
+    u = row[UKEIRE] / unseen
+    if row[SHANTEN] == 1:
         weighted = 0.0
-        for tile in row["improving"]:
-            drawn = list(hand)
-            drawn.append(tile)
+        held = list(counts(hand))
+        kinds = [t for t in range(34) if held[t]]
+        for tile in row[IMPROVING]:
+            held[tile] += 1
             best = 0.0
-            for drop in set(drawn):
-                rest = list(drawn)
-                rest.remove(drop)
-                rest = tuple(sorted(rest))
-                best = max(best, tenpai_value(rest, opened, available, draws - 1))
+            for drop in kinds:
+                held[drop] -= 1
+                # Only a discard that leaves a wait has a value; discarding
+                # the drawn tile goes back to this hand, one step away.
+                if _fast.shanten_raw(held, opened) <= 0:
+                    rest = sorted((*hand, tile))
+                    rest.remove(drop)
+                    best = max(best, tenpai_value(tuple(rest), opened, available, draws - 1))
+                held[drop] += 1
+            held[tile] -= 1
             weighted += available[tile] * best
         # Improving draws move to a waiting hand; the others are thrown back.
         stay = (1 - u) * (1 - Q)
         return (1 - Q) * (weighted / unseen) * repeat(stay, draws - 1)
-    step = (1 - Q) * u * repeat((1 - u) * (1 - Q), draws - row["shanten"])
-    return step * ONE_STEP * FAR_STEP ** (row["shanten"] - 2)
+    step = (1 - Q) * u * repeat((1 - u) * (1 - Q), draws - row[SHANTEN])
+    return step * ONE_STEP * FAR_STEP ** (row[SHANTEN] - 2)
 
 
 # Tile weights whose sums spell out, bit by bit, which draws allow a baotou
@@ -130,55 +136,79 @@ LOW_BITS = tuple(1 << t if t < 17 else 0 for t in range(34))
 HIGH_BITS = tuple(1 << (t - 17) if t >= 17 else 0 for t in range(34))
 
 
-@lru_cache(maxsize=200000)
+@lru_cache(maxsize=2000)
 def baotou_draws(hand, opened):
     """The tiles whose draw lets a discard leave baotou."""
     held = counts(hand)
     low = _fast.baotou_outs(held, opened, LOW_BITS)
     high = _fast.baotou_outs(held, opened, HIGH_BITS) << 17
-    return frozenset(t for t in range(34) if (low | high) >> t & 1)
+    return tuple(t for t in range(34) if (low | high) >> t & 1)
 
 
-@lru_cache(maxsize=200000)
-def baotou_draw_fans(hand, opened, available, chain, piao):
-    """Copies and fan-weighted copies of the draws a baotou wait wins on."""
+@lru_cache(maxsize=2000)
+def baotou_fans(hand, opened, chain, piao):
+    """The fan a baotou wait scores on each tile it can draw (0 if it cannot)."""
     held = list(counts(hand))
-    copies = fan = 0
+    fans = []
     for tile in range(34):
-        if available[tile] <= 0 or held[tile] >= 4:
+        if held[tile] >= 4:
+            fans.append(0)
             continue
         held[tile] += 1
-        value = _fast.fan_value(held, tile, opened, chain, piao, False, False)
+        fans.append(_fast.fan_value(held, tile, opened, chain, piao, False, False))
         held[tile] -= 1
-        if value:
+    return tuple(fans)
+
+
+@lru_cache(maxsize=2000)
+def baotou_draw_fans(hand, opened, available, chain, piao):
+    """Copies and fan-weighted copies of the draws a baotou wait wins on."""
+    fans = baotou_fans(hand, opened, chain, piao)
+    copies = fan = 0
+    for tile in range(34):
+        if available[tile] > 0 and fans[tile]:
             copies += available[tile]
-            fan += available[tile] * value
+            fan += available[tile] * fans[tile]
     return copies, fan
 
 
-@lru_cache(maxsize=100000)
+# The SDK analysis kept as a tuple of numbers and tuples, which the garbage
+# collector stops tracking; cached dicts and lists are walked by every full
+# collection.
+SHANTEN, IMPROVING, UKEIRE, COPIES, FANS, FAN_VALUE = range(6)
+
+
+@lru_cache(maxsize=10000)
 def examined(hand, opened, available, chain=0, piao=0):
-    """The SDK analysis of a hand, computed once (callers only read it)."""
-    return analyze(hand, opened, available, chain, piao)
+    """The SDK analysis of a hand, computed once, indexed as above."""
+    row = analyze(hand, opened, available, chain, piao)
+    return (
+        row["shanten"],
+        tuple(row["improving"]),
+        row["ukeire"],
+        row["winning_copies"],
+        tuple(row["fans"].items()),
+        row["fan_value"],
+    )
 
 
-@lru_cache(maxsize=200000)
+@lru_cache(maxsize=2000)
 def tenpai_value(hand, opened, available, draws=LONG):
     row = examined(hand, opened, available)
-    if row["shanten"] > 0 or draws < 1:
+    if row[SHANTEN] > 0 or draws < 1:
         return 0.0
     return waiting_value(hand, opened, available, draws=draws)
 
 
-@lru_cache(maxsize=20000)
+@lru_cache(maxsize=2000)
 def reshaped_value(hand, opened, available, draws):
     """A waiting hand with the option to trade a non-winning draw for a better wait."""
     value = waiting_value(hand, opened, available, draws=draws)
     if draws < 2 or shanten(hand, opened) > 0:
         return value
     unseen = max(1, sum(available))
-    row = analyze(hand, opened, available)
-    wins = set(row["winning_tiles"])
+    row = examined(hand, opened, available)
+    wins = {tile for tile, _ in row[FANS]}
     stay = waiting_value(hand, opened, available, draws=draws - 1)
     gain, reach = 0.0, 0
     held = list(counts(hand))
@@ -203,7 +233,7 @@ def reshaped_value(hand, opened, available, draws):
         if best > stay:
             gain += available[tile] * (best - stay)
             reach += available[tile]
-    survive = (1 - Q) * (1 - (row["winning_copies"] + reach) / unseen)
+    survive = (1 - Q) * (1 - (row[COPIES] + reach) / unseen)
     return value + (1 - Q) * gain / unseen * repeat(survive, draws - 1)
 
 
