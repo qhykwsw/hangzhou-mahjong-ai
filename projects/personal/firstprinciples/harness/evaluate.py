@@ -1022,15 +1022,26 @@ def append_record(record):
     release_attempt(record["id"])
 
 
+def report_key(record):
+    """A record, not its version id: a version recorded again (after the maintainer
+    dropped a wrong crash record, say) is news again."""
+    return f"{record['id']}@{record.get('finished_at')}"
+
+
 def reported():
-    """Records already shown to the user (by harness.line wait)."""
+    """Records already shown to the user (by harness.line wait), by report_key."""
     path = LOCAL / "reported.json"
     return set(read_json(path)) if path.exists() else set()
 
 
 def mark_reported(records):
     if records:
-        atomic_json(LOCAL / "reported.json", sorted(reported() | {r["id"] for r in records}))
+        import fcntl
+
+        # Both lines' waits mark: the read and the write go together.
+        with (LOCAL / "reported.lock").open("w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            atomic_json(LOCAL / "reported.json", sorted(reported() | {report_key(r) for r in records}))
 
 
 def platform_entrant():

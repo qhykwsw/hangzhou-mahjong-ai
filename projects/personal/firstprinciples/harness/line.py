@@ -690,7 +690,7 @@ def wait(line, minutes):
         retry_kills()
         pool_id = E.load_pool()["id"]
         done = E.reported()
-        records = [r for r in E.attempts(pool_id, line) if r["id"] not in done]
+        records = [r for r in E.attempts(pool_id, line) if E.report_key(r) not in done]
         notices = closed + host_notices(line)
         flagged = [r["id"] for r in records if (r.get("reference") or {}).get("above")]
         # The user decides whether it goes on the platform; the line does not wait for the answer.

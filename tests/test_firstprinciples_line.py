@@ -372,7 +372,7 @@ def test_a_new_pool_takes_the_replayed_versions_and_their_best(harness, monkeypa
     E.rebase_finish("rule")
     best = E.best("pool-b", "rule")
     assert best["id"] == "fp-rule-005" and best["rebased"]["old_score"] == 4.0
-    assert {"fp-rule-005", "fp-rule-009"} <= E.reported()
+    assert {E.report_key(r) for r in E.attempts("pool-b", "rule")} <= E.reported()
     E.set_drain("换对手池", ["rl"])  # the rule line's versions are recorded: only the RL line waits
     assert line.design_hosts("rule") == (["local"], None)
     assert line.design_hosts("rl", probe=False)[0] == []
