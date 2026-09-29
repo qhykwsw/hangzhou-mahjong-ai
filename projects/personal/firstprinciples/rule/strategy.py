@@ -22,7 +22,10 @@ option for the waits it leads to, pricing each wait there as a plain race
 equal value keep the hand whose tiles connect to more live tiles. When the hand is already baotou (every draw wins), a win now is traded for a
 doubling that keeps the certain win: a kong whose replacement draw still wins,
 else a white discard that scores piao. A call from a baotou wait is priced with
-the piao its white discard scores when the wait stays baotou. At a win, giving
+the piao its white discard scores when the wait stays baotou, and a piao
+that leaves a spare white may score piao again. At a win holding a white,
+the gap between going on and winning now takes a correction fitted to
+true-state rollouts of such windows. At a win, giving
 it up for a bigger one is priced with the opponents' own chance to win before
 my next draw, read from their melds and recent discards, in place of the
 generic one. A hand not yet waiting also counts the calls it can make (the
@@ -70,6 +73,12 @@ SHAPE_EDGE = -0.0055
 CALL_WEIGHT = 0.7  # the share of the call option measured best against the pool
 FISH_DEPTH = 8  # draws a baotou wait may let go while fishing for piao
 LONG = 16  # more draws of mine than any hand holds
+# At a win holding a white, what simulation says the valuation misses in the
+# gap between going on and winning now (ridge fit over 7916 such windows,
+# 12 true-state rollouts each): constant, one white not yet baotou, a baotou
+# fishing with three whites or more, my draws left /16, 12 draws or more, the
+# opponents' speed, a win worth two fan or more, two melds or more.
+CONTINUE_SHIFT = (-0.417, -0.169, 0.300, 0.833, -0.182, 0.112, -0.107, -0.083)
 
 
 def tenpai_hazard(draws, speed=1.0):
@@ -169,6 +178,9 @@ def piao_value(hand, opened, available, chain, piao, draws, speed=1.0, fish=Fals
                 rest.remove(WHITE)
                 rest = tuple(rest)
                 later = _fast.race_waiting(rest, opened, available, chain + 1, piao + 1, draws - 1, PROFILE, analyze, False, speed)
+                if held[WHITE] >= 2 and draws > 2:
+                    # Still a spare white after this piao: the next draw can score piao again.
+                    later = max(later, piao_value(rest, opened, available, chain + 1, piao + 1, draws - 1, speed, fish, pungs))
                 best = max(now, (1 - q) * later)
             held[WHITE] += 1
         held[tile] -= 1
@@ -405,7 +417,23 @@ class Race:
         for i, a in enumerate(obs.legal_actions):
             if a.action == "discard" and values[i] * OPTION_REACH >= top:
                 values[i] = self.value(obs, a, opened, available, True, speed, at_win)
+        if at_win and WHITE in obs.hand:
+            shift = self.continue_shift(obs, opened, speed)
+            values = [v if a.action == "hu" else v + shift for a, v in zip(obs.legal_actions, values)]
         return obs.legal_actions[max(range(len(values)), key=values.__getitem__)]
+
+    def continue_shift(self, obs, opened, speed):
+        """The simulation-fitted correction to going on at a win holding a white."""
+        whites = obs.hand.count(WHITE)
+        fishing = is_baotou(tuple(sorted(without(obs.hand, obs.drawn_tile))), opened)
+        if fishing and whites < 2:
+            return 0.0
+        draws = min(16, max(1, -(-(obs.wall_remaining - LAST_WALL) // 4)))
+        c, one, three, per_draw, early, fast, big, melds = CONTINUE_SHIFT
+        return (
+            c + one * (not fishing and whites == 1) + three * (fishing and whites >= 3) + per_draw * draws / 16
+            + early * (draws >= 12) + fast * speed + big * (obs.hu_fan >= 2) + melds * (opened >= 2)
+        )
 
 
 def build(model_dir):
