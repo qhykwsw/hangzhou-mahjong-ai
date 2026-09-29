@@ -8,7 +8,7 @@
   "critic_learning_rate": 0.0003,
   "resident_rows": true,
   "gradient_graphs": true,
-  "distill_steps": 10,
+  "distill_steps": 0,
   "distill_learning_rate": 0.0002,
   "distill_epochs": 4,
   "teacher": "fp-rule-062",
