@@ -240,22 +240,8 @@ def shape_bonus(rest, opened, available, full):
 
 
 def potential(hand, available):
-    """Live tiles that pair with or sit within two of each kept tile."""
-    total = 0
-    for tile in hand:
-        if tile >= 27:
-            total += available[tile]
-            continue
-        low, high = tile - tile % 9, tile - tile % 9 + 8
-        total += sum(available[t] for t in range(max(low, tile - 2), min(high, tile + 2) + 1))
-    return total
-
-
-def best_discard_value(hand, opened, available, draws=LONG):
-    return max(
-        waiting_value(tuple(sorted(rest)), opened, available, draws=draws)
-        for rest in (without(hand, tile) for tile in set(hand))
-    )
+    """Live tiles that pair with or sit within two of each kept tile (in C)."""
+    return _fast.race_potential(hand, available)
 
 
 def without(hand, tile):
