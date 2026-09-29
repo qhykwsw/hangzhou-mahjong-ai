@@ -220,6 +220,21 @@ def public_result(result):
     )
 
 
+def build_native(package, python, runtime):
+    """Compile ``package``'s native.c under ``runtime`` into the machine's native cache; the cache."""
+    cache = Path(os.environ.get("MAHJONG_NATIVE_CACHE") or Path.home() / ".cache/leihuo_majiang/native")
+    done = subprocess.run(
+        [python, "-B", "-c", "import sys\nfrom mahjong_ai import _fast\n_fast.load_native(sys.argv[1])",
+         str(Path(package) / "strategy.py")],
+        env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(runtime), "PYTHONDONTWRITEBYTECODE": "1",
+             "HOME": str(Path.home()), "MAHJONG_NATIVE_CACHE": str(cache)},
+        capture_output=True, text=True, timeout=600,
+    )
+    if done.returncode:
+        raise RuntimeError("候选的 native.c 编译失败：" + (done.stderr or done.stdout)[-2000:])
+    return cache.resolve()
+
+
 class CandidateProcess:
     def __init__(self, package, python=None, output=None, runtime=None):
         self.package = Path(package).resolve()
@@ -254,6 +269,13 @@ class CandidateProcess:
             "TMPDIR": self.temp.name,
             "HOME": self.temp.name,
         }
+        if (self.package / "native.c").is_file():
+            # The package's own C (ADR-0017): the sandbox can neither run a
+            # compiler nor write the machine's cache, so it is built here and
+            # the candidate only reads the compiled module.
+            cache = build_native(self.package, python or sys.executable, runtime)
+            readable.append(cache)
+            env["MAHJONG_NATIVE_CACHE"] = str(cache)
         self.process = sandbox_popen(
             sandbox_command(argv, readable, [self.temp.name, self.output]),
             stdin=subprocess.PIPE,

@@ -379,3 +379,41 @@ def test_finalize_window_survives_the_deadline_cancel_flag(tmp_path, monkeypatch
     probe.process = SimpleNamespace(stdout=io.BytesIO(b""))
     with pytest.raises(TimeoutError):
         probe.receive(0.01)
+
+
+FIRST = """
+#include <Python.h>
+static PyObject *first(PyObject *self, PyObject *args) { return PyLong_FromLong(0); }
+static PyMethodDef methods[] = {{"first", first, METH_NOARGS, NULL}, {NULL, NULL, 0, NULL}};
+static struct PyModuleDef module = {PyModuleDef_HEAD_INIT, "native", NULL, -1, methods};
+PyMODINIT_FUNC PyInit_native(void) { return PyModule_Create(&module); }
+"""
+
+
+def test_a_sandboxed_candidate_runs_its_own_native_code(tmp_path, monkeypatch):
+    """A package with native.c (ADR-0017) plays sandboxed, as on the platform: the
+    sandbox can neither compile nor write the machine's cache, so the module is
+    built outside it and only read inside."""
+    pytest.importorskip("mahjong_ai._fast", reason="C accelerator not built")
+    monkeypatch.setenv("MAHJONG_NATIVE_CACHE", str(tmp_path / "native-cache"))
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "native.c").write_text(FIRST)
+    (package / "strategy.py").write_text(
+        "from mahjong_ai import _fast\n"
+        "from mahjong_ai.strategies.common import RulePolicy\n"
+        "native = _fast.load_native(__file__)\n"
+        "class Policy(RulePolicy):\n"
+        "    def act(self, obs):\n"
+        "        return obs.legal_actions[native.first()]\n"
+        "def build(model):\n"
+        "    return Policy()\n"
+    )
+    policy = RemotePolicy(package, tree_hash(package))
+    try:
+        policy.reset(1)
+        obs = HandState(RoundConfig(rounds=1), 3).observation()
+        assert policy.act(obs) == obs.legal_actions[0]
+        assert policy.stats["errors"] == policy.stats["fallback_actions"] == 0
+    finally:
+        policy.close()
