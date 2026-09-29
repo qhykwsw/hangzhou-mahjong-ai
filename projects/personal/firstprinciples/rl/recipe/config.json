@@ -1,17 +1,17 @@
 {
   "rows": 600000,
   "smoke_rows": 3000,
-  "step_kl": 0.0075,
+  "step_kl": 0.015,
   "kl_rows": 20000,
   "microbatch": 256,
   "critic_batch": 256,
   "critic_learning_rate": 0.0003,
   "resident_rows": true,
   "gradient_graphs": true,
-  "distill_steps": 0,
+  "distill_steps": 10,
   "distill_learning_rate": 0.0002,
   "distill_epochs": 4,
-  "teacher": "fp-rule-033",
+  "teacher": "fp-rule-062",
   "chunks_per_step": 3,
   "playout_baseline": true
 }

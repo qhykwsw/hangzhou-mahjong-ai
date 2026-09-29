@@ -78,17 +78,33 @@ class ResidentRows:
         return batch
 
 
-def resident_rows(rows, device, gpu_limit_bytes):
-    """Use residency only within the existing cap, leaving room for backward."""
+class ActorRows(ResidentRows):
+    """Only the Actor's inputs and actions: steps that fit no Critic skip the oracle columns."""
+
+    FIELDS = (("planes", np.float16), ("scalars", np.float16), ("mask", bool), ("action", np.int64))
+
+    @staticmethod
+    def storage_bytes(rows):
+        fixed = 2 * (N_PLANES * 34 + N_SCALARS) + N_ACTIONS + 8
+        return len(rows) * (fixed + 16) + 10 * (1 + sum(len(r["events"]) for r in rows))
+
+
+def resident_rows(rows, device, gpu_limit_bytes, *, oracle=True):
+    """Use residency only within the existing cap, leaving room for backward.
+
+    Without `oracle` (distillation, playout advantages) the Critic's columns,
+    about a third of each row, stay on the host.
+    """
     if torch.device(device).type != "cuda":
         return None
+    store = ResidentRows if oracle else ActorRows
     allocated = torch.cuda.memory_allocated(device)
     free, _ = torch.cuda.mem_get_info(device)
     reusable = torch.cuda.memory_reserved(device) - allocated
     available = min(gpu_limit_bytes - allocated, free + reusable)
-    if ResidentRows.storage_bytes(rows) + 2 * 1024**3 > available:
+    if store.storage_bytes(rows) + 2 * 1024**3 > available:
         return None
-    return ResidentRows(rows, device)
+    return store(rows, device)
 
 
 def actor_args(batch):

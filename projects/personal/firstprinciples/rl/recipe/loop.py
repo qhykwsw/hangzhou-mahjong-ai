@@ -197,7 +197,7 @@ def train(ctx):
             step += 1
             collected = time.time() - began
             packing_started = time.time()
-            batch_source = (resident_rows(rows, ctx.device, ctx.resources["gpu_limit_bytes"])
+            batch_source = (resident_rows(rows, ctx.device, ctx.resources["gpu_limit_bytes"], oracle=False)
                             if cfg.get("resident_rows", False) else None)
             packing_seconds = time.time() - packing_started
             stats = distill(actor, rows, opt, microbatch, ctx.device, rng, int(cfg["distill_epochs"]),
@@ -225,7 +225,8 @@ def train(ctx):
                 break
             collected += time.time() - started
             started = time.time()
-            batch_source = (resident_rows(rows, ctx.device, ctx.resources["gpu_limit_bytes"])
+            batch_source = (resident_rows(rows, ctx.device, ctx.resources["gpu_limit_bytes"],
+                                          oracle=not cfg.get("playout_baseline"))
                             if cfg.get("resident_rows", False) else None)
             rollouts += 1
             if cfg.get("playout_baseline"):
