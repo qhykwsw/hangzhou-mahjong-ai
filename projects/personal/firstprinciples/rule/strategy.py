@@ -25,7 +25,11 @@ else a white discard that scores piao. A call from a baotou wait is priced with
 the piao its white discard scores when the wait stays baotou. At a win, giving
 it up for a bigger one is priced with the opponents' own chance to win before
 my next draw, read from their melds and recent discards, in place of the
-generic one.
+generic one. A hand not yet waiting also counts the calls it can make (the
+race counts only draws): each tile a pair of mine can peng, or two neighbours
+of mine can chi from my left, comes at the rate the opponents were measured
+to discard it, and is taken when the best hand the call keeps beats staying;
+this enumeration is in the line's own C, native.c.
 """
 COMBINATION = "firstprinciples-rule"
 
@@ -62,6 +66,7 @@ SHAPE_UKEIRE = 0.0078
 SHAPE_DISTANCE = -0.045
 SHAPE_OPEN = 0.0105
 SHAPE_EDGE = -0.0055
+CALL_WEIGHT = 0.5  # half the call option measured best against the pool
 LONG = 16  # more draws of mine than any hand holds
 
 
@@ -107,6 +112,11 @@ def opponent_speed(obs, draws):
 # The valuation above, run by the SDK's C race valuation with this line's
 # constants: completed waits and a guard for no draws left switched on.
 PROFILE = _fast.race_profile(
+    Q, SAVED, ONE_STEP, FAR_STEP, Q_EARLY, Q_LATE, 1.0, True, DRAW_RISK, TIE, LAST_WALL, 0, True, True
+)
+# This line's own C (native.c) keeps its own table of race profiles.
+native = _fast.load_native(__file__)
+NATIVE_PROFILE = native.race_profile(
     Q, SAVED, ONE_STEP, FAR_STEP, Q_EARLY, Q_LATE, 1.0, True, DRAW_RISK, TIE, LAST_WALL, 0, True, True
 )
 
@@ -201,6 +211,15 @@ def piao_gain(hand, opened, available, draws, speed):
     return (richer - plain) / unseen * (1 - stay ** draws) / (1 - stay)
 
 
+@lru_cache(maxsize=4096)
+def call_option(hand, opened, available, draws, stage, chis):
+    """What a hand not yet waiting gains from the calls it can make: each tile a
+    pair of mine can peng, or two neighbours of mine can chi from my left, comes
+    at its measured rate per round (native.c), and is taken when the best hand
+    the call keeps beats staying as I am, over the rounds the hand stays as it is."""
+    return native.call_option(hand, opened, available, draws, stage, chis, NATIVE_PROFILE, analyze, Q, CALL_WEIGHT)
+
+
 def shape_bonus(rest, opened, available, full):
     """What simulation says the race misses in a kept hand: pairs and
     adjacent pairs of suit tiles are worth more than their draws alone."""
@@ -264,6 +283,8 @@ class Race:
         hand = list(obs.hand)
         # My draws left before the wall is down to its last 20 tiles.
         draws = max(1, -(-(obs.wall_remaining - LAST_WALL) // 4))
+        stage = 0 if obs.wall_remaining >= 70 else 1 if obs.wall_remaining >= 45 else 2
+        chis = sum(1 for m in obs.melds[obs.stage.seat] if m.kind == "chi")
         if action.action == "hu":
             return obs.hu_fan + SAVED
         if action.action == "pass":
@@ -275,7 +296,9 @@ class Race:
             ahead = 0 if discarder is None else (obs.stage.seat - discarder - 1) % 4
             return (1 - DRAW_RISK) ** ahead * waiting_value(
                 tuple(hand), opened, available, obs.chain_count, obs.piao_count, draws
-            ) + shape_bonus(tuple(sorted(hand)), opened, available, True)
+            ) + shape_bonus(tuple(sorted(hand)), opened, available, True) + call_option(
+                tuple(sorted(hand)), opened, available, draws, stage, chis
+            )
         if action.action == "discard":
             rest = tuple(sorted(without(hand, action.tile)))
             if action.tile == WHITE and self.piao(obs, opened):
@@ -290,7 +313,8 @@ class Race:
                     value += piao_gain(rest, opened, available, draws, speed)
             value = (1 - Q * speed) * value + TIE * potential(rest, available)
             if not at_win:
-                value += shape_bonus(rest, opened, available, True)
+                called = call_option(rest, opened, available, draws, stage, chis)
+                value += shape_bonus(rest, opened, available, True) + (1 - Q * speed) * called
             return value
         if action.action in ("peng", "chi"):
             used = action.tiles if action.action == "chi" else (action.tile,) * 2
@@ -311,7 +335,8 @@ class Race:
                         value,
                         waiting_value(rest, opened + 1, available, chain, piao, draws),
                     )
-            return (1 - Q) * value + shape_bonus(kept, opened + 1, available, True)
+            called = call_option(kept, opened + 1, available, draws, stage, chis + (action.action == "chi"))
+            return (1 - Q) * value + shape_bonus(kept, opened + 1, available, True) + (1 - Q) * called
         if action.action == "gang":
             for _ in range(KONG_TILES[action.kind]):
                 hand.remove(action.tile)
