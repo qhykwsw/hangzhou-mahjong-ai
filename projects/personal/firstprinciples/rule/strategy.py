@@ -28,8 +28,9 @@ my next draw, read from their melds and recent discards, in place of the
 generic one. A hand not yet waiting also counts the calls it can make (the
 race counts only draws): each tile a pair of mine can peng, or two neighbours
 of mine can chi from my left, comes at the rate the opponents were measured
-to discard it, and is taken when the best hand the call keeps beats staying;
-this enumeration is in the line's own C, native.c.
+to discard it, and is taken when the best hand the call keeps beats staying,
+both with the shape correction; this enumeration is in the line's own C,
+native.c. A kong's hand is valued as a discard's is.
 """
 COMBINATION = "firstprinciples-rule"
 
@@ -66,7 +67,7 @@ SHAPE_UKEIRE = 0.0078
 SHAPE_DISTANCE = -0.045
 SHAPE_OPEN = 0.0105
 SHAPE_EDGE = -0.0055
-CALL_WEIGHT = 0.5  # half the call option measured best against the pool
+CALL_WEIGHT = 0.7  # the share of the call option measured best against the pool
 LONG = 16  # more draws of mine than any hand holds
 
 
@@ -119,6 +120,8 @@ native = _fast.load_native(__file__)
 NATIVE_PROFILE = native.race_profile(
     Q, SAVED, ONE_STEP, FAR_STEP, Q_EARLY, Q_LATE, 1.0, True, DRAW_RISK, TIE, LAST_WALL, 0, True, True
 )
+# The call option weighs hands with the same shape correction the decisions use.
+native.shape_constants(SHAPE_PAIR, SHAPE_ADJACENT, SHAPE_UKEIRE, SHAPE_DISTANCE, SHAPE_OPEN, SHAPE_EDGE)
 
 
 def waiting_value(hand, opened, available, chain=0, piao=0, draws=LONG, options=False, speed=1.0):
@@ -343,8 +346,11 @@ class Race:
             after = opened if action.kind == "added" else opened + 1
             rest = tuple(sorted(hand))
             row = analyze(rest, after, available, obs.chain_count + 1, obs.piao_count)
+            shape = shape_bonus(rest, after, available, True)
             if row["shanten"] > 0:
-                return waiting_value(rest, after, available, draws=draws, speed=speed)
+                return waiting_value(rest, after, available, draws=draws, speed=speed) + shape + call_option(
+                    rest, after, available, draws, stage, chis
+                )
             # The replacement draw comes at once and carries the kong's doubling.
             unseen = max(1, sum(available))
             copies = row["winning_copies"]
@@ -352,7 +358,7 @@ class Race:
             miss = 1 - copies / unseen
             return now + miss * (1 - Q * speed) * waiting_value(
                 rest, after, available, draws=draws, speed=speed
-            )
+            ) + shape
         return float("-inf")
 
     def certain_double(self, obs, opened):

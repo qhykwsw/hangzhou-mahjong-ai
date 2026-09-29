@@ -15,6 +15,34 @@
 static const double FEED_PENG[3][4] = {{9.05, 4.38, 2.24, 0.99}, {3.55, 3.97, 3.17, 2.08}, {3.41, 3.09, 2.68, 1.97}};
 static const double FEED_CHI[3][4] = {{0.0, 1.50, 0.79, 0.35}, {0.0, 1.23, 1.01, 0.67}, {0.0, 0.84, 0.82, 0.57}};
 
+/* The strategy's shape correction (strategy.shape_bonus), set once from Python. */
+static double SHAPE[6]; /* pair, adjacent, ukeire, distance, open, edge */
+
+static int shape_bonus(race_ctx *y, const int *c, double *out) {
+    int pairs = 0, adjacent = 0, edges = 0;
+    for (int t = 0; t < 33; t++)
+        if (c[t] >= 2) pairs++;
+    for (int t = 0; t < 27; t++) {
+        if (t % 9 <= 7 && c[t] && c[t + 1]) {
+            adjacent++;
+            if (t % 9 == 0 || t % 9 == 7) edges++;
+        }
+    }
+    double bonus = SHAPE[0] * pairs + SHAPE[1] * adjacent;
+    bonus += SHAPE[4] * (adjacent - edges) + SHAPE[5] * edges;
+    analysis_row row;
+    if (race_analysis_at(y, c, y->opened, 0, 0, &row) < 0) return -1;
+    bonus += SHAPE[2] * (double)row.ukeire / 10 + SHAPE[3] * row.distance;
+    *out = bonus;
+    return 0;
+}
+
+static PyObject *py_shape_constants(PyObject *self, PyObject *args) {
+    if (!PyArg_ParseTuple(args, "dddddd", &SHAPE[0], &SHAPE[1], &SHAPE[2], &SHAPE[3], &SHAPE[4], &SHAPE[5]))
+        return NULL;
+    Py_RETURN_NONE;
+}
+
 static int tile_kind(int t) {
     if (t >= 27) return 0;
     int r = t % 9;
@@ -41,9 +69,11 @@ static int called_value(race_ctx *y, int *c, int a, int b, int far, int draws, d
         c[d]--;
         double v;
         rc = far ? race_reshaped(y, c, draws, 0, &v) : race_waiting(y, c, 0, 0, draws, 0, &v);
+        double shape = 0.0;
+        if (rc == 0) rc = shape_bonus(y, c, &shape);
         c[d]++;
         if (rc == 0) {
-            v = (1 - q) * v;
+            v = (1 - q) * v + shape;
             if (v > best) best = v;
         }
     }
@@ -75,6 +105,9 @@ static PyObject *py_call_option(PyObject *self, PyObject *args) {
     int far = row.distance >= 2;
     double stay_value;
     if (race_reshaped(&x, c, draws, 0, &stay_value) < 0) return NULL;
+    double stay_shape;
+    if (shape_bonus(&x, c, &stay_shape) < 0) return NULL;
+    stay_value += stay_shape;
     race_ctx y = x;
     y.opened = opened + 1;
     y.size = x.size - 3;
@@ -112,6 +145,7 @@ static PyObject *py_call_option(PyObject *self, PyObject *args) {
 static PyMethodDef native_methods[] = {
     {"race_profile", py_race_profile, METH_VARARGS,
      "Register a race profile in this module's own table (the runtime's ids do not carry over)."},
+    {"shape_constants", py_shape_constants, METH_VARARGS, "Set the strategy's shape correction constants."},
     {"call_option", py_call_option, METH_VARARGS,
      "call_option(hand, opened, available, draws, stage, chis, profile, fallback, q, weight): the value "
      "calls add to a hand not yet waiting."},
