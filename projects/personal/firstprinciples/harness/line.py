@@ -36,6 +36,7 @@ import sys
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 
 from . import equivalence
@@ -135,9 +136,15 @@ def take_away(host):
     moved = []
     for state in E.running("rl"):
         if state.get("host") == host:
-            interrupt(state)
             stage = "training" if state["stage"] == "training" else "evaluating"
-            requeue(state, stage)
+            with handover(state["id"]):
+                state = load(state["id"])  # the driver_pid of a driver started meanwhile
+                if state is None:
+                    continue  # it finished meanwhile
+                stop_driver(state)
+                pids = job_pids(state)
+                requeue(state, stage)
+            kill_jobs(host, state["id"], pids)
             moved.append((state["id"], stage))
     return moved
 
@@ -350,6 +357,18 @@ def spawn(attempt_id):
                          stdin=subprocess.DEVNULL, stdout=out, stderr=out, start_new_session=True)
 
 
+@contextmanager
+def handover(attempt_id):
+    """Held while a driver reads the state it starts from, and while an attempt is
+    taken from its driver and moved on (requeued, cancelled): a driver started in
+    between (a wait's ensure_drivers) reads the state only once it has moved.
+    """
+    RUNNING.mkdir(parents=True, exist_ok=True)
+    with (RUNNING / f"{attempt_id}.handover").open("a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
+
+
 def driver_alive(attempt_id):
     RUNNING.mkdir(parents=True, exist_ok=True)
     with (RUNNING / f"{attempt_id}.lock").open("a") as handle:
@@ -375,11 +394,12 @@ def drive(attempt_id):
         fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         return  # another driver has it
-    state = load(attempt_id)
-    if state is None:
-        return
-    state["driver_pid"] = os.getpid()
-    save(state)
+    with handover(attempt_id):
+        state = load(attempt_id)
+        if state is None:
+            return
+        state["driver_pid"] = os.getpid()
+        save(state)
     E.log(f"{attempt_id}: driver {os.getpid()} at stage {state['stage']}")
     try:
         E.check_seal()
@@ -528,8 +548,8 @@ def claim_host(state):
         time.sleep(QUEUE_SECONDS)
 
 
-def interrupt(state):
-    """Stop an attempt's driver and its jobs on its host (to redo it elsewhere, or cancel it)."""
+def stop_driver(state):
+    """Stop an attempt's driver (to redo the attempt elsewhere, or cancel it)."""
     if state.get("driver_pid") and driver_alive(state["id"]):
         # A driver still inside a host call can outlive SIGTERM and relaunch
         # the job it then finds gone: it must be gone before the jobs are killed.
@@ -544,9 +564,12 @@ def interrupt(state):
                 time.sleep(0.2)
             if not driver_alive(state["id"]):
                 break
-    host = state.get("host")
-    if host in (None, "local"):
-        return  # local jobs pause themselves when their driver goes
+
+
+def job_pids(state):
+    """The attempt's training and evaluation processes on its remote host."""
+    if state.get("host") in (None, "local"):
+        return []  # local jobs pause themselves when their driver goes
     pids = []
     launch = rl.RL / "attempts" / state["id"] / "launch-train.json"
     if launch.exists():
@@ -554,8 +577,12 @@ def interrupt(state):
     for root in evaluation_dirs(state["id"]):
         pids += [E.read_json(m)["pid"] for m in root.glob("*/remote.json")] + (
             [E.read_json(root / "remote.json")["pid"]] if (root / "remote.json").exists() else [])
+    return pids
+
+
+def kill_jobs(host, attempt_id, pids):
     if pids:
-        kill_later(host, state["id"], pids)
+        kill_later(host, attempt_id, pids)
         retry_kills()
 
 
@@ -575,8 +602,10 @@ def retry_kills():
     path = E.LOCAL / "pending-kills.json"
     if not path.exists():
         return
-    left = []
+    done = []
     for row in E.read_json(path):
+        if not enabled(row["host"]):
+            continue  # switched off (often powered down): once it is back on
         script = f"""import os,signal
 for pid in {row['pids']!r}:
     try:
@@ -588,10 +617,12 @@ print('ok')
 """
         try:
             remote.execute(row["host"], script, timeout=60)
+            done.append(row)
         except Exception:
-            left.append(row)
+            pass
     with E.attempts_lock():
-        E.atomic_json(path, left)
+        # Rows added meanwhile (kill_later) stay.
+        E.atomic_json(path, [row for row in E.read_json(path) if row not in done])
 
 
 # -- the agent's commands ------------------------------------------------------------
@@ -803,8 +834,14 @@ def cancel(attempt_id):
     state = load(attempt_id)
     if state is None:
         raise E.Refused(f"{attempt_id} 不是在途尝试")
-    interrupt(state)
-    record_failure(load(attempt_id), "cancelled", "用户取消")
+    with handover(attempt_id):
+        state = load(attempt_id)  # the driver_pid of a driver started meanwhile
+        if state is None:
+            raise E.Refused(f"{attempt_id} 已经结束")
+        stop_driver(state)
+        pids = job_pids(state)
+        record_failure(state, "cancelled", "用户取消")
+    kill_jobs(state.get("host"), attempt_id, pids)
     print(f"{attempt_id} 已取消")
 
 

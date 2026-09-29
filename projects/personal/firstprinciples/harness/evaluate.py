@@ -517,6 +517,7 @@ def reserve_attempt(line, host, description, **state):
 def release_attempt(attempt_id):
     (LOCAL / "running" / f"{attempt_id}.json").unlink(missing_ok=True)
     (LOCAL / "running" / f"{attempt_id}.lock").unlink(missing_ok=True)
+    (LOCAL / "running" / f"{attempt_id}.handover").unlink(missing_ok=True)
 
 
 # A strategy or recipe runs in the process the harness gives it and keeps to

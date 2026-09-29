@@ -312,7 +312,7 @@ def test_a_host_lent_until_a_time_closes_then_and_its_attempt_moves(harness, mon
     for host in rl.HOSTS:
         (rl.RL / f"setup-{host}.json").write_text("{}")
     record(E, id="fp-rl-000")
-    monkeypatch.setattr(line, "interrupt", lambda state: None)
+    monkeypatch.setattr(line, "stop_driver", lambda state: None)
     with pytest.raises(E.Refused):
         line.hosts("off", "5070ti", at="2000-01-01 09:30")
     line.hosts("off", "5070ti", at=time.strftime("%Y-%m-%d %H:%M", time.localtime(time.time() + 3600)))
