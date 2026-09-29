@@ -25,6 +25,15 @@ TRANSIENT_MARKERS = (
 )
 
 
+
+def _kill_group(pid, sig=signal.SIGKILL):
+    """Signal a process group that may have just exited (macOS answers a group
+    of unreaped zombies with EPERM, not ESRCH)."""
+    try:
+        os.killpg(pid, sig)
+    except (ProcessLookupError, PermissionError):
+        pass
+
 def transient_failure(window):
     """判断一次失败的输出里是否只有网关瞬时错误。"""
     for line in window.splitlines():
@@ -283,13 +292,13 @@ def main():
                         or (root / "submitted.flag").exists()
                     ):
                         interrupted = True
-                        os.killpg(process.pid, signal.SIGTERM)
+                        _kill_group(process.pid, signal.SIGTERM)
                         break
                     time.sleep(0.2)
                 try:
                     process.wait(timeout=4)
                 except subprocess.TimeoutExpired:
-                    os.killpg(process.pid, signal.SIGKILL)
+                    _kill_group(process.pid)
                     process.wait()
                 if process.returncode and not interrupted:
                     error = "Codex 未正常完成；请检查登录、模型配置及会话日志。"
@@ -297,7 +306,7 @@ def main():
             error = f"{type(exc).__name__}: {exc}"[:2000]
         finally:
             if process is not None and process.poll() is None:
-                os.killpg(process.pid, signal.SIGKILL)
+                _kill_group(process.pid)
                 process.wait()
 
     def pause_before_retry(delay):

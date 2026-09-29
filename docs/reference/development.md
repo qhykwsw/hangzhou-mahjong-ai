@@ -39,7 +39,7 @@ ruff check src tests scripts --select F401,F821,F822,F823
 ruff format --check src tests scripts
 ```
 
-测试默认用 pytest-xdist 按空闲进程并行（`pyproject.toml` 的 `addopts`），全量约半分钟以内；调试单个用例时加 `-n 0` 在一个进程里跑。
+测试默认用 pytest-xdist 并行（`pyproject.toml` 的 `addopts`），进程数取本机当前空闲的核数、至少 4 个（`tests/conftest.py`），规则线评估占着 Mac 时也不会饿到依赖真实时钟的测试；全量约半分钟以内。调试单个用例时加 `-n 0` 在一个进程里跑。脚本化的线上对局测试有 30 秒看门狗，错过窗口会失败而不是卡住。
 
 `src/mahjong_ai/_fast.c` 是可选的牌形加速器：`sdk/shape.py` 的向听/进张与
 `domain/rules.py` 的胡牌形状在它存在时走 C，负数（和牌边界）用同样经过参考回归的原生胡牌谓词裁决；

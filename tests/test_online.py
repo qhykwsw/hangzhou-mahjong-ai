@@ -126,7 +126,7 @@ def test_409_resync_does_not_submit_duplicate_action(tmp_path):
 
     runner = TournamentRunner(Client(), PolicySpec(), adapter(), tmp_path)
     runner.tournament = {}
-    runner._play("test")
+    _play_bounded(runner, "test")
     assert sum(m == "POST" for m, _ in calls) == 1
     post_index = next(i for i, (method, _) in enumerate(calls) if method == "POST")
     assert calls[post_index + 1][1].endswith("seq=0")
@@ -155,7 +155,7 @@ def test_history_refresh_keeps_snapshot_sequence_and_round_together(tmp_path):
     client = Client()
     runner = TournamentRunner(client, PolicySpec(), adapter(), tmp_path)
     runner.tournament = {}
-    runner._play("refresh-fixture")
+    _play_bounded(runner, "refresh-fixture")
     assert client.posts == 1
     record = json.loads(next(tmp_path.glob("*.jsonl")).read_text())
     assert record["snapshot"]["round_no"] == 2
@@ -452,7 +452,7 @@ def test_official_chi_window_can_open_without_a_new_event(tmp_path):
     runner.tournament = {
         "config": {"Kind": "test", "Rounds": 2, "BaseScore": 1, "YouCaiBiKao": False}
     }
-    runner._play("fixture")
+    _play_bounded(runner, "fixture")
     assert client.submitted["action"] in ("chi", "pass")
     assert client.snapshots == 2
 
@@ -499,7 +499,7 @@ def test_v31_settled_window_snapshot_is_never_played(tmp_path):
     runner.tournament = {
         "config": {"Kind": "test", "Rounds": 8, "BaseScore": 1, "YouCaiBiKao": False}
     }
-    runner._play("fixture")
+    _play_bounded(runner, "fixture")
     assert client.posts == 0
     assert client.polls == 4
 
@@ -695,6 +695,7 @@ class _NotifyClient:
     def __init__(self, states):
         self.states = states  # callable(client) -> response for a snapshot GET
         self.gets = 0
+        self.first_look = None  # monotonic time of the client's first snapshot GET
         self.posts = []
         self.frames = []
         self.posted = threading.Event()
@@ -708,6 +709,8 @@ class _NotifyClient:
         if "seq=0" not in path:
             return {"seq": 1, "pending": True}
         self.gets += 1
+        if self.first_look is None:
+            self.first_look = time.monotonic()
         return self.states(self)
 
     def notify(self, path, on_frame, stop):
@@ -719,14 +722,43 @@ class _NotifyClient:
         return True
 
 
-def _run_fixture(tmp_path, client):
+class _Window:
+    """A window deadline fixed when the fake server is first asked for it.
+
+    The client's own start-up (runner, adapter, policy) then does not eat
+    into the window however loaded the machine is; the window's length is
+    what the test is about."""
+
+    def __init__(self, ms):
+        self.ms, self.at = ms, None
+
+    def __call__(self):
+        if self.at is None:
+            self.at = time.time() * 1000 + self.ms
+        return self.at
+
+
+def _play_bounded(runner, gid="fixture", limit=30.0):
+    """runner._play, failing the test instead of waiting forever on a scripted
+    server that never finishes (a window missed on a loaded machine)."""
+    watchdog = threading.Timer(limit, runner.stop.set)
+    watchdog.start()
+    try:
+        runner._play(gid)
+    finally:
+        watchdog.cancel()
+    if runner.stop.is_set():
+        pytest.fail(f"the scripted game did not finish within {limit:.0f} s")
+
+
+def _run_fixture(tmp_path, client, limit=30.0):
     from mahjong_ai.platform.official import OfficialAdapter
 
     runner = TournamentRunner(client, PolicySpec(), OfficialAdapter(), tmp_path)
     runner.tournament = {
         "config": {"Kind": "test", "Rounds": 2, "BaseScore": 1, "YouCaiBiKao": False}
     }
-    runner._play("fixture")
+    _play_bounded(runner, "fixture", limit)
     state = json.loads(next(tmp_path.glob("game-*.json")).read_text())
     return state["client"]
 
@@ -736,9 +768,10 @@ def test_silent_chi_window_is_looked_for_at_the_peng_deadline(tmp_path):
     # when we are the next seat, our chi window opens at that deadline with no
     # event on the notify stream.  Fast opponents answer within milliseconds,
     # so no frame arrives in between: the client must look on its own timer.
-    deadline = time.time() * 1000 + 700  # our pass needs LATE_PASS_SECONDS to spare
+    window = _Window(700)  # our pass needs LATE_PASS_SECONDS to spare
 
     def states(client):
+        deadline = window()
         if len(client.posts) >= 2:
             return {"finished": True, "seq": 3, "snapshot": None}
         snap = _peng_window(deadline, 3, "3w")
@@ -756,11 +789,10 @@ def test_silent_chi_window_is_looked_for_at_the_peng_deadline(tmp_path):
 
     client = _NotifyClient(states)
     client.frames = [after_first_post]
-    started = time.monotonic()
     diag = _run_fixture(tmp_path, client)
     assert [p["action"] for p in client.posts][0] == "pass"
     assert client.posts[1]["action"] in ("chi", "pass")
-    assert time.monotonic() - started < 1.5
+    assert time.monotonic() - client.first_look < 1.5
     assert diag["deadline_checks"] == 1
     assert client.gets == 3  # peng window, deadline check, final state
 
@@ -769,9 +801,10 @@ def test_claimers_discard_right_after_our_pass_is_not_skipped(tmp_path):
     # Another responder may peng at once; its discard is then only two events
     # after our pass and opens a window for us.  The old prediction skipped
     # the responders plus two events and missed a quarter of such windows.
-    now = time.time() * 1000 + 1000
+    window = _Window(1000)
 
     def states(client):
+        now = window()
         if len(client.posts) >= 2:
             return {"finished": True, "seq": 14, "snapshot": None}
         if client.posts:
@@ -793,12 +826,11 @@ def test_claimers_discard_right_after_our_pass_is_not_skipped(tmp_path):
 
     client = _NotifyClient(states)
     client.frames = [after_first_post]
-    started = time.monotonic()
     diag = _run_fixture(tmp_path, client)
     assert len(client.posts) == 2
     assert client.gets == 3  # first window, the claimer's window, final state
     assert diag["count_skips"] >= 1
-    assert time.monotonic() - started < 1.0  # answered on the discard frame, not on the idle timeout
+    assert time.monotonic() - client.first_look < 1.0  # answered on the discard frame, not on the idle timeout
 
 
 def test_action_unavailable_is_retried_while_the_window_has_time(tmp_path):
@@ -869,7 +901,7 @@ def test_action_unavailable_is_retried_while_the_window_has_time(tmp_path):
     runner.tournament = {
         "config": {"Kind": "test", "Rounds": 2, "BaseScore": 1, "YouCaiBiKao": False}
     }
-    runner._play("fixture")
+    _play_bounded(runner, "fixture")
     assert stub.calls == 2 and client.posts[0]["action"] == "discard"
     diag = json.loads(next(tmp_path.glob("game-*.json")).read_text())["client"]
     assert diag["action_unavailable"] == 1 and diag["action_retries"] == 1
@@ -956,7 +988,7 @@ def test_timeout_burst_pass_and_draw_cost_no_request_until_the_discard(tmp_path)
     # at the deadline, the next seat's chi-window pass, its timed draw and
     # its discard.  Only the discard can open a window for us, so the client
     # must look exactly once more, on that frame.
-    end = time.time() * 1000 + 800  # our pass needs LATE_PASS_SECONDS to spare
+    end = _Window(800)  # our pass needs LATE_PASS_SECONDS to spare
 
     def states(client):
         if len(client.posts) >= 2:
@@ -965,13 +997,13 @@ def test_timeout_burst_pass_and_draw_cost_no_request_until_the_discard(tmp_path)
             snap = _peng_window(time.time() * 1000 + 1000, 3, "3w")
             snap["discards"][1] = ["7t"]
             return {"seq": 16, "snapshot": snap}
-        return {"seq": 10, "snapshot": _peng_window(end, 1, "7t", responders=(0, 2, 3))}
+        return {"seq": 10, "snapshot": _peng_window(end(), 1, "7t", responders=(0, 2, 3))}
 
     def script(client, stop):
         client.posted.wait(5)
         client.posted.clear()
         client.on_frame(11, False)  # our pass
-        time.sleep(max(0.0, end / 1000 - time.time()))
+        time.sleep(max(0.0, end() / 1000 - time.time()))
         client.on_frame(12, False)  # timeout
         client.on_frame(13, False)  # timeout
         time.sleep(0.3)
@@ -995,9 +1027,10 @@ def test_next_seat_without_a_chi_window_still_plays_its_own_draw(tmp_path):
     # We pass a peng window as the next seat, but no chi window follows (the
     # server gives us none): our draw one second after the deadline must be
     # fetched and discarded, not taken for the next seat's timed draw.
-    end = time.time() * 1000 + 700  # our pass needs LATE_PASS_SECONDS to spare
+    window = _Window(700)  # our pass needs LATE_PASS_SECONDS to spare
 
     def states(client):
+        end = window()
         if len(client.posts) >= 2:
             return {"finished": True, "seq": 15, "snapshot": None}
         if client.posts:
@@ -1012,7 +1045,7 @@ def test_next_seat_without_a_chi_window_still_plays_its_own_draw(tmp_path):
         client.posted.wait(5)
         client.posted.clear()
         client.on_frame(11, False)  # our pass
-        time.sleep(max(0.0, end / 1000 - time.time()))
+        time.sleep(max(0.0, window() / 1000 - time.time()))
         client.on_frame(13, False)  # two timeouts at the deadline
         time.sleep(1.0)
         client.on_frame(14, False)  # our own draw
@@ -1021,10 +1054,9 @@ def test_next_seat_without_a_chi_window_still_plays_its_own_draw(tmp_path):
 
     client = _NotifyClient(states)
     client.frames = [script]
-    started = time.monotonic()
     _run_fixture(tmp_path, client)
     assert [p["action"] for p in client.posts] == ["pass", "discard"]
-    assert time.monotonic() - started < 2.5
+    assert time.monotonic() - client.first_look < 2.5
 
 
 def test_a_newly_dealt_table_is_looked_at_before_its_stream_and_policy_are_up(tmp_path):
@@ -1102,7 +1134,7 @@ def test_a_newly_dealt_table_is_looked_at_before_its_stream_and_policy_are_up(tm
         "config": {"Kind": "test", "Rounds": 2, "BaseScore": 1, "YouCaiBiKao": False}
     }
     begin = time.monotonic()
-    runner._play("fixture")
+    _play_bounded(runner, "fixture")
     assert client.gets[0] < built[0]  # looked before the policy was even up
     assert client.posts[0] - begin < 0.9  # was 0.3 s start + 1 s frame wait + fetch
 
@@ -1134,7 +1166,7 @@ def test_a_response_is_decided_with_the_discard_that_opened_it(tmp_path):
     # window; answering it with seat 1's discard as the latest misjudges the pass.
     from mahjong_ai.platform.official import OfficialAdapter
 
-    now = time.time() * 1000 + 1000
+    window = _Window(1000)
     events = [
         {"seq": 10, "type": "tile_discarded", "seat": 1, "tile": "7t", "data": {}},
         {"seq": 11, "type": "pass", "seat": 0, "data": {}},
@@ -1143,6 +1175,7 @@ def test_a_response_is_decided_with_the_discard_that_opened_it(tmp_path):
     ]
 
     def states(client):
+        now = window()
         if len(client.posts) >= 2:
             return {"finished": True, "seq": 14, "snapshot": None}
         if client.posts:
@@ -1175,7 +1208,7 @@ def test_a_response_is_decided_with_the_discard_that_opened_it(tmp_path):
     recorder = _Recorder()
     runner = TournamentRunner(client, recorder, OfficialAdapter(), tmp_path)
     runner.tournament = {"config": {"Kind": "test", "Rounds": 2, "BaseScore": 1, "YouCaiBiKao": False}}
-    runner._play("fixture")
+    _play_bounded(runner, "fixture")
     assert len(client.posts) == 2
     assert recorder.discarders == [1, 2]
 
@@ -1207,9 +1240,10 @@ def test_a_candidate_process_closed_by_an_error_is_started_again(tmp_path):
         def build(self):
             return built.pop(0)
 
-    now = time.time() * 1000 + 2000
+    window = _Window(2000)
 
     def states(client):
+        now = window()
         if client.posts or client.gets > 3:  # without a new process the window just runs out
             return {"finished": True, "seq": 11, "snapshot": None}
         return {"seq": 10, "snapshot": _peng_window(now, 1, "7t", responders=(0, 2, 3))}
@@ -1222,7 +1256,7 @@ def test_a_candidate_process_closed_by_an_error_is_started_again(tmp_path):
     client.frames = [after_post]
     runner = TournamentRunner(client, Spec(), OfficialAdapter(), tmp_path)
     runner.tournament = {"config": {"Kind": "test", "Rounds": 2, "BaseScore": 1, "YouCaiBiKao": False}}
-    runner._play("fixture")
+    _play_bounded(runner, "fixture")
     assert client.posts == [{"action": "pass"}]
     diag = json.loads(next(tmp_path.glob("game-*.json")).read_text())["client"]
     assert diag["policy_restarts"] == 1 and not built
@@ -1258,13 +1292,15 @@ def test_draws_and_discards_since_the_history_are_rebuilt_from_the_snapshot():
 def test_a_response_after_plain_draws_and_discards_costs_no_history_request(tmp_path):
     from mahjong_ai.platform.official import OfficialAdapter
 
-    now = time.time() * 1000 + 1000
+    window = _Window(1000)
     known, second = _plain_round()
-    second["window_deadline_ms"] = now + 60
-    first = _peng_window(now, 1, "7t", responders=(0, 2, 3))
+    first = _peng_window(0, 1, "7t", responders=(0, 2, 3))
     first["wall_remaining"] = 82
 
     def states(client):
+        now = window()
+        second["window_deadline_ms"] = now + 60
+        first["window_deadline_ms"] = now
         if len(client.posts) >= 2:
             return {"finished": True, "seq": 14, "snapshot": None}
         if client.posts:
@@ -1295,7 +1331,7 @@ def test_a_response_after_plain_draws_and_discards_costs_no_history_request(tmp_
     recorder = _Recorder()
     runner = TournamentRunner(client, recorder, OfficialAdapter(), tmp_path)
     runner.tournament = {"config": {"Kind": "test", "Rounds": 2, "BaseScore": 1, "YouCaiBiKao": False}}
-    runner._play("fixture")
+    _play_bounded(runner, "fixture")
     assert len(client.posts) == 2 and recorder.discarders == [1, 2]
     diag = json.loads(next(tmp_path.glob("game-*.json")).read_text())["client"]
     assert client.history_requests == 1 and diag["history_rebuilt"] == 1  # only the round's first look
@@ -1322,7 +1358,7 @@ def test_a_pass_too_late_for_its_window_is_not_sent(tmp_path):
     recorder = _Recorder()
     runner = TournamentRunner(client, recorder, OfficialAdapter(), tmp_path)
     runner.tournament = {"config": {"Kind": "test", "Rounds": 2, "BaseScore": 1, "YouCaiBiKao": False}}
-    runner._play("fixture")
+    _play_bounded(runner, "fixture")
     assert recorder.discarders and client.posts == []
     diag = json.loads(next(tmp_path.glob("game-*.json")).read_text())["client"]
     assert diag["late_passes_skipped"] == 1

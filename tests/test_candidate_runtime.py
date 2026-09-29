@@ -179,6 +179,11 @@ def test_codex_only_receives_research_tools(tmp_path):
 
 
 def test_training_checkpoint_recovers_same_model(tmp_path):
+    import os
+    from pathlib import Path
+    import subprocess
+    import sys
+
     from mahjong_ai.execution.candidate_runtime import train_package
     from mahjong_ai.strategies.seeds import default_opponents
     import numpy as np
@@ -197,8 +202,16 @@ def train(ctx):
         ctx.play(learner)
         learner.save(path)
         ctx.checkpoint({'index':i})
-        if start==0 and i==0:time.sleep(2)
+        if start==0 and i==0 and ctx.output.parent.name=='partial':time.sleep(60)
 """)
+    # The first run must start, play one episode and commit its checkpoint
+    # before its deadline cuts the stall after it. Starting takes a few cold
+    # imports, so the deadline scales with one measured just now.
+    source = Path(__file__).resolve().parents[1] / "src"
+    started = time.monotonic()
+    subprocess.run([sys.executable, "-B", "-c", "import mahjong_ai.execution.candidate_runtime, mahjong_ai.strategies.common"],
+                   env={**os.environ, "PYTHONPATH": str(source)}, check=True)
+    cold = time.monotonic() - started
     out = tmp_path / "partial" / "model"
     with pytest.raises(TimeoutError):
         train_package(
@@ -208,7 +221,7 @@ def train(ctx):
             default_opponents(),
             3,
             19,
-            time.monotonic() + 0.5,
+            time.monotonic() + max(1.0, 4 * cold),
         )
     progress = read_json(out.parent / "training-checkpoint.json")
     assert len(progress["episodes"]) == 1

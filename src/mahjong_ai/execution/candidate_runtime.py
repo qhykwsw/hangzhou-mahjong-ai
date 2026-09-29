@@ -323,7 +323,9 @@ class CandidateProcess:
             if self.process.poll() is None:
                 try:
                     os.killpg(self.process.pid, signal.SIGKILL)
-                except ProcessLookupError:
+                except (ProcessLookupError, PermissionError):
+                    # Exited between the poll and the kill: macOS answers a
+                    # group of unreaped zombies with EPERM, not ESRCH.
                     pass
             self.process.wait()
             self.stderr_thread.join(timeout=1)
