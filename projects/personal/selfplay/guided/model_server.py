@@ -19,6 +19,11 @@ with eager Torch MPS as a fallback. The backends compute linear layers in fp16,
 so a near-tie argmax can differ between backends, devices and fp32. Paired
 comparisons require the same frozen backend on both sides.
 
+An artifact whose meta.json has ``"sampling": {"temperature": T}`` draws its
+action from softmax(log-probabilities / T) instead of taking the argmax (for
+opponents that imitate people, whose own choices vary); torch backends only.
+Every other artifact keeps the argmax.
+
     python -m guided.model_server --root DIR --port 8830 [--device auto]
 """
 
@@ -92,12 +97,17 @@ class Models:
                 actor, meta = load_actor(
                     path, "cpu" if self.device == "mlx" else self.device
                 )
+                temperature = (meta.get("sampling") or {}).get("temperature")
+                if temperature is not None and self.device == "mlx":
+                    raise ValueError("sampling artifacts need a torch backend")
                 if self.device == "mlx":
                     from .mlx_actor import Actor
 
                     actor = Actor(actor)
                 else:
                     actor = prepare(actor, self.device)
+                    if temperature is not None:
+                        actor.sampling_temperature = float(temperature)
                 self.loaded[name] = (actor, meta)
             return self.loaded[name]
 
@@ -123,7 +133,14 @@ def decide(actor, planes, scalars, events, mask):
         device, torch.float16, enabled=device != "cpu", cache_enabled=False
     ):
         logits = actor(planes, scalars, events).float()
-    choice = F.log_softmax(logits.masked_fill(~mask, -1e9), dim=-1).argmax(-1)
+    log_probs = F.log_softmax(logits.masked_fill(~mask, -1e9), dim=-1)
+    temperature = getattr(actor, "sampling_temperature", None)
+    if temperature:
+        # Gumbel-max draws from softmax(log_probs / T); illegal actions stay at -1e9 / T.
+        uniform = torch.rand_like(log_probs).clamp_(1e-12, 1.0 - 1e-7)
+        choice = (log_probs / temperature - torch.log(-torch.log(uniform))).argmax(-1)
+    else:
+        choice = log_probs.argmax(-1)
     valid = mask.any(-1).all() & torch.isfinite(logits).all()
     return choice, valid
 

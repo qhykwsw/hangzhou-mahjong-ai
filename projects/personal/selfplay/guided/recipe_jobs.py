@@ -302,6 +302,7 @@ def trial_train(task, progress, smoke=False):
         "start_actor": task["start_actor"],
         "budget_seconds": task["budget_seconds"],
         "hand_budget": task.get("hand_budget"),
+        "label_hand_budget": task.get("label_hand_budget"),
         "smoke_seconds": task.get("smoke_seconds", 90),
         "seed": task["seed"],
         "line": task["line"],

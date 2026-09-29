@@ -23,6 +23,7 @@
 | `actor` | 已加载起点权重、在 GPU 上的 Actor |
 | `device`、`seed`、`deadline`、`time_left()` | 设备、随机种子、截止时刻、剩余秒数 |
 | `hand_budget`、`hands`、`hands_left()` | 局数预算、已打局数、剩余局数；未设局数预算时为 `None` |
+| `label_hand_budget`、`labeled_hands`、`labeled_hands_left()` | 带教师标签（`labels=True`）的局数上限、已打局数、剩余局数；它们也计入 `hands`。上限用完后再带标签采集会报错；未设上限时为 `None` |
 | `smoke` | 自检运行时为真，此时时限只有约 90 秒 |
 | `resources` | `cpu_capacity`、`cpu_count`、`gpu_total_bytes`、`gpu_limit_bytes`、`ram_limit_bytes`、建议的 `workers` 与 `tables` |
 | `teacher`、`teachers`、`rules`、`bundle` | 默认教师 ID、可以当教师的规则 ID（规则包里的规则与 harness 提供的规则版本）、规则包里的规则代表 ID、冻结包路径 |

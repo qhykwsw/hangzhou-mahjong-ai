@@ -71,3 +71,21 @@ def test_bad_encoding_is_a_request_error_not_a_scheduler_failure(encoded):
     assert "error" in answers[0]
     _, body = payload(3)
     assert "index" in service.decide("one", [body])[0]
+
+
+def test_a_sampling_artifact_draws_legal_actions_by_their_probability():
+    torch.manual_seed(929)
+    actor = Actor(16, 1, 4).eval()
+    row, _ = payload(3)
+    batch = policy_batch([row] * 6000, "cpu")
+    args = [batch[k] for k in ("planes", "scalars", "events", "mask")]
+    with torch.inference_mode():
+        greedy, _ = decide(actor, *args)
+        logits = actor(*args[:3]).float().masked_fill(~args[3], -1e9)
+        probabilities = torch.softmax(logits[0], -1)
+        actor.sampling_temperature = 1.0
+        drawn, valid = decide(actor, *args)
+    assert valid and bool(args[3][0, drawn].all())
+    assert set(greedy.tolist()) == {int(probabilities.argmax())}
+    frequencies = torch.bincount(drawn, minlength=len(probabilities)).float() / len(drawn)
+    assert float((frequencies - probabilities).abs().max()) < 0.03

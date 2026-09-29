@@ -5,7 +5,7 @@ on the conversation that started an attempt:
 
   python -m harness.line wait rule|rl [--minutes 9]   # results, notices, and the next step
   python -m harness.line start rule|rl "<change>" --why "<hypothesis>" --design-start <epoch> [--host <free host>]
-      RL also [--hands <training hands, default 1M, at most 5M>] [--from start|best|<RL version>]
+      RL also [--hands <training hands, default 1M; at most 5M on small hosts, 105M on large>] [--from start|best|<RL version>]
   python -m harness.line start rule "<change>" --why "<why faster>" --design-start <epoch> --equivalent
   python -m harness.line status rule|rl               # every attempt, the hosts, the lease
   python -m harness.line stop rule|rl                 # leave the loop; attempts run on
@@ -199,8 +199,15 @@ def design_hosts(line, probe=True):
     if champion is None and E.running(line):
         return [], "第一次尝试（v0）还没有结果，它成为最好版本后才能设计新尝试"
     free, waiting = free_hosts(line, probe), queued(line)
-    if len(free) > len(waiting):
-        return free[len(waiting):], None
+    # Queued redos take the free hosts of their own model size first.
+    taken = set()
+    for state in waiting:
+        match = [h for h in free if h not in taken and fits(state, h)]
+        if match:
+            taken.add(match[0])
+    available = [h for h in free if h not in taken]
+    if available:
+        return available, None
     if line == "rule":
         return [], "规则线的尝试还在评估"
     if waiting:
@@ -472,6 +479,11 @@ def equivalent(state):
     E.append_record(record)
 
 
+def fits(state, host):
+    """Whether a queued attempt may be redone on ``host``: RL attempts keep their model size."""
+    return state["line"] != "rl" or rl.size(host) == state.get("size", "small")
+
+
 def requeue(state, stage):
     """The attempt's host lost its work or was taken away: any free host redoes the stage."""
     state = load(state["id"]) | {"stage": "queued", "next": stage, "host": None,
@@ -504,10 +516,14 @@ def claim_host(state):
             if current is None or current["stage"] != "queued":
                 return current
             free, waiting = free_hosts(state["line"], probe=False), queued(state["line"])
-            if free and waiting[0]["id"] == state["id"]:
-                current |= {"stage": current["next"], "host": free[0]}
+            # Oldest first among the attempts that fit the same hosts (same model size).
+            ahead = [s for s in waiting if s["id"] != state["id"] and s["started_at"] < current["started_at"]
+                     and any(fits(s, h) and fits(current, h) for h in free)]
+            match = [h for h in free if fits(current, h)]
+            if match and not ahead:
+                current |= {"stage": current["next"], "host": match[0]}
                 save(current)
-                E.log(f"{state['id']}: redoing {current['stage']} on {free[0]}")
+                E.log(f"{state['id']}: redoing {current['stage']} on {match[0]}")
                 return current
         time.sleep(QUEUE_SECONDS)
 
@@ -682,8 +698,8 @@ def start(line, change, why, design_start, host=None, equivalent=False, hands=No
     if line == "rule" and (hands is not None or start_from != "start"):
         raise E.Refused("--hands 与 --from 只用于 RL 线。")
     hands = rl.HANDS if hands is None else int(hands)
-    if line == "rl" and not 0 < hands <= rl.MAX_HANDS:
-        raise E.Refused(f"训练局数要在 1 到 {rl.MAX_HANDS:,} 局之间。")
+    if line == "rl" and not 0 < hands <= max(b["max_hands"] for b in rl.BUDGETS.values()):
+        raise E.Refused(f"训练局数要在 1 到 {max(b['max_hands'] for b in rl.BUDGETS.values()):,} 局之间（按主机规格再细分）。")
     # Continuing the start itself is training from the start; any evaluated RL version may be a start.
     if line == "rl" and start_from not in ("start", "best"):
         rl.version(start_from)
@@ -718,6 +734,10 @@ def start(line, change, why, design_start, host=None, equivalent=False, hands=No
         host = host or free[0]
         if host not in free:
             raise E.Refused(f"{host} 现在不能开新尝试（可用：{'、'.join(free)}）。运行 wait，按可用的主机调整设计。")
+        if line == "rl":
+            if hands > rl.max_hands(host):
+                raise E.Refused(f"{host} 是 {rl.size(host)} 规格，每次尝试最多 {rl.max_hands(host):,} 局。")
+            rl.check_origin(start_from, host, champion, pool)
         attempt_id = E.next_attempt_id(line)
         now = time.time()
         state = dict(id=attempt_id, line=line, host=host, description=change, why=why,
@@ -726,7 +746,7 @@ def start(line, change, why, design_start, host=None, equivalent=False, hands=No
                      stage="training" if line == "rl" else "equivalence" if equivalent else "evaluating",
                      seed=random.SystemRandom().getrandbits(31), confirm_seed=random.SystemRandom().getrandbits(62))
         if line == "rl":
-            state |= {"hands": hands, "from": start_from if warm else "start"}
+            state |= {"hands": hands, "from": start_from if warm else "start", "size": rl.size(host)}
         save(state)
     if line == "rule":
         state["spec"] = E.freeze_rule(attempt_id)
@@ -840,7 +860,8 @@ def main():
     s.add_argument("--why", required=True, help="one or two sentences: the hypothesis behind it")
     s.add_argument("--design-start", type=float, required=True, help="epoch when designing this attempt began")
     s.add_argument("--host", help="RL: the free host this attempt was designed for (wait lists them)")
-    s.add_argument("--hands", type=int, help=f"RL: training hands for this attempt (default {rl.HANDS:,}, at most {rl.MAX_HANDS:,})")
+    s.add_argument("--hands", type=int, help=f"RL: training hands for this attempt (default {rl.HANDS:,}; at most "
+                   + "、".join(f"{n} {b['max_hands']:,}" for n, b in rl.BUDGETS.items()) + ")")
     s.add_argument("--from", dest="start_from", default="start",
                    help="RL: train from the fixed start, the best version this attempt is designed on (best), "
                         "or any evaluated RL version by id")

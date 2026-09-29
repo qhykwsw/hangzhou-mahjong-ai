@@ -18,6 +18,7 @@ def harness(tmp_path, monkeypatch):
     monkeypatch.setattr(E, "LOCAL", tmp_path)
     monkeypatch.setattr(line, "RUNNING", tmp_path / "running")
     monkeypatch.setattr(rl, "RL", tmp_path / "rl")
+    monkeypatch.setattr(E, "MODELS", tmp_path / "models")
     (tmp_path / "rl").mkdir()
     (tmp_path / "pool.json").write_text(json.dumps({"id": "pool-a", "members": {}}))
     monkeypatch.setattr(line, "online", lambda hosts, probe=True: {h: True for h in hosts})
@@ -82,9 +83,12 @@ def test_requeued_attempts_take_free_hosts_before_new_designs(harness):
         (rl.RL / f"setup-{host}.json").write_text("{}")
     record(E, id="fp-rl-000")
     E.reserve_attempt("rl", "4070", "busy", stage="training")
-    E.reserve_attempt("rl", None, "lost on a restart", stage="queued", next="training")
+    E.reserve_attempt("rl", None, "small, lost", stage="queued", next="training")
+    # A small attempt is redone only on a small host: the free large hosts stay open.
+    assert line.design_hosts("rl") == (["4090", "5070ti"], None)
+    E.reserve_attempt("rl", None, "lost on a restart", stage="queued", next="training", size="large")
     assert line.design_hosts("rl") == (["5070ti"], None)
-    E.reserve_attempt("rl", None, "lost too", stage="queued", next="training")
+    E.reserve_attempt("rl", None, "lost too", stage="queued", next="training", size="large")
     hosts, why = line.design_hosts("rl")
     assert hosts == [] and "排队" in why
     line.hosts("off", "4090")
@@ -250,6 +254,9 @@ def test_rl_attempts_choose_their_hands_and_may_continue_the_best(harness, monke
         (rl.RL / f"setup-{host}.json").write_text(json.dumps({"start_actor": "/start"}))
     E.seal()
     record(E, id=rl.start_id(E.load_pool()), finished_at=1, games=16)
+    for weights, size in (("w3", "small"), ("w2", "large")):
+        (E.MODELS / weights).mkdir(parents=True)
+        (E.MODELS / weights / "meta.json").write_text(json.dumps({"config": rl.SIZES[size]}))
     record(E, id="fp-rl-003", finished_at=2, games=16, spec={"parameters": {"weights": "w3"}},
            training={"hands": 1_000_000, "budget": 1_000_000, "lineage_hands": 1_000_000})
     shutil.copytree(E.SOURCES["rl"], rl.RL / "attempts" / "fp-rl-003" / "recipe")
@@ -257,8 +264,10 @@ def test_rl_attempts_choose_their_hands_and_may_continue_the_best(harness, monke
     start = lambda host, **kw: line.start("rl", "x", "y", 0, host, **kw)  # noqa: E731
     with pytest.raises(E.Refused, match="完全相同"):
         start("4070")
-    with pytest.raises(E.Refused, match="训练局数"):
+    with pytest.raises(E.Refused, match="每次尝试最多"):
         start("4070", hands=rl.MAX_HANDS + 1)
+    with pytest.raises(E.Refused, match="同规格"):
+        start("4090", start_from="best")  # the best is a small Actor; the 4090 trains the large size
     record(E, id="fp-rl-002", status="discard", finished_at=1.5, games=16, spec={"family": "model", "parameters": {"weights": "w2"}},
            training={"hands": 500_000, "budget": 500_000, "lineage_hands": 500_000})
     with pytest.raises(E.Refused, match="不是评估过的 RL 版本"):

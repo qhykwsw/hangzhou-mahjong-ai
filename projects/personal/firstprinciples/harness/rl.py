@@ -13,12 +13,15 @@ step of that); the maintainer prepares each host:
   python -m harness.rl setup <remote checkpoint | weights sha> --name <start name> --host 4070|4090|5070ti
   python -m harness.rl export <checkpoint> --name <model name> --host <host>
 
-What the recipe may not decide is fixed here and sealed with the pool: the
-hand budget, each host's resource limits and collection execution (workers,
-tables, batching), and which modules a recipe may import.
+What the recipe may not decide is fixed here and sealed with the pool: each
+host's model size, the hand budgets per size, each host's resource limits and
+collection execution (workers, tables, batching), and which modules a recipe
+may import. The catalog also offers the platform proxies the maintainer
+registered (harness.rl proxies), as training opponents only.
 """
 import argparse
 import json
+from pathlib import Path
 import os
 import re
 import shutil
@@ -39,8 +42,16 @@ from mahjong_ai.execution.remote import opponent_specs  # noqa: E402
 # longer. The deadline is not a budget: it only stops a training that hangs
 # (the slowest full budget, a slow teacher labelling every step, takes about a day).
 HANDS = E.override("FP_RL_HANDS", 1_000_000)
-MAX_HANDS = 5_000_000
 BUDGET = E.override("FP_RL_BUDGET", 2 * 86400)
+# Model size per host (maintainer's choice): the host's start Actor has it, and
+# an attempt there trains only from versions of the same size. The large size
+# gets more hands: up to 5M teacher-labelled (imitation) and 100M more for RL,
+# and a deadline that only guards against a hang.
+SIZES = {"small": {"dim": 128, "layers": 4, "heads": 4}, "large": {"dim": 384, "layers": 8, "heads": 8}}
+HOST_SIZE = {"4070": "small", "4090": "large", "5070ti": "large"}
+BUDGETS = {"small": {"max_hands": 5_000_000, "max_labeled": None, "deadline": 2 * 86400},
+           "large": {"max_hands": 105_000_000, "max_labeled": 5_000_000, "deadline": 5 * 86400}}
+MAX_HANDS = BUDGETS["small"]["max_hands"]
 # A collection plays out every game it started, so the last one may pass the
 # budget a little; past this allowance the attempt is invalid.
 HAND_ALLOWANCE = 25_000
@@ -92,9 +103,10 @@ def baseline(host):
     E.check_seal()
     if E.best(pool["id"], "rl"):
         raise E.Refused("RL 线在当前对手池下已经有最好版本")
-    setups = [E.read_json(setup_path(h)) for h in HOSTS if setup_path(h).exists()]
+    # The line's first best is the small start; large hosts start from their own.
+    setups = [E.read_json(setup_path(h)) for h in HOSTS if setup_path(h).exists() and size(h) == "small"]
     if not setups or len({s["weights"] for s in setups}) != 1:
-        raise E.Refused("各主机的 RL 起点不一致或还没有 setup")
+        raise E.Refused("小规格主机的 RL 起点不一致或还没有 setup")
     rel = E.SOURCES["rl"].relative_to(E.REPO).as_posix()
     import subprocess
 
@@ -149,6 +161,34 @@ def setup_path(host):
     return RL / f"setup-{host}.json"
 
 
+def size(host):
+    return HOST_SIZE[host]
+
+
+def size_of(weights):
+    """The size name of an Actor in the model store, from its architecture."""
+    config = E.read_json(E.MODELS / weights / "meta.json")["config"]
+    for name, spec in SIZES.items():
+        if all(config.get(k) == v for k, v in spec.items()):
+            return name
+    raise E.Refused(f"{weights[:12]} 的结构 {config} 不是固定的模型规格")
+
+
+def check_origin(start_from, host, champion, pool):
+    """Refuse training on ``host`` from a version of another model size."""
+    if start_from == "start" or (start_from == "best" and champion["id"] == start_id(pool)):
+        return
+    record = champion if start_from == "best" else version(start_from)
+    got = size_of(record["spec"]["parameters"]["weights"])
+    if got != size(host):
+        raise E.Refused(f"{record['id']} 是 {got} 规格（{SIZES[got]}），{host} 固定跑 {size(host)} 规格（{SIZES[size(host)]}）："
+                        f"续训只能在同规格版本之间；在 {host} 上用 --from start（该主机的起点）或同规格的版本编号。")
+
+
+def max_hands(host):
+    return BUDGETS[size(host)]["max_hands"]
+
+
 # -- catalog: what a recipe may train against or learn from --------------------------
 def catalog(pool=None):
     """Every version that became a line's best under the pool, with its spec and record.
@@ -164,7 +204,44 @@ def catalog(pool=None):
             if spec.get("family") != "model":
                 spec["runtime_path"] = pool["runtime_path"]
             offered[r["id"]] = {"spec": spec, "record": r}
-    return offered
+    return offered | proxies()
+
+
+def proxies_path():
+    return RL / "proxies.json"
+
+
+def proxies():
+    """The platform proxies the maintainer registered: training opponents only, never teachers."""
+    if not proxies_path().exists():
+        return {}
+    out = {}
+    for name, m in E.read_json(proxies_path())["members"].items():
+        spec = {"family": "model", "version": f"proxy-{name}", "parameters": {"weights": m["weights"]}}
+        record = {"id": f"proxy-{name}", "line": "proxy", "score": None, "se": None,
+                  "description": f"平台代理：模仿 {m['display']}（线上每手 {m['online_per_hand']:+.2f}，"
+                                 f"近 3 天同桌占比 {m['share']:.1%}，代理对其动作的一致率 {m['agreement']:.0%}）"}
+        out[f"proxy-{name}"] = {"spec": spec, "record": record}
+    return out
+
+
+def register_proxies(panel_path):
+    """Offer a proxy panel's members (argmax Actors) in the catalog; replaces the previous registration."""
+    panel = E.read_json(Path(panel_path))
+    fidelity = Path(panel_path).parent / "results"
+    report = E.read_json(Path(panel["proxy_run"]) / "report.json")
+    players = {p["user_id"]: p for p in E.read_json(E.REPO / "projects/personal/selfplay/.local/platform-data/players.json")}
+    members = {}
+    for name, m in panel["members"].items():
+        online = [players[u] for u in m["users"] if u in players]
+        hands = sum(p["hands"] for p in online)
+        if not (E.MODELS / m["weights"]).is_dir():
+            raise SystemExit(f"{name}: {m['weights'][:12]} 不在模型库")
+        members[name] = {"weights": m["weights"], "display": m["display"], "share": m["share"],
+                         "online_per_hand": sum(p["score_per_hand"] * p["hands"] for p in online) / max(1, hands),
+                         "agreement": report["proxies"][name]["finetuned"]["agreement"]}
+    E.atomic_json(proxies_path(), {"panel": panel["id"], "members": members})
+    return len(members)
 
 
 MEASURE = r"""
@@ -227,12 +304,12 @@ def catalog_facts():
         rule = spec.get("family") != "model"
         facts.append({
             "id": cid,
-            "source": {"rule": "规则线", "rl": "RL 线"}.get(record["line"]) if cid in offered else "固定对手池",
+            "source": {"rule": "规则线", "rl": "RL 线", "proxy": "平台代理"}.get(record["line"]) if cid in offered else "固定对手池",
             "kind": "规则" if rule else "模型",
             "teacher": rule,
             "default": {"opponent": cid in pool["members"], "teacher": cid == teacher},
-            "score": record and round(record["score"], 2),
-            "se": record and round(record["se"], 2),
+            "score": round(record["score"], 2) if record and record.get("score") is not None else None,
+            "se": round(record["se"], 2) if record and record.get("se") is not None else None,
             "decision_ms": costs.get(cid),
             "description": (f"与 {record['equivalent']['to']} 决策完全一致的等价实现：" if record.get("equivalent") else "")
             + record["description"] if cid in offered else None,
@@ -329,7 +406,10 @@ dst.parent.mkdir(parents=True,exist_ok=True);shutil.copytree(src,dst);print(json
     else:
         value = export(host, source, name, start)
         place_on_host(start, host)  # the RL line trains and evaluates here
-    value |= {"start_actor": start, "host": host}
+    config = value["meta"]["config"]
+    if any(config.get(k) != v for k, v in SIZES[size(host)].items()):
+        raise SystemExit(f"{host} 固定跑 {size(host)} 规格 {SIZES[size(host)]}，起点结构是 {config}")
+    value |= {"start_actor": start, "host": host, "size": size(host)}
     E.atomic_json(setup_path(host), value)
     return value
 
@@ -420,7 +500,9 @@ def train(state):
     start, behind = start_actor(state, host, setup_)
     task = dict(host=host, remote_dir=remote_job, job_dir=str(job), code=setup_["code"],
                 source_id=setup_["source_id"], recipe=str(job / "recipe"), bundle=remote.root(host) + BUNDLE,
-                runtime=runtime, start_actor=start, budget_seconds=BUDGET, hand_budget=hands,
+                runtime=runtime, start_actor=start, hand_budget=hands,
+                budget_seconds=BUDGET if E.TEST else BUDGETS[size(host)]["deadline"],
+                label_hand_budget=BUDGETS[size(host)]["max_labeled"],
                 seed=state["seed"], line="rl", limits=LIMITS[host], execution=EXECUTION[host],
                 opponents=opponents, catalog=offered, fetch_actor=False)
     E.log(f"{attempt_id}: training {hands} hands on {host} from {start}")
@@ -428,6 +510,7 @@ def train(state):
     E.atomic_json(job / "training.json", {k: v for k, v in result.items() if k != "metrics"})
     status = result["status"]
     training = {"host": host, "state": status.get("state"), "hands": status.get("hands"),
+                "labeled_hands": status.get("labeled_hands"), "size": size(host),
                 "training_seconds": status.get("training_seconds"), "budget": hands,
                 "from": origin(state),
                 "lineage_hands": behind + (status.get("hands") or 0)}
@@ -451,11 +534,15 @@ def main():
     x.add_argument("checkpoint")
     x.add_argument("--name", required=True)
     x.add_argument("--host", required=True)
+    q = sub.add_parser("proxies", help="offer a proxy panel's members in the catalog (training opponents only)")
+    q.add_argument("panel", help="panel.json of the online calibration")
     b = sub.add_parser("baseline", help="score the start Actor as the RL line's first best version (once per pool)")
     b.add_argument("--host", default="4070", choices=HOSTS)
     args = parser.parse_args()
     if args.command == "setup":
         print(json.dumps(setup(args.source, args.name, args.host), ensure_ascii=False))
+    elif args.command == "proxies":
+        print(f"已登记 {register_proxies(args.panel)} 个平台代理")
     elif args.command == "baseline":
         try:
             print(E.report(baseline(args.host)))

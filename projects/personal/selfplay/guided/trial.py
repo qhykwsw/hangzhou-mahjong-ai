@@ -165,6 +165,9 @@ class Context:
         # budget still caps the trial.
         self.hand_budget = None if smoke else plan.get("hand_budget")
         self.hands = 0
+        # Optional cap on the hands played with teacher labels (imitation), inside the hand budget.
+        self.label_hand_budget = None if smoke else plan.get("label_hand_budget")
+        self.labeled_hands = 0
         self._rows = 0
         # With a fixed execution, the recipe keeps torch's thread counts
         # (checked on its own thread whenever it calls ctx).
@@ -182,6 +185,10 @@ class Context:
     def hands_left(self):
         """Training hands left in the budget, or None without one."""
         return None if self.hand_budget is None else self.hand_budget - self.hands
+
+    def labeled_hands_left(self):
+        """Teacher-labelled hands left in their own cap, or None without one."""
+        return None if self.label_hand_budget is None else self.label_hand_budget - self.labeled_hands
 
     def new_actor(self):
         """A fresh Actor with the fixed architecture (e.g. for opponent snapshots)."""
@@ -221,6 +228,8 @@ class Context:
         teacher = cfg.get("teacher") or self.teacher
         if labels and teacher not in self.teachers:
             raise ValueError(f"unknown teacher: {teacher} (choose from ctx.teachers)")
+        if labels and self.label_hand_budget is not None and self.labeled_hands_left() <= 0:
+            raise ValueError("teacher-labelled hand budget exhausted")
         cfg = {k: v for k, v in cfg.items() if k not in ("opponents", "teacher")}
         known = {k: v for k, v in cfg.items() if k in configuration()}
         extra = {k: v for k, v in cfg.items() if k not in known}
@@ -238,6 +247,8 @@ class Context:
             # cannot play far past the budget.
             per_hand = self._rows / self.hands if self.hands else 12.0
             samples = max(1, min(samples, int(self.hands_left() * per_hand) + 1))
+            if labels and self.label_hand_budget is not None:
+                samples = max(1, min(samples, int(self.labeled_hands_left() * per_hand) + 1))
         run_cfg |= {
             # More worker processes than cores only adds memory and contention.
             "workers": max(1, min(int(run_cfg["workers"]), os.cpu_count())),
@@ -279,6 +290,8 @@ class Context:
         )
         # Every game started is played out, so the last collection may overrun the budget.
         self.hands += len(records) * run_cfg["rounds"]
+        if labels:
+            self.labeled_hands += len(records) * run_cfg["rounds"]
         self._rows += len(rows)
         with open(self.root / "collection.jsonl", "a") as stream:
             stream.write(json.dumps({"time": time.time(), "iteration": int(iteration), "workers": run_cfg["workers"],
@@ -406,6 +419,7 @@ def train(root, smoke=False):
             training_seconds=time.time() - started,
             overrun_seconds=max(0.0, time.time() - deadline),
             hands=ctx.hands,
+            labeled_hands=ctx.labeled_hands,
             weights_sha256=meta["weights_sha256"],
         )
     except BaseException as exc:
