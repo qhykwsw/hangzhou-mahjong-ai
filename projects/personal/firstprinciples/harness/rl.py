@@ -40,17 +40,19 @@ from mahjong_ai.execution.remote import opponent_specs  # noqa: E402
 # --hands): more hands per attempt mean fewer results a day, so the cap keeps
 # the three slots exploring. A recipe that spends more per hand only takes
 # longer. The deadline is not a budget: it only stops a training that hangs
-# (the slowest full budget, a slow teacher labelling every step, takes about a day).
+# (the slowest full budget, a large Actor distilling 5M teacher-labelled hands
+# and training 5M more, takes about a day on the 4090).
 HANDS = E.override("FP_RL_HANDS", 1_000_000)
 BUDGET = E.override("FP_RL_BUDGET", 2 * 86400)
 # Model size per host (maintainer's choice): the host's start Actor has it, and
 # an attempt there trains only from versions of the same size. The large size
-# gets more hands: up to 5M teacher-labelled (imitation) and 100M more for RL,
-# and a deadline that only guards against a hang.
+# trains in segments: up to 10M hands an attempt (5M of them teacher-labelled),
+# each one evaluated, the next continuing from it (--from); the hands add up
+# along the path without a cap, as for the small size.
 SIZES = {"small": {"dim": 128, "layers": 4, "heads": 4}, "large": {"dim": 384, "layers": 8, "heads": 8}}
 HOST_SIZE = {"4070": "small", "4090": "large", "5070ti": "large"}
-BUDGETS = {"small": {"max_hands": 5_000_000, "max_labeled": None, "deadline": 2 * 86400},
-           "large": {"max_hands": 105_000_000, "max_labeled": 5_000_000, "deadline": 5 * 86400}}
+BUDGETS = {"small": {"max_hands": 5_000_000, "max_labeled": None},
+           "large": {"max_hands": 10_000_000, "max_labeled": 5_000_000}}
 MAX_HANDS = BUDGETS["small"]["max_hands"]
 # A collection plays out every game it started, so the last one may pass the
 # budget a little; past this allowance the attempt is invalid.
@@ -501,7 +503,7 @@ def train(state):
     task = dict(host=host, remote_dir=remote_job, job_dir=str(job), code=setup_["code"],
                 source_id=setup_["source_id"], recipe=str(job / "recipe"), bundle=remote.root(host) + BUNDLE,
                 runtime=runtime, start_actor=start, hand_budget=hands,
-                budget_seconds=BUDGET if E.TEST else BUDGETS[size(host)]["deadline"],
+                budget_seconds=BUDGET,
                 label_hand_budget=BUDGETS[size(host)]["max_labeled"],
                 seed=state["seed"], line="rl", limits=LIMITS[host], execution=EXECUTION[host],
                 opponents=opponents, catalog=offered, fetch_actor=False)
