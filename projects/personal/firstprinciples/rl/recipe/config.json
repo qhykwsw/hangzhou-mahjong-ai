@@ -1,7 +1,7 @@
 {
   "rows": 600000,
   "smoke_rows": 3000,
-  "step_kl": 0.015,
+  "step_kl": 0.0075,
   "kl_rows": 20000,
   "microbatch": 256,
   "critic_batch": 256,
@@ -13,5 +13,6 @@
   "distill_epochs": 4,
   "teacher": "fp-rule-062",
   "chunks_per_step": 3,
-  "playout_baseline": true
+  "playout_baseline": true,
+  "tail_average": 0.5
 }

@@ -169,6 +169,13 @@ def train(ctx):
     chunks = max(1, int(cfg["chunks_per_step"]))
     step, iteration, rollouts, last = 0, 0, 0, 0.0
     hands = lambda: ctx.hands_left() is None or ctx.hands_left() > 0  # noqa: E731
+    # Near the optimum each KL step moves the policy along its noise as much as
+    # its signal, and neighbouring steps' noise is uncorrelated: the mean of the
+    # iterates over the second half of the policy-gradient steps keeps the
+    # signal and averages the noise out (Polyak). Rollouts still use the latest
+    # iterate; only the saved result is the mean.
+    tail = float(cfg.get("tail_average", 0.0))
+    average, averaged, budget, last_batches = None, 0, None, None
 
     def rollout(distilling):
         """One rollout of target_rows decisions, or None when time or hands ran short."""
@@ -214,6 +221,9 @@ def train(ctx):
         # the same policy: near the teacher's optimum each step's noise costs
         # quadratically, so a larger batch per KL step settles closer to it.
         # Each rollout is fitted, differentiated and freed before the next.
+        if budget is None:
+            # The policy-gradient budget as it stands before its first step.
+            budget = ctx.hands_left() if ctx.hands_left() is not None else ctx.time_left()
         params, direction, batches, parts, count = None, None, None, [], 0
         collected = fitted = 0.0
         for part in range(chunks):
@@ -257,6 +267,19 @@ def train(ctx):
         direction = [d / len(parts) for d in direction]
         stats = {key: float(np.mean([p[key] for p in parts])) for key in parts[0]}
         stats |= kl_step(actor, params, direction, batches, float(cfg["step_kl"]))
+        left = ctx.hands_left() if ctx.hands_left() is not None else ctx.time_left()
+        if tail > 0 and left <= tail * budget:
+            averaged += 1
+            with torch.no_grad():
+                if average is None:
+                    average = [p.detach().float().clone() for p in params]
+                else:
+                    for a, p in zip(average, params):
+                        a += (p.detach().float() - a) / averaged
+            stats["averaged"] = averaged
+        # Kept on the host: device tensors held into the next step's rollout
+        # would pin freed segments and fragment the capped allocator.
+        last_batches = [{k: v.cpu() for k, v in mb.items()} for mb in batches]
         del params, direction, batches
         ctx.save_actor(actor)
         last = time.time() - began
@@ -265,4 +288,18 @@ def train(ctx):
             critic_seconds=fitted, step_seconds=last,
         )
         torch.cuda.empty_cache()
+    if average is not None:
+        params = [p for p in actor.parameters() if p.requires_grad]
+        last_batches = [{k: v.to(ctx.device) for k, v in mb.items()} for mb in last_batches]
+        with torch.no_grad():
+            final = [masked_log_probs(actor(*actor_args(mb)), mb["mask"]) for mb in last_batches]
+            for p, a in zip(params, average):
+                p.copy_(a.to(p.dtype))
+            mean = [masked_log_probs(actor(*actor_args(mb)), mb["mask"]) for mb in last_batches]
+            kl = sum(float((f.exp().masked_fill(~mb["mask"], 0) * (f - m).masked_fill(~mb["mask"], 0)).sum())
+                     for mb, f, m in zip(last_batches, final, mean)) / sum(len(f) for f in final)
+            agree = sum(float((f.argmax(-1) == m.argmax(-1)).sum()) for f, m in zip(final, mean)) / sum(
+                len(f) for f in final)
+        ctx.save_actor(actor)
+        ctx.log(step=step, averaged=averaged, average_kl=kl, average_agreement=agree)
     return actor
