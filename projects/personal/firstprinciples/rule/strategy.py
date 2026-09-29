@@ -68,6 +68,7 @@ SHAPE_DISTANCE = -0.045
 SHAPE_OPEN = 0.0105
 SHAPE_EDGE = -0.0055
 CALL_WEIGHT = 0.7  # the share of the call option measured best against the pool
+FISH_DEPTH = 8  # draws a baotou wait may let go while fishing for piao
 LONG = 16  # more draws of mine than any hand holds
 
 
@@ -137,19 +138,30 @@ def reshaped_value(hand, opened, available, draws, options=True, speed=1.0):
 
 
 @lru_cache(maxsize=2000)
-def piao_value(hand, opened, available, chain, piao, draws, speed=1.0):
+def piao_value(hand, opened, available, chain, piao, draws, speed=1.0, fish=False, pungs=()):
     """A baotou wait holding a spare white: each draw either wins now or, when
-    a white discard keeps baotou, scores piao and waits on at double fan."""
+    a white discard keeps baotou, scores piao and waits on at double fan. At a
+    win (fish) a kong that keeps baotou doubles too, and a draw doing neither
+    may be let go to keep fishing: an optimal stop over the draws left, each
+    round risking the tenpai hazard."""
     unseen = max(1, sum(available))
     held = list(_fast.counts(hand))
-    q = Q * speed
+    q = tenpai_hazard(draws, speed) if fish else Q * speed
     total = 0.0
+    options = []
     for tile in range(34):
         if available[tile] <= 0 or held[tile] >= 4:
             continue
+        kong = fish and (held[tile] == 3 or tile in pungs)
         held[tile] += 1
         now = _fast.fan_value(held, tile, opened, chain, piao, False, False) + SAVED
         best = now
+        if kong:
+            # A kong keeping baotou: its replacement draw wins at double fan.
+            after = list(held)
+            after[tile] -= 4 if held[tile] == 4 and tile not in pungs else 1
+            if _fast.baotou(after, opened + (0 if tile in pungs else 1)):
+                best = max(best, 2 * (now - SAVED) + SAVED)
         if held[WHITE] >= 2:
             held[WHITE] -= 1
             if _fast.baotou(held, opened):
@@ -160,12 +172,19 @@ def piao_value(hand, opened, available, chain, piao, draws, speed=1.0):
                 best = max(now, (1 - q) * later)
             held[WHITE] += 1
         held[tile] -= 1
+        options.append((available[tile], now, best))
         total += available[tile] * best
-    return total / unseen
+    # A draw that neither wins big nor scores piao can be let go too, keeping
+    # the baotou wait for the next draw: an optimal stop over the draws left.
+    value = total / unseen
+    for _ in range(min(draws - 1, FISH_DEPTH) if fish else 0):
+        again = (1 - q) * value
+        value = sum(n * max(best, again) for n, now, best in options) / unseen
+    return value
 
 
 
-def piao_gain(hand, opened, available, draws, speed):
+def piao_gain(hand, opened, available, draws, speed, pungs=()):
     """What the piao option adds to a wait holding a white, over the C race:
     the white upgrade's baotou targets priced with piao_value when they keep
     a spare white (only at a win, where this trade is made)."""
@@ -174,7 +193,7 @@ def piao_gain(hand, opened, available, draws, speed):
     if is_baotou(hand, opened):
         if hand.count(WHITE) < 2:
             return 0.0
-        return piao_value(hand, opened, available, 0, 0, draws, speed) - waiting_value(hand, opened, available, draws=draws, speed=speed)
+        return piao_value(hand, opened, available, 0, 0, draws, speed, True, pungs) - waiting_value(hand, opened, available, draws=draws, speed=speed)
     held = list(_fast.counts(hand))
     row = _fast.analyze_counts(held, opened, available, 0, 0, 0)
     if row[0] > 0:
@@ -299,7 +318,8 @@ class Race:
             else:
                 value = reshaped_value(rest, opened, available, draws, options, speed)
                 if at_win:
-                    value += piao_gain(rest, opened, available, draws, speed)
+                    pungs = tuple(m.tiles[0] for m in obs.melds[obs.stage.seat] if m.kind == "peng")
+                    value += piao_gain(rest, opened, available, draws, speed, pungs)
             value = (1 - Q * speed) * value + TIE * potential(rest, available)
             if not at_win:
                 called = call_option(rest, opened, available, draws, stage, chis)
