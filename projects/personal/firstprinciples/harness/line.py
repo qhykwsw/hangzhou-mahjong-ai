@@ -515,14 +515,19 @@ def claim_host(state):
 def interrupt(state):
     """Stop an attempt's driver and its jobs on its host (to redo it elsewhere, or cancel it)."""
     if state.get("driver_pid") and driver_alive(state["id"]):
-        try:
-            os.kill(state["driver_pid"], signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        for _ in range(50):
+        # A driver still inside a host call can outlive SIGTERM and relaunch
+        # the job it then finds gone: it must be gone before the jobs are killed.
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.kill(state["driver_pid"], sig)
+            except ProcessLookupError:
+                break
+            for _ in range(50):
+                if not driver_alive(state["id"]):
+                    break
+                time.sleep(0.2)
             if not driver_alive(state["id"]):
                 break
-            time.sleep(0.2)
     host = state.get("host")
     if host in (None, "local"):
         return  # local jobs pause themselves when their driver goes
