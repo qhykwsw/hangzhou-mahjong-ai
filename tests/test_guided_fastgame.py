@@ -297,3 +297,32 @@ def test_encoding_first_in_a_fresh_worker_process():
     env = {**os.environ, "PYTHONPATH": os.pathsep.join(p for p in paths if p)}
     done = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=120)
     assert done.returncode == 0, done.stderr[-2000:]
+
+
+def test_a_hand_without_a_learner_decision_credits_no_earlier_row(members, monkeypatch):
+    """A later hand that ends before the learner's first choice keeps its score out
+    of the previous hand's last row: rows carry their own hand's score (the
+    recipes build per-hand targets); the score stays in the game ledger."""
+    from selfplay_core.actions import HU
+
+    by_id = {f"m{i}": m for i, m in enumerate(members)}
+    monkeypatch.setattr(artifacts, "build_policy", lambda bundle, cid: by_id[cid])
+    seed = 14590  # a naturally shuffled deal whose dealer (seat 1) can win on its opening draw
+    assert HU in fastgame.native.Hand(seed, 1, 2, (0, 0, 0, 0), 2).legal()
+    cfg = configuration(rounds=2, lookahead=False)
+    for cls in (Game, fastgame.FastGame):
+        game = cls(cfg, {"entries": []}, {k: None for k in by_id}, ["model:current", "m1", "m2", "m3"], 1,
+                   focal=0, train=True)
+        game.rows = [dict(hand=1, reward=-8.0, value=0.0, adv=0.0, ret=0.0)]
+        game.scores, game.hand_no, game.dealer = [-8, 24, -8, -8], 2, 1
+        if cls is Game:
+            game.state = HandState(game.config, seed, 1, 2, game.scores)
+            game.state.rounds_total = 2
+            game.state.step(next(a for a in game.state.legal_actions() if a.action == "hu"))
+        else:
+            game.start = (1, tuple(game.scores))
+            game.state = fastgame.native.Hand(seed, 1, 2, game.scores, 2)
+            game.state.step(HU)
+        assert game.advance() is None and game.complete
+        assert game.rows[-1]["reward"] == -8.0, cls.__name__
+        assert game.predecision_reward == game.scores[0] + 8 == -8, cls.__name__

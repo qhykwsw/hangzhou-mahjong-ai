@@ -73,6 +73,12 @@ def audit(root, base, insecure=False):
                 "seat": seat,
                 "own_discard_timeouts": sum(e["seat"] == seat for e in timeouts),
                 "other_discard_timeouts": sum(e["seat"] != seat for e in timeouts),
+                "own_response_timeouts": sum(
+                    e["type"] == "timeout"
+                    and (e.get("data") or {}).get("kind") == "response"
+                    and e["seat"] == seat
+                    for e in events
+                ),
             }
         )
         records = (
@@ -142,6 +148,9 @@ def audit(root, base, insecure=False):
                     break
             if r["action"]["action"] != "pass" and cause == "unexplained":
                 cause = "unexplained_nonpass"
+            elif r["action"]["action"] != "pass" and cause == "response_window_expired":
+                # Explained, yet our chi/peng/kong was never played: a real loss.
+                cause = "claim_window_expired"
             failures.append(
                 {
                     "game_id": r["game_id"],
@@ -160,7 +169,10 @@ def audit(root, base, insecure=False):
     clean = (
         complete
         and all(r["own_discard_timeouts"] == 0 for r in reports)
-        and not any(r["cause"].startswith("unexplained") for r in failures)
+        and not any(
+            r["cause"].startswith("unexplained") or r["cause"] == "claim_window_expired"
+            for r in failures
+        )
     )
     summary_path = root / "summary.json"
     result = {
@@ -175,6 +187,8 @@ def audit(root, base, insecure=False):
         "failure_counts": dict(Counter(r["cause"] for r in failures)),
         "own_discard_timeouts": sum(r["own_discard_timeouts"] for r in reports),
         "other_discard_timeouts": sum(r["other_discard_timeouts"] for r in reports),
+        # Most are windows with nothing but a pass; lost claims are counted above.
+        "own_response_timeouts": sum(r["own_response_timeouts"] for r in reports),
     }
     if not result["match_completed"]:
         result["status"] = "issues_or_incomplete"

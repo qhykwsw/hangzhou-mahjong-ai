@@ -1362,3 +1362,159 @@ def test_a_pass_too_late_for_its_window_is_not_sent(tmp_path):
     assert recorder.discarders and client.posts == []
     diag = json.loads(next(tmp_path.glob("game-*.json")).read_text())["client"]
     assert diag["late_passes_skipped"] == 1
+
+
+class _ScriptedPolicy:
+    """Records every observation it decides on; answers from a script."""
+
+    identity = version = "scripted"
+
+    def __init__(self, choose):
+        self.choose, self.observations = choose, []
+
+    def build(self):
+        return self
+
+    def reset(self, seed):
+        pass
+
+    def act(self, obs):
+        self.observations.append(obs)
+        return self.choose(obs, len(self.observations))
+
+
+def test_our_accepted_chi_reaches_the_next_decision_with_its_sequence(tmp_path):
+    """After our chi the client records it itself; the discard decision that
+    follows (often before any history refresh) must see the whole sequence,
+    as the engine and the server record it."""
+    from mahjong_ai.platform.official import OfficialAdapter
+    from test_catch_play import official_document
+
+    state = HandState(RoundConfig(rounds=8), 13)
+    while not (chi := next((a for a in state.legal_actions() if a.action == "chi"), None)):
+        state.step(state.timeout_action())
+    before = official_document(state)
+    before["snapshot"]["turn"] = state.discarder  # the discarder's turn in a response window
+    state.step(chi)
+    after = official_document(state)
+    expected = state.observation()
+    known = [e for e in before["wire_events"] if e["type"] != "deal"]
+    for n, e in enumerate(known, 1):
+        e["seq"] = n
+    last = len(known)
+
+    def states(client):
+        if len(client.posts) >= 2:
+            return {"finished": True, "seq": last + 2}
+        doc = after if client.posts else before
+        return {"seq": last + bool(client.posts),
+                "snapshot": dict(doc["snapshot"], window_deadline_ms=time.time() * 1000 + 3000)}
+
+    class Client(_NotifyClient):
+        def request(self, method, path, body=None):
+            if method == "GET" and "seq=0" not in path:
+                return {"seq": last, "events": known}
+            return super().request(method, path, body)
+
+    def frames(client, stop):
+        client.posted.wait(5)
+        client.posted.clear()
+        client.on_frame(last + 1, False)
+        client.posted.wait(5)
+        client.on_frame(last + 2, True)
+
+    client = Client(states)
+    client.frames = [frames]
+    policy = _ScriptedPolicy(lambda obs, n: chi if n == 1 else next(a for a in obs.legal_actions if a.action == "discard"))
+    runner = TournamentRunner(client, policy, OfficialAdapter(), tmp_path)
+    runner.tournament = before["tournament"]
+    _play_bounded(runner, "own-chi", limit=10)
+    got = next(e for e in reversed(policy.observations[1].public_events) if e.kind == "chi")
+    want = next(e for e in reversed(expected.public_events) if e.kind == "chi")
+    assert sorted(got.tiles) == sorted(want.tiles) and len(got.tiles) == 3
+
+
+def test_later_real_events_do_not_erase_the_rebuilt_opening(tmp_path):
+    """The opening turns the server no longer sends are rebuilt from the
+    snapshot; a later draw of the same seat (hidden tile, same type) is a new
+    event and must not replace the rebuilt one."""
+    from mahjong_ai.platform.official import OfficialAdapter
+    from test_catch_play import official_document
+
+    state = HandState(RoundConfig(rounds=8), 13)
+
+    def responding():
+        return state.phase == "response_peng" and state.turn == 0 and state.discarder == 2
+
+    while not responding():
+        state.step(state.timeout_action())
+    first = official_document(state)
+    first["snapshot"]["turn"] = 2
+    opening = [e for e in first["wire_events"] if e["type"] != "deal"]
+    state.step(Action("pass"))
+    while not responding():
+        state.step(state.timeout_action())
+    second = official_document(state)
+    second["snapshot"]["turn"] = 2
+    later = [e for e in second["wire_events"] if e["type"] != "deal"][len(opening):]
+    for n, e in enumerate(later, 21):
+        e["seq"] = n
+    top = later[-1]["seq"]
+
+    def states(client):
+        if len(client.posts) >= 2:
+            return {"finished": True, "seq": top + 1}
+        if client.posts:
+            return {"seq": top, "snapshot": dict(second["snapshot"], window_deadline_ms=time.time() * 1000 + 3000)}
+        return {"seq": 20, "snapshot": dict(first["snapshot"], window_deadline_ms=time.time() * 1000 + 3000)}
+
+    class Client(_NotifyClient):
+        def request(self, method, path, body=None):
+            if method == "GET" and "seq=0" not in path:
+                # The opening events are gone; only what followed is served.
+                return {"seq": top, "events": later} if self.posts else states(self)
+            return super().request(method, path, body)
+
+    client = Client(states)
+    client.notify = None
+    policy = _ScriptedPolicy(lambda obs, n: Action("pass"))
+    runner = TournamentRunner(client, policy, OfficialAdapter(), tmp_path)
+    runner.tournament = first["tournament"]
+    _play_bounded(runner, "rebuilt-opening", limit=10)
+
+    def draws(obs):
+        return [e for e in obs.public_events if e.kind == "draw" and e.seat == 1]
+
+    assert len(policy.observations) == 2
+    assert len(draws(policy.observations[1])) == len(draws(OfficialAdapter()(second))) == 2
+
+
+def test_rebuilding_refuses_an_earlier_own_draw_it_cannot_know():
+    """Only the snapshot's own draw is known; a gap holding an earlier own draw
+    (a turn that timed out, a late resume) cannot be rebuilt from it."""
+    from mahjong_ai.platform.online import rebuild_gap
+
+    state = HandState(RoundConfig(), 13, 0, 1, (0, 0, 0, 0))
+    own = 0
+    while True:
+        if state.phase == "draw" and state.turn == 1:
+            own += 1
+            if own == 2:
+                break
+        state.step(state.timeout_action())
+    assert not any(state.melds)
+
+    def snapshot(state):
+        return dict(seat=1, round_no=1, dealer=0, phase=state.phase, turn=state.turn,
+                    wall_remaining=len(state.wall), drawn_tile=tile_code(state.drawn),
+                    discards=[[tile_code(t) for t in row] for row in state.discards],
+                    melds=[[] for _ in range(4)], last_discard=tile_code(state.discarded))
+
+    assert rebuild_gap([], snapshot(state)) is None
+    # The gap up to our first draw is still rebuilt, ending on that draw.
+    first = HandState(RoundConfig(), 13, 0, 1, (0, 0, 0, 0))
+    while not (first.phase == "draw" and first.turn == 1):
+        first.step(first.timeout_action())
+    rebuilt = rebuild_gap([], snapshot(first))
+    assert rebuilt[-1] == {"type": "tile_drawn", "seat": 1, "tile": tile_code(first.drawn), "data": None,
+                           "_round_no": 1}

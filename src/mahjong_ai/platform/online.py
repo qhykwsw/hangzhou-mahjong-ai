@@ -566,6 +566,29 @@ LATE_PASS_SECONDS = 0.25
 WALL_AFTER_DEAL = 83
 
 
+def _stood_in_for(local, event, round_no):
+    """Whether the real ``event`` is the record a reconstructed ``local`` stood in for.
+
+    The same move of the same seat in the same hand, inside the stretch of
+    history ``local`` filled (its ``span``: after the last real event known
+    then, up to the snapshot it was rebuilt from). A later move of that seat
+    with the same (or a hidden) tile is a new event: replacing by type, seat
+    and tile alone erased the opening turns, which the server never resends.
+    """
+    span = local.get("span")
+    if not local.get("reconstructed") or span is None:
+        return False
+    low, high = span
+    return (
+        low < event["seq"]
+        and (high is None or event["seq"] <= high)
+        and local.get("_round_no") == round_no
+        and local["type"] == event.get("type")
+        and local.get("seat") == event.get("seat")
+        and local.get("tile", "") == (event.get("tile") or "")
+    )
+
+
 def rebuild_gap(events, snap):
     """The draws and discards ``snap`` implies since the local history, or None.
 
@@ -636,13 +659,16 @@ def rebuild_gap(events, snap):
             continue
         drawer = actor if mode == "kong" else (actor + 1) % 4
         draws += 1
-        drawn = ""
         if drawer == seat:
-            # Our own draw shows its tile, and only the snapshot of our turn holds it.
+            # Our own draw shows its tile, and only the snapshot of our turn holds
+            # it: the snapshot's draw, so it must be the last event rebuilt. An
+            # earlier own draw (a turn that timed out, a late resume) is unknown.
             if not (snap["phase"] == "draw" and snap["turn"] == seat and snap.get("drawn_tile")):
                 return None
-            drawn = snap["drawn_tile"]
-        added.append({"type": "tile_drawn", "seat": drawer, "tile": drawn, "data": None, "_round_no": round_no})
+            added.append({"type": "tile_drawn", "seat": drawer, "tile": snap["drawn_tile"], "data": None,
+                          "_round_no": round_no})
+            return added if reached(drawer, None) else None
+        added.append({"type": "tile_drawn", "seat": drawer, "tile": "", "data": None, "_round_no": round_no})
         actor, mode, tile = drawer, "act", None
     return None
 
@@ -884,17 +910,10 @@ class TournamentRunner:
             nonlocal seq, hand_no
             for event in payload.get("events") or []:
                 if event["seq"] not in event_ids:
-                    for i in range(len(events) - 1, -1, -1):
-                        local = events[i]
-                        if (
-                            local.get("reconstructed")
-                            and local["seq"] != 1
-                            and local["type"] == event.get("type")
-                            and local.get("seat") == event.get("seat")
-                            and local.get("tile", "") == (event.get("tile") or "")
-                        ):
-                            del events[i]
-                            break
+                    round_no = (event.get("data") or {}).get("round_no", hand_no)
+                    stood_in = [i for i, local in enumerate(events) if _stood_in_for(local, event, round_no)]
+                    if stood_in:
+                        del events[min(stood_in, key=lambda i: events[i]["seq"])]
                     event = dict(event)
                     event["_round_no"] = (event.get("data") or {}).get(
                         "round_no", hand_no
@@ -1243,8 +1262,10 @@ class TournamentRunner:
                     diag["history_rebuilt"] += 1
                     top = res.get("seq", 0)
                     for i, event in enumerate(rebuilt, 1):
-                        # Between the last real event and this snapshot, in order.
-                        events.append(dict(event, seq=top - 1 + i / (len(rebuilt) + 1), reconstructed=True))
+                        # Between the last real event and this snapshot, in order;
+                        # only a real event from that stretch may replace it later.
+                        events.append(dict(event, seq=top - 1 + i / (len(rebuilt) + 1), reconstructed=True,
+                                           span=(seq, top)))
                 return True
 
             # Rebuilt from the snapshot, the usual gap costs no request inside the window.
@@ -1431,21 +1452,31 @@ class TournamentRunner:
                     kind = {"discard": "tile_discarded", "hu": "round_ended"}.get(
                         action.action, action.action
                     )
+                    wire = wire_action(action)
+                    data = {
+                        "kind": {
+                            "concealed": "an",
+                            "exposed": "ming",
+                            "added": "bu",
+                        }.get(action.kind, "")
+                    }
+                    if action.action == "chi":
+                        # As the server records it: our two tiles, then the claimed one.
+                        # The next decision (often before any history refresh) reads
+                        # the sequence, e.g. for a white-tile piao after the chi.
+                        data["tiles"] = [*wire["tiles"], wire["tile"]]
+                    placed = max(seq, fetched_seq)
                     events.append(
                         {
-                            "seq": 1 if seq == 0 else max(seq, fetched_seq) + 0.5,
+                            "seq": 1 if seq == 0 else placed + 0.5,
                             "type": kind,
                             "seat": obs.stage.seat,
-                            "tile": wire_action(action).get("tile", ""),
-                            "data": {
-                                "kind": {
-                                    "concealed": "an",
-                                    "exposed": "ming",
-                                    "added": "bu",
-                                }.get(action.kind, "")
-                            },
+                            "tile": wire.get("tile", ""),
+                            "data": data,
                             "_round_no": hand_no,
                             "reconstructed": True,
+                            # Its real record comes later in this hand, after `placed`.
+                            "span": (placed, None),
                         }
                     )
                     if seq == 0:

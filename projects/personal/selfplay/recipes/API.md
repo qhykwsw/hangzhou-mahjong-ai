@@ -37,7 +37,7 @@
 
 `ctx.collect` 让 `actor` 坐在一个随机座位上学习，其余三座是对手，返回 `(rows, records, resources)`：
 
-- `rows`：学习座位的每个决策。包含 Actor 输入（`planes`、`scalars`、`events`、`mask`）、`action`、`logprob`、`value`、`reward`（只在每局最后一个决策上，值为该局桌面分）、`hand`（第几局，1～16）、`adv` 和 `ret`（由 `finish_game` 计算）、教师标签 `teacher`（`labels=True` 时是教师在同一局面的动作，否则为 −1；教师在某个决策上报错或给出非法动作时，这一行也是 −1，采集照常进行，worker 报告里的 `teacher_errors` 计数，首次出错的堆栈写进训练日志。有教师标签时采集走 Python 引擎，比纯 PG 采集慢），以及 `critic_features` 返回的数组。同一整场的决策按顺序连续排列。
+- `rows`：学习座位的每个决策。包含 Actor 输入（`planes`、`scalars`、`events`、`mask`）、`action`、`logprob`、`value`、`reward`（只在每局最后一个决策上，值为该局桌面分；学习座位整局没有决策时，该局分不记到任何行，只留在整场账本里）、`hand`（第几局，1～16）、`adv` 和 `ret`（由 `finish_game` 计算）、教师标签 `teacher`（`labels=True` 时是教师在同一局面的动作，否则为 −1；教师在某个决策上报错或给出非法动作时，这一行也是 −1，采集照常进行（纯模仿采集在这一步改由学生采样出牌，教师损失不计这一行），worker 报告里的 `teacher_errors` 计数，首次出错的堆栈写进训练日志。有教师标签时采集走 Python 引擎，比纯 PG 采集慢），以及 `critic_features` 返回的数组。同一整场的决策按顺序连续排列。
 - `records`：每整场一条，含四家得分和座位。
 - `resources`：采集耗时和各 worker 的场数、样本数。
 

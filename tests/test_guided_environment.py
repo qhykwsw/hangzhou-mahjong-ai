@@ -418,3 +418,68 @@ def test_a_failing_teacher_leaves_its_rows_unlabelled(monkeypatch):
     unlabelled = [row["teacher"] for row in game.rows if row["teacher"] < 0]
     assert game.complete and unlabelled and len(unlabelled) == game.teacher_errors
     assert all(row["mask"][row["teacher"]] for row in game.rows if row["teacher"] >= 0)
+
+
+class _FailingTeacher(HeuristicPolicy):
+    def act(self, obs):
+        raise ZeroDivisionError("float division by zero")
+
+
+def test_behaviour_cloning_plays_on_where_the_teacher_failed(monkeypatch):
+    """Pure BC plays the teacher's move; a decision the teacher failed on is
+    unlabelled (-1) and the student's own sample keeps the game going."""
+    import multiprocessing as mp
+    import time
+
+    import torch
+    from guided import collection
+    from guided.networks import Actor
+
+    bundle = {"teacher": "bad", "entries": [{"id": "bad"}, {"id": "rule"}]}
+    monkeypatch.setattr(artifacts, "read_bundle", lambda _: bundle)
+    monkeypatch.setattr(artifacts, "bind_runtime", lambda _: None)
+    monkeypatch.setattr(artifacts, "build_policy",
+                        lambda b, cid: _FailingTeacher(style="balanced") if cid == "bad" else HeuristicPolicy(style="balanced"))
+    fork = mp.get_context("fork")  # the worker inherits the patched artifacts
+    monkeypatch.setattr(collection.mp, "get_context", lambda _: fork)
+    torch.manual_seed(0)
+    cfg = configuration(rounds=1, tables=1, workers=1, samples=1, lookahead=False, bc_only=True) | {"cuda_graphs": False}
+    command = dict(kind="collect", iteration=1, deadline=time.time() + 60, labels=True, teacher="bad",
+                   pool=["rule"], samples=1)
+    rows, records, _ = collection.collect(Actor(16, 1, 1), None, cfg, "fixture", "fixture", command)
+    assert rows and records and all(row["teacher"] == -1 for row in rows)
+
+
+def test_teacher_loss_leaves_unlabelled_rows_out():
+    import torch
+    from guided.learning import update
+    from guided.networks import Actor, Critic
+
+    rule = HeuristicPolicy(style="balanced")
+    bundle = {"teacher": "bad", "entries": [{"id": "bad"}, {"id": "rule"}]}
+    artifacts_build = artifacts.build_policy
+    try:
+        artifacts.build_policy = lambda b, cid: _FailingTeacher(style="balanced") if cid == "bad" else rule
+        game = Game(configuration(rounds=1, lookahead=False, bc_only=True), bundle, {"bad": bundle, "rule": bundle},
+                    ["model:current", "rule", "rule", "rule"], seed_for(7, "unlabelled"), teacher="bad", focal=0,
+                    train=True)
+        unlabelled = game.advance()["row"]
+    finally:
+        artifacts.build_policy = artifacts_build
+    assert unlabelled["teacher"] == -1
+    labelled = dict(unlabelled, teacher=int(np.flatnonzero(unlabelled["mask"])[0]))
+    cfg = configuration(rounds=1, lookahead=False, bc_only=True)
+    torch.manual_seed(0)
+    actor, critic = Actor(16, 1, 1), Critic(16, 1, 1)
+    idle = torch.optim.Adam(critic.parameters())
+    start = [p.detach().clone() for p in actor.parameters()]
+
+    def moved():
+        return any(not torch.equal(p, q) for p, q in zip(actor.parameters(), start))
+
+    update(actor, critic, torch.optim.Adam(actor.parameters()), idle, [unlabelled], cfg, 1.0, [],
+           np.random.default_rng(1))
+    assert not moved()  # nothing to imitate
+    update(actor, critic, torch.optim.Adam(actor.parameters()), idle, [unlabelled, labelled], cfg, 1.0, [],
+           np.random.default_rng(1))
+    assert moved()

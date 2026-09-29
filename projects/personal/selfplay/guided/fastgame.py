@@ -104,7 +104,7 @@ class FastGame(Game):
             if seat is None:
                 delta = state.delta
                 self.scores = [s + d for s, d in zip(self.scores, delta)]
-                if self.rows:
+                if self.rows and self.rows[-1]["hand"] == self.hand_no:
                     self.rows[-1]["reward"] += delta[self.focal] / self.config.base_score
                 else:
                     self.predecision_reward += delta[self.focal] / self.config.base_score

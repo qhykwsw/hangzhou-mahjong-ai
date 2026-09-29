@@ -213,7 +213,10 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
                     if not sample:
                         actions = logp.argmax(-1)
                     elif cfg["bc_only"] and slot == "model:current":
-                        actions = batch["teacher"]
+                        # The teacher's move; where the teacher failed (label -1)
+                        # the student's own sample keeps the game going.
+                        sampled = torch.multinomial(logp.exp(), 1).squeeze(1)
+                        actions = torch.where(batch["teacher"] >= 0, batch["teacher"], sampled)
                     elif learning and "sample" in hooks:
                         actions, selected = hooks["sample"](logits, batch["mask"])
                     else:

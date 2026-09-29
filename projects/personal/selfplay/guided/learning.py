@@ -126,6 +126,7 @@ def update(actor, critic, actor_opt, critic_opt, rows, cfg, w, replay, rng):
     For bc_only, teacher CE alone is optimized and Critic/statistics are untouched.
     For critic_only, the Actor is frozen and only the value loss is optimized.
     In joint mode w=0 avoids all label/replay access; teacher=-1 is then valid.
+    Otherwise rows labelled -1 (the teacher failed there) stay out of the teacher loss.
     KL is measured before stepping over a complete effective minibatch. Exceeding
     target_kl discards its gradients and stops both updates for this rollout.
     """
@@ -254,8 +255,13 @@ def update(actor, critic, actor_opt, critic_opt, rows, cfg, w, replay, rng):
                         )
                     teacher_loss = zero
                     if coefficient > 0:
-                        _check_actions(mb["teacher"], mb["mask"], "teacher")
-                        teacher_loss = -logp.gather(1, mb["teacher"][:, None]).mean()
+                        # Rows whose teacher failed (label -1) carry no label.
+                        labeled = mb["teacher"] >= 0
+                        if bool(labeled.any()):
+                            _check_actions(mb["teacher"][labeled], mb["mask"][labeled], "teacher")
+                            teacher_loss = -logp[labeled].gather(1, mb["teacher"][labeled][:, None]).mean()
+                        else:
+                            teacher_loss = logp.sum() * 0.0  # keeps the backward graph
                         if use_replay:
                             # Weight is exactly 90/10, regardless of integer sample rounding.
                             old = make_batch(

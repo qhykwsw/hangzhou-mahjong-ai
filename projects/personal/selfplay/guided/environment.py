@@ -118,12 +118,14 @@ class Game:
             state = self.state
             if state.settled:
                 self.scores = [s + d for s, d in zip(self.scores, state.delta)]
-                if self.rows:
+                if self.rows and self.rows[-1]["hand"] == self.hand_no:
                     self.rows[-1]["reward"] += (
                         state.delta[self.focal] / self.config.base_score
                     )
                 else:
-                    # Rewards before the first choice cannot be credited to a future action.
+                    # A hand in which the learner had no choice (before its first,
+                    # or a later hand won before its turn) credits no decision:
+                    # rows carry their own hand's score, recipes build targets per hand.
                     self.predecision_reward += (
                         state.delta[self.focal] / self.config.base_score
                     )
