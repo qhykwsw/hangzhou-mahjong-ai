@@ -115,6 +115,31 @@ class RemoteHost:
         )
         return self.python(script, timeout=900)
 
+    def build_packages(self, specs):
+        """Compile rule packages' own native.c on this host, each under its runtime.
+
+        load_native would otherwise compile on a job's first load, and the
+        compiler's processes count against a training job's process limit.
+        The build lands in the host's cache that the jobs read (ADR-0017).
+        """
+        todo = [(self.remote_path(s["package_path"]), self.remote_path(s["runtime_path"]))
+                for s in specs
+                if (Path(s["package_path"]) / "native.c").is_file() and str(s["package_path"]) not in self.built]
+        if not todo:
+            return []
+        script = (
+            "import json,subprocess,sys\nbuilt=[]\n"
+            "for package,runtime in " + repr(todo) + ":\n"
+            " subprocess.run([sys.executable,'-c','import sys;sys.path.insert(0,sys.argv[1]);"
+            "from mahjong_ai import _fast;_fast.load_native(sys.argv[2]+\"/strategy.py\")',runtime,package],"
+            "check=True,capture_output=True)\n"
+            " built.append(package)\n"
+            "print(json.dumps(built))\n"
+        )
+        built = self.python(script, timeout=900)
+        self.built.update(str(s["package_path"]) for s in specs)
+        return built
+
     # -- model inference ---------------------------------------------------
     def ensure_service(self, models_root, code_files):
         """Start (once) the host's inference service over the mirrored models."""
@@ -308,6 +333,7 @@ def opponent_specs(host, candidates, models_root, timeouts):
         specs[cid] = host._rewrite(host._interpreter(spec))
     host.sync(paths)
     host.build_native(sorted(runtimes))
+    host.build_packages([c["spec"] for c in candidates.values() if c["spec"].get("package_path")])
     return specs
 
 

@@ -57,3 +57,33 @@ def test_a_build_failure_names_the_packages_file(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="native.c does not build") as failure:
         fast.load_native(str(strategy))
     assert str(tmp_path / "bad" / "native.c") in str(failure.value)
+
+
+def test_a_host_builds_packages_own_c_before_jobs_load_them(tmp_path, monkeypatch):
+    """Training jobs count their processes: the compiler must not run inside one (RemoteHost.build_packages)."""
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    from mahjong_ai.execution.remote import RemoteHost
+
+    monkeypatch.setenv("MAHJONG_NATIVE_CACHE", str(tmp_path / "cache"))
+    runtime = Path(fast.__file__).resolve().parents[1]
+    with_c = package(tmp_path, "with_c", PLAIN % "x").parent
+    without = tmp_path / "plain"
+    without.mkdir()
+    (without / "strategy.py").write_text("")
+    host = RemoteHost("h", {"root": "/r", "ssh": "x", "distro": "d", "user": "u", "python": "py"}, tmp_path)
+    host.remote_path = lambda local: str(local)  # the host is this machine
+
+    def run(script, timeout=None):
+        out = subprocess.run([sys.executable, "-"], input=script, capture_output=True, text=True, check=True)
+        return json.loads(out.stdout.strip().splitlines()[-1])
+
+    host.python = run
+    specs = [{"package_path": str(with_c), "runtime_path": str(runtime)},
+             {"package_path": str(without), "runtime_path": str(runtime)}]
+    assert host.build_packages(specs) == [str(with_c)]
+    assert len(list((tmp_path / "cache").glob("*.so"))) == 1
+    assert host.build_packages(specs) == []  # once per host
