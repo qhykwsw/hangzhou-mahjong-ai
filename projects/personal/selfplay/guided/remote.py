@@ -49,8 +49,11 @@ def execute(host, script, *, timeout=120):
         HOSTS[host],
         wsl(host) + python(host) + " -",
     ]
+    # wsl.exe now and then prints a Windows system message in the console's code
+    # page (GBK here): decoding must not fail the caller over a garbled line.
     result = subprocess.run(
-        args, input=script, text=True, capture_output=True, timeout=timeout
+        args, input=script, capture_output=True, timeout=timeout,
+        encoding="utf-8", errors="replace",
     )
     if result.returncode:
         raise RuntimeError(f"{host}: {result.stdout}\n{result.stderr}")
