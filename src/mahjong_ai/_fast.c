@@ -2255,20 +2255,17 @@ static uint64_t race_closer(const int *c, int opened, uint64_t k0, uint64_t k1, 
     natural[WHITE] = 0;
     suit_res tables[4], drawn;
     for (int s = 0; s < 4; s++) race_group_table(natural, s, &tables[s]);
-    /* others[s]: every group but s, from the open melds. */
-    race_groups start, others[4], tmp, full;
+    /* others[s]: every group but s, from the open melds (the groups combine
+     * in any order: sums capped at four, the best kept), made when a draw of
+     * the group asks. */
+    race_groups start, first, two, others[4], tmp, full;
+    int made[4] = {0, 0, 0, 1};
     for (int m = 0; m < 5; m++)
         for (int p = 0; p < 2; p++) start.g[m][p] = -1;
     start.g[opened][0] = 0;
-    for (int s = 0; s < 4; s++) {
-        race_groups acc = start;
-        for (int o = 0; o < 4; o++) {
-            if (o == s) continue;
-            race_groups_add(&acc, &tables[o], &tmp);
-            acc = tmp;
-        }
-        others[s] = acc;
-    }
+    race_groups_add(&start, &tables[0], &first);
+    race_groups_add(&first, &tables[1], &two);
+    race_groups_add(&two, &tables[2], &others[3]);
     race_groups_add(&others[3], &tables[3], &full);
     int shape = race_groups_value(&full);
     int pairs = 0, singles = 0;
@@ -2291,6 +2288,19 @@ static uint64_t race_closer(const int *c, int opened, uint64_t k0, uint64_t k1, 
                                              && !(r <= 6 && c[t + 2])));
             if (!lone) {
                 int s = t < 27 ? t / 9 : 3;
+                if (!made[s]) {
+                    if (s == 2) {
+                        race_groups_add(&two, &tables[3], &others[2]);
+                    } else {
+                        race_groups_add(s ? &first : &start, &tables[s ? 2 : 1], &tmp);
+                        if (s == 0) {
+                            race_groups_add(&tmp, &tables[2], &others[0]);
+                            tmp = others[0];
+                        }
+                        race_groups_add(&tmp, &tables[3], &others[s]);
+                    }
+                    made[s] = 1;
+                }
                 natural[t]++;
                 race_group_table(natural, s, &drawn);
                 natural[t]--;
@@ -2383,8 +2393,9 @@ static void race_wait_row(const race_ctx *x, const int *c, int opened, uint64_t 
     const int *avail = x->avail;
     int n = 0, baotou = (slot->wins & RACE_WAIT_BAOTOU) != 0;
     long copies = 0, value = 0;
-    for (int t = 0; t < NTILES; t++) {
-        if (!(slot->wins >> t & 1) || avail[t] <= 0) continue;
+    uint64_t wins = slot->wins & (RACE_WAIT_BAOTOU - 1);
+    for (int t = 0; wins >> t; t++) {
+        if (!(wins >> t & 1) || avail[t] <= 0) continue;
         long fan = 1L << ((slot->fan[t / 17] >> (3 * (t % 17))) & 7);
         if (chain > 0) fan *= 1L << chain;
         if (c[WHITE] + (t == WHITE) + piao == 4) fan *= 2;
@@ -2437,8 +2448,11 @@ static int race_row(race_ctx *x, const int *c, int opened, uint64_t k0, uint64_t
  * the seven pairs' pairs and paired singles grow by one at most with a tile.
  * So the hand less drop plus tile waits only when the hand less drop waits
  * already (then with any tile), or is one away and the tile is among its
- * closer draws. */
-static void race_swaps(int *c, int opened, uint64_t k0, uint64_t k1, uint64_t *after) {
+ * closer draws; and then it does wait, for a draw the hand holds fewer than
+ * four of. Returns whether the answer is that exact one (race_closer's own
+ * distance agreed with shanten_keyed throughout, as it must). */
+static int race_swaps(int *c, int opened, uint64_t k0, uint64_t k1, uint64_t *after) {
+    int exact = 1;
     memset(after, 0, NTILES * sizeof(uint64_t));
     for (int drop = 0; drop < NTILES; drop++) {
         if (!c[drop]) continue;
@@ -2451,11 +2465,58 @@ static void race_swaps(int *c, int opened, uint64_t k0, uint64_t k1, uint64_t *a
         } else if (distance == 1) {
             int own;
             draws = race_closer(c, opened, r0, r1, &own);
-            if (own != 1) draws = ~0ULL;
+            if (own != 1) {
+                draws = ~0ULL;
+                exact = 0;
+            }
         }
         c[drop]++;
         for (int t = 0; t < NTILES && draws >> t; t++)
             if (draws >> t & 1) after[t] |= 1ULL << drop;
+    }
+    return exact;
+}
+
+/* upgrade_drops_of for every draw of a hand, memoised per hand and melds:
+ * per draw the discards as bits over the kinds the hand holds, ascending
+ * (sixteen at most; a hand of more kinds is not memoised). */
+#define RACE_UPGRADE_BITS 17
+
+typedef struct {
+    uint64_t k0, k1;
+    uint16_t drops[NTILES];
+} race_upgrade_slot;
+
+static race_upgrade_slot race_upgrades[1 << RACE_UPGRADE_BITS];
+
+/* drops[tile]: upgrade_drops_of(c, tile) for each draw the hand holds fewer than four of. */
+static void race_upgrade_drops(int *c, int opened, uint64_t k0, uint64_t k1, uint64_t *drops) {
+    int kinds[NTILES], n = 0;
+    for (int t = 0; t < NTILES; t++)
+        if (c[t]) kinds[n++] = t;
+    uint64_t h = (k0 * 0xD6E8FEB86659FD93ULL) ^ (k1 * 0xC2B2AE3D27D4EB4FULL);
+    h ^= h >> 31;
+    race_upgrade_slot *slot = n <= 16 ? &race_upgrades[h >> (64 - RACE_UPGRADE_BITS)] : NULL;
+    if (slot && slot->k0 == k0 && slot->k1 == (k1 | KEY_USED)) {
+        for (int t = 0; t < NTILES; t++) {
+            uint64_t mask = 0;
+            for (int i = 0; slot->drops[t] >> i; i++)
+                if (slot->drops[t] >> i & 1) mask |= 1ULL << kinds[i];
+            drops[t] = mask;
+        }
+        return;
+    }
+    upgrade_ctx up;
+    upgrade_prepare(c, opened, k0, k1, &up);
+    for (int t = 0; t < NTILES; t++) drops[t] = c[t] < 4 ? upgrade_drops_of(&up, c, t) : 0;
+    if (!slot) return;
+    slot->k0 = k0;
+    slot->k1 = k1 | KEY_USED;
+    for (int t = 0; t < NTILES; t++) {
+        uint16_t bits = 0;
+        for (int i = 0; i < n; i++)
+            if (drops[t] >> kinds[i] & 1) bits |= (uint16_t)(1u << i);
+        slot->drops[t] = bits;
     }
 }
 
@@ -2506,7 +2567,7 @@ static int race_reshape_gain_at(race_ctx *x, int *c, uint64_t k0, uint64_t k1, i
     double stay = race_race(x, (double)row.copies / unseen, ((double)row.value + p->saved * (double)row.copies) / unseen,
                             draws - 1);
     uint64_t after[NTILES];
-    race_swaps(c, opened, k0, k1, after);
+    int exact = race_swaps(c, opened, k0, k1, after);
     double gain = 0.0;
     long reach = 0;
     for (int tile = 0; tile < NTILES; tile++) {
@@ -2520,7 +2581,7 @@ static int race_reshape_gain_at(race_ctx *x, int *c, uint64_t k0, uint64_t k1, i
             c[drop]--;
             uint64_t r0, r1;
             race_key_drop(d0, d1, drop, &r0, &r1);
-            if (shanten_keyed(r0, r1, c, opened) <= 0) {
+            if (exact || shanten_keyed(r0, r1, c, opened) <= 0) {
                 /* The C analysis as it is, even past the winning boundary. */
                 race_wait_row(x, c, opened, r0, r1, 0, 0, &r);
                 double v = race_race(x, (double)r.copies / unseen,
@@ -2636,12 +2697,12 @@ static int race_waiting_at(race_ctx *x, int *c, uint64_t k0, uint64_t k1, int ch
                 }
                 double total = 0.0;
                 long reach = 0;
-                upgrade_ctx up;
-                upgrade_prepare(c, opened, k0, k1, &up);
+                uint64_t upgrades[NTILES];
+                race_upgrade_drops(c, opened, k0, k1, upgrades);
                 for (int tile = 0; tile < NTILES; tile++) {
                     if (avail[tile] <= 0 || c[tile] >= 4) continue;
                     double best = 0.0;
-                    uint64_t drops = upgrade_drops_of(&up, c, tile), d0, d1;
+                    uint64_t drops = upgrades[tile], d0, d1;
                     shanten_key_draw(k0, k1, tile, &d0, &d1);
                     c[tile]++;
                     for (int drop = 0; drops; drop++, drops >>= 1) {
