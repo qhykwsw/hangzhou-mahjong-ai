@@ -143,8 +143,16 @@ class Context:
             for k, v in specs.items()
             if v.get("family") == "model"
         }
-        # Rule policies whose actions can label the learning seat's decisions.
-        self.teachers = self.rules + [k for k in self._rule_specs if k not in self.rules]
+        # Policies whose actions can label the learning seat's decisions: rule
+        # versions (in the game workers) and the catalog's Actors (their argmax
+        # over the legal actions, in the collection parent), except those the
+        # harness offers as opponents only.
+        only = set(plan.get("opponents_only") or ())
+        self.teachers = (
+            self.rules
+            + [k for k in self._rule_specs if k not in self.rules]
+            + [k for k in self.catalog if k in self._opponent_models and k not in only]
+        )
         self.actor, meta = load_actor(plan["start_actor"], "cuda")
         self.actor_config = meta["config"]
         self.resources = (
@@ -209,7 +217,10 @@ class Context:
         ctx.catalog or ctx.rules), by default all of ctx.opponents, or the
         bundle's rules when the trial has no frozen opponents. With labels,
         ``cfg["teacher"]`` (one of ctx.teachers, by default ctx.teacher) labels
-        the learning seat's decisions. Returns (rows, records, resources);
+        the learning seat's decisions: a rule version in the game workers, a
+        catalog Actor by its argmax in the collection parent (the workers then
+        run no teacher); ``cfg["teacher_plays"]`` plays the teacher's move in
+        the learning seat (behaviour cloning). Returns (rows, records, resources);
         rows carry the fixed Actor inputs, action/logprob/value, per-hand reward on
         the last decision of each hand, ``hand``, teacher labels when requested,
         and whatever critic_features added.
@@ -230,7 +241,13 @@ class Context:
             raise ValueError(f"unknown teacher: {teacher} (choose from ctx.teachers)")
         if labels and self.label_hand_budget is not None and self.labeled_hands_left() <= 0:
             raise ValueError("teacher-labelled hand budget exhausted")
-        cfg = {k: v for k, v in cfg.items() if k not in ("opponents", "teacher")}
+        # A model teacher sits in the collection's models under its own slot.
+        taught = "model:teacher:" + teacher if labels and teacher in self._opponent_models else None
+        # Behaviour cloning: the teacher's move is played in the learning seat.
+        teacher_plays = bool(cfg.get("teacher_plays"))
+        if teacher_plays and not labels:
+            raise ValueError("teacher_plays needs labels=True")
+        cfg = {k: v for k, v in cfg.items() if k not in ("opponents", "teacher", "teacher_plays")}
         known = {k: v for k, v in cfg.items() if k in configuration()}
         extra = {k: v for k, v in cfg.items() if k not in known}
         run_cfg = configuration(**known) | extra
@@ -256,7 +273,7 @@ class Context:
             "lookahead": self.actor_config["lookahead"],
             "samples": samples,
             "seed": self.seed,
-            "bc_only": False,
+            "bc_only": teacher_plays,
             "deadline": self.deadline,
         }
         pool = [
@@ -267,7 +284,7 @@ class Context:
             "iteration": int(iteration),
             "deadline": self.deadline,
             "labels": bool(labels),
-            "teacher": teacher,
+            "teacher": taught or teacher,
             "runtime": self.plan.get("runtime"),
             # history_probability only draws the recipe's own snapshots.
             "history": list(history or {}),
@@ -277,6 +294,8 @@ class Context:
         models = dict(history or {}) | {
             "model:opponent:" + k: m for k, m in self._opponent_models.items() if k in chosen
         }
+        if taught:
+            models[taught] = self._opponent_models[teacher]
         rows, records, resources = collect(
             actor,
             None,

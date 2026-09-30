@@ -326,3 +326,28 @@ def test_a_hand_without_a_learner_decision_credits_no_earlier_row(members, monke
         assert game.advance() is None and game.complete
         assert game.rows[-1]["reward"] == -8.0, cls.__name__
         assert game.predecision_reward == game.scores[0] + 8 == -8, cls.__name__
+
+
+def test_a_model_teacher_keeps_the_c_game_and_labels_from_the_answers(members, monkeypatch):
+    """A model teacher labels in the collection parent: the game runs no teacher,
+    stays on the C engine, and takes each label from the learner's answer."""
+    by_id = {f"m{i}": m for i, m in enumerate(members)}
+    monkeypatch.setattr(artifacts, "build_policy", lambda bundle, cid: by_id[cid])
+    cfg = configuration(rounds=16, lookahead=False)
+    seats = ["m0", "model:current", "m2", "m4"]
+    game = fastgame.FastGame(cfg, {"entries": []}, {k: None for k in by_id}, seats, seed_for(31, "model-teacher"),
+                             focal=1, teacher="model:teacher:frozen", train=True)
+    assert game.teacher is None and game.seats is not None
+    labels = []
+    while (request := game.advance()) is not None:
+        legal = [int(i) for i in np.flatnonzero(request["row"]["mask"])]
+        choice, greedy = learner(request["row"], legal)
+        labels.append(legal[-1])
+        game.apply((choice, -0.5, 0.0, greedy, legal[-1]))
+    assert game.complete and len(labels) == len(game.rows) > 50
+    assert [row["teacher"] for row in game.rows] == labels
+    assert all(row["label_version"] == "model:teacher:frozen" for row in game.rows)
+    # A rule teacher acts in the game, which then stays on the Python engine.
+    ruled = fastgame.FastGame(cfg, {"entries": []}, {k: None for k in by_id}, seats, seed_for(31, "model-teacher"),
+                              focal=1, teacher="m1", train=True)
+    assert ruled.teacher is by_id["m1"] and ruled.seats is None

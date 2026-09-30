@@ -30,6 +30,12 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
     collection: hooks["sample"](logits, mask) -> (actions, behaviour logprobs)
     replaces multinomial sampling, and hooks["values"](rows) -> values replaces
     the built-in privileged Critic. Evaluation never uses hooks.
+
+    A model teacher (with labels, command["teacher"] names its "model:" slot in
+    history) labels the learner's decisions here with its argmax over the
+    legal actions, before the learner's move is chosen, so pure imitation
+    plays it; the label goes back with the answer. The workers then run no
+    teacher of their own.
     """
     import torch
     from .learning import make_batch
@@ -37,6 +43,8 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
 
     history = history or {}
     hooks = hooks or {}
+    teacher = command.get("teacher") if command.get("labels") and command["kind"] != "evaluate" else None
+    teacher_model = history[teacher] if teacher and teacher.startswith("model:") else None
     actor.eval()
     if critic is not None:
         critic.eval()
@@ -44,13 +52,15 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
     def prepare_inference():
         # The built-in Critic needs the full batch and a sampling hook its own
         # ops; every other path is the fixed decision, which the graphs replay
-        # straight from the rows.
+        # straight from the rows. Behaviour cloning of a rule teacher reads its
+        # move from the row; a model teacher's move is its argmax in a graph.
         graphs = (
             ActorGraphs(
                 fine_batches=cfg.get("fine_graph_batches", False),
                 history_band=cfg.get("inference_history_band", 0) if not hooks else 0,
             )
-            if device.type == "cuda" and cfg.get("cuda_graphs", True) and not cfg["bc_only"]
+            if device.type == "cuda" and cfg.get("cuda_graphs", True)
+            and (not cfg["bc_only"] or teacher_model is not None)
             and "sample" not in hooks and (critic is None or "values" in hooks) else None
         )
         inference_actor = actor
@@ -65,7 +75,7 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
         return graphs, inference_actor
 
     options = (
-        command["kind"], id(critic), cfg["bc_only"],
+        command["kind"], id(critic), cfg["bc_only"], teacher_model is not None,
         cfg.get("cuda_graphs", True), cfg.get("fine_graph_batches", False),
         cfg.get("inference_history_band", 0), cfg.get("precast_collection", True),
         tuple((key, id(value)) for key, value in sorted(hooks.items())),
@@ -109,18 +119,26 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
         inflight = deque()  # rounds launched on the device, oldest first
 
         def finish(groups, replies):
-            for group, rows_, learning, decided, complete in groups:
+            for group, rows_, learning, decided, complete, taught in groups:
                 mark = time.perf_counter()
-                output = decided.result()  # (action, logprob, argmax), with the value when complete
+                # (action, logprob, argmax), with the value (and the teacher's label) when complete
+                output = decided.result()
                 if not complete:
                     values = np.zeros(len(group), dtype=np.float32)
                     if learning and "values" in hooks:
                         values = np.asarray(hooks["values"](rows_), dtype=np.float32).reshape(-1)
                     output = np.concatenate((output[:, :2], values[:, None], output[:, 2:]), axis=1)
+                    if taught is not None:
+                        output = np.concatenate((output, taught.result()[:, 2:]), axis=1)
+                        if cfg["bc_only"]:
+                            # Behaviour cloning: the teacher's argmax is the move
+                            # (the logprob stays the learner's own sample's).
+                            output[:, 0] = output[:, 4]
                 timers["forward"] += time.perf_counter() - mark
                 mark = time.perf_counter()
-                for (conn, ident, _), (action, prob, value, greedy) in zip(group, output):
-                    replies[conn].append((ident, (int(action), float(prob), float(value), int(greedy))))
+                # (action, logprob, value, argmax), then a model teacher's label on the learner's rows.
+                for (conn, ident, _), (action, prob, value, *indices) in zip(group, output):
+                    replies[conn].append((ident, (int(action), float(prob), float(value), *map(int, indices))))
                 timers["reply"] += time.perf_counter() - mark
             mark = time.perf_counter()
             for conn, response in replies.items():
@@ -192,6 +210,7 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
                 # which keeps a deviation's continuation reproducible.
                 sample = command["kind"] != "evaluate" and slot != GREEDY and (
                     slot == "model:current" or not cfg.get("playout_baseline"))
+                labelled = teacher_model is not None and slot == "model:current"
                 rows_ = [item[2]["row"] for item in group]
                 with torch.no_grad():
                     if graphs is not None:
@@ -199,10 +218,18 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
                         # to the device before any answer is read, and the
                         # round is read after the next one has been launched.
                         decided = graphs.decide(slot, model, rows_, sample=sample)
-                        groups.append((group, rows_, learning, decided, False))
+                        # The teacher's argmax on the same rows, under its own
+                        # slot (no seat's), so no graph buffer ring is shared.
+                        taught = graphs.decide(teacher, teacher_model, rows_, sample=False) if labelled else None
+                        groups.append((group, rows_, learning, decided, False, taught))
                         timers["batch"] += time.perf_counter() - mark
                         continue
                     batch = make_batch(rows_, device)
+                    if labelled:
+                        teacher_logits = policy_logits(
+                            teacher_model, batch["planes"], batch["scalars"], batch["events"]
+                        ).float()
+                        batch["teacher"] = teacher_logits.masked_fill(~batch["mask"], -1e9).log_softmax(-1).argmax(-1)
                     logits = policy_logits(model,
                         batch["planes"], batch["scalars"], batch["events"]
                     ).float()
@@ -238,13 +265,12 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
                         )
                     if selected is None:
                         selected = logp.gather(1, actions[:, None]).squeeze(1)
-                    output = (
-                        torch.stack((actions.float(), selected, values, logp.argmax(-1).float()), -1)
-                        .cpu()
-                        .numpy()
-                    )
+                    columns = (actions.float(), selected, values, logp.argmax(-1).float())
+                    if labelled:
+                        columns += (batch["teacher"].float(),)
+                    output = torch.stack(columns, -1).cpu().numpy()
                     timers["forward"] += time.perf_counter() - mark
-                    groups.append((group, rows_, learning, Decided(output), True))
+                    groups.append((group, rows_, learning, Decided(output), True, None))
             inflight.append((groups, replies))
             if graphs is None or len(inflight) > 1:
                 finish(*inflight.popleft())
