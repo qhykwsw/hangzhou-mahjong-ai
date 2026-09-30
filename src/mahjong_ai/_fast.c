@@ -1727,31 +1727,6 @@ static int race_baotou_cached(const int *counts, int open_melds) {
     return race_baotou_keyed(k0, k1, counts, open_melds);
 }
 
-/* fan_value with the tables. */
-static long race_fan_value(int *counts, int drawn_tile, int open_melds, int chain_count, int piao_count) {
-    if (drawn_tile < 0 || drawn_tile >= NTILES || counts[drawn_tile] <= 0 || !race_hu(counts, open_melds))
-        return 0;
-    counts[drawn_tile]--;
-    int bt = race_baotou_cached(counts, open_melds);
-    counts[drawn_tile]++;
-    long fan = 1;
-    if (open_melds == 0) {
-        int odd = 0, luxury = 0;
-        for (int i = 0; i < WHITE; i++) {
-            odd += counts[i] % 2;
-            if (counts[i] == 4) luxury++;
-        }
-        if (odd <= counts[WHITE]) {
-            if (counts[WHITE] == 4 && odd == 0) luxury++;
-            fan = 1L << (1 + luxury);
-        }
-    }
-    if (chain_count > 0) fan *= 1L << chain_count;
-    if (counts[WHITE] + piao_count == 4) fan *= 2;
-    if (bt) fan *= 2;
-    return fan;
-}
-
 /* Bit d set when the waiting hand c plus tile, less one d (a kind c holds,
  * other than tile), is baotou: baotou_shape's test, answered for all d at
  * once where a non-white honor is absent from the result (the common case:
@@ -1959,7 +1934,7 @@ static inline int race_distance(int shape, int jokers, int pairs, int singles, i
     return normal;
 }
 
-#define RACE_DRAW_BITS 21
+#define RACE_DRAW_BITS 18
 
 static draw_slot race_draw_cache[1 << RACE_DRAW_BITS];
 
@@ -2022,7 +1997,7 @@ static const draw_slot *race_draws(const int *counts, int open_melds) {
     return slot;
 }
 
-/* race_fan_value(counts plus t, t, ...) for the winning draws t of one
+/* fan_value(counts plus t, t, ...) for the winning draws t of one
  * waiting hand: what depends on the hand alone (its groups, odd count, and
  * the baotou test of the waiting hand itself, the same for every draw) is
  * computed once. */
@@ -2233,7 +2208,7 @@ static int race_analysis(race_ctx *x, const int *c, int chain, int piao, analysi
  * two ranks (any honor not held), joins no meld, partial or pair of any
  * split, so its suit's table and the shape value stay as they are and the
  * table is not looked up; the seven pairs still count the tile. */
-#define RACE_ROW_BITS 20
+#define RACE_ROW_BITS 21
 
 typedef struct {
     uint64_t k0, k1, closer;
@@ -3919,13 +3894,34 @@ static int r68_piao_value(const race_ctx *base, const int *hand, int opened, int
     double total = 0.0;
     int n_opt = 0, opt_n[NTILES];
     double opt_best[NTILES];
+    /* Every caller passes a baotou hand: each draw wins and the waiting hand is baotou, so
+     * fan_value reduces to the seven-pairs count, the chain, the piao and the baotou double. */
+    int odd = 0, luxury = 0;
+    for (int i = 0; opened == 0 && i < WHITE; i++) {
+        odd += held[i] % 2;
+        luxury += held[i] == 4;
+    }
     for (int tile = 0; tile < NTILES; tile++) {
         if (base->avail[tile] <= 0 || held[tile] >= 4) continue;
         int in_pungs = 0;
         for (int i = 0; i < n_pungs; i++) in_pungs |= pungs[i] == tile;
         int kong = fish && (held[tile] == 3 || in_pungs);
+        int whites = held[WHITE] + (tile == WHITE);
+        int odd_t = tile == WHITE ? odd : odd + (held[tile] % 2 ? -1 : 1);
+        int luxury_t = luxury + (tile != WHITE && held[tile] == 3);
+        long fan = 1;
+        if (opened == 0 && odd_t <= whites) fan = 1L << (1 + luxury_t + (whites == 4 && odd_t == 0));
+        if (chain > 0) fan *= 1L << chain;
+        if (whites + piao == 4) fan *= 2;
+        fan *= 2;
         held[tile]++;
-        double now = (double)fan_value(held, tile, opened, chain, piao, 0, 0) + p->saved;
+#ifdef R68_CHECK_PIAO
+        if (fan != fan_value(held, tile, opened, chain, piao, 0, 0)) {
+            fprintf(stderr, "piao fan %ld != %ld at tile %d\n", fan, fan_value(held, tile, opened, chain, piao, 0, 0), tile);
+            abort();
+        }
+#endif
+        double now = (double)fan + p->saved;
         double best = now;
         if (kong) {
             int after[NTILES];
