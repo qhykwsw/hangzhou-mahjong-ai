@@ -463,3 +463,28 @@ def test_the_pool_runtime_takes_only_added_functions(harness, monkeypatch, tmp_p
     E.seal()
     with pytest.raises(E.Refused, match=refused):
         E.upgrade_runtime()
+
+
+def test_a_new_rule_framework_grows_from_its_own_versions(harness, monkeypatch, tmp_path):
+    E, _, line = harness
+    monkeypatch.setattr(E, "SOURCES", dict(E.SOURCES, rule=tmp_path / "rule-src"))
+    monkeypatch.setattr(line, "commit", lambda rel, message: None)
+    (tmp_path / "rule-src").mkdir()
+    for number, (status, text) in enumerate((("keep", "best"), ("discard", "new framework")), 1):
+        package = tmp_path / f"package-{number}"
+        package.mkdir()
+        (package / "strategy.py").write_text(text)
+        record(E, id=f"fp-rule-00{number}", line="rule", status=status, finished_at=number, games=16,
+               spec={"package_path": str(package)})
+    E.seal()
+    monkeypatch.setattr(E, "REPO", tmp_path)  # rule/ lives in the test directory
+    line.restore("rule")
+    start = lambda **kw: line.start("rule", "x", "y", 0, **kw)  # noqa: E731
+    with pytest.raises(E.Refused, match="checkout rule fp-rule-002"):
+        start(start_from="fp-rule-002")  # rule/ holds the best version, not the new framework
+    line.checkout("rule", "fp-rule-002")  # discarded, still a version to grow from
+    assert (tmp_path / "rule-src" / "strategy.py").read_text() == "new framework"
+    with pytest.raises(E.Refused, match="不是从它恢复来的"):
+        start()  # without --from an attempt is one change from the best version
+    with pytest.raises(E.Refused, match="只用于规则线"):
+        line.checkout("rl", "fp-rl-001")

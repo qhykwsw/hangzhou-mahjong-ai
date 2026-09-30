@@ -728,7 +728,7 @@ def history(line):
         lower = f" 确认下界{r['confirm']['lower90']:+.2f}" if r.get("confirm") else ""
         design = "" if r.get("design_seconds") is None else f" 设计{r['design_seconds'] / 60:.0f}分"
         host = f" @{r['host']}" if r.get("host") not in (None, "local") else ""
-        base = f" 基于{r['base']}" if r.get("base") else ""
+        base = f" 从{r['from']}改一处" if r.get("from") else f" 基于{r['base']}" if r.get("base") else ""
         cost = f" 每决策{r['decision_ms']['mine']:.2g}ms" if r.get("decision_ms") else ""
         kind = (f" 等价替换（{'沿用' if r['equivalent'].get('carried', True) else '重打'}{r['equivalent']['to']}的开发集）"
                 if r.get("equivalent")
@@ -751,7 +751,7 @@ def history(line):
         where = f" @{r['host']}" if r.get("host") else ""
         source = r["base"] if r.get("from") == "best" else r.get("from")
         plan = (f" {r['hands'] / 10000:g}万局" + (f" 续训自{source}" if source not in (None, "start") else "")
-                if r.get("hands") else "")
+                if r.get("hands") else f" 从{source}改一处" if source else "")
         out.append(f"{r['id']} {STAGE_NAMES.get(r.get('stage'), '进行中')}{where}{plan} {minutes:.0f}分｜{r['description']}")
     return "\n".join(out)
 

@@ -7,6 +7,8 @@ on the conversation that started an attempt:
   python -m harness.line start rule|rl "<change>" --why "<hypothesis>" --design-start <epoch> [--host <free host>]
       RL also [--hands <training hands, default 1M; at most 5M on small hosts, 105M on large>] [--from start|best|<RL version>]
   python -m harness.line start rule "<change>" --why "<why faster>" --design-start <epoch> --equivalent
+  python -m harness.line checkout rule <rule version>   # a new framework's line: put that version in rule/
+  python -m harness.line start rule ... --from <rule version>   # one change from it (after checkout)
   python -m harness.line status rule|rl               # every attempt, the hosts, the lease
   python -m harness.line stop rule|rl                 # leave the loop; attempts run on
 
@@ -72,6 +74,8 @@ def extra(state, training=None):
            "training": training or state.get("training")}
     if state.get("decision_ms"):
         out["decision_ms"] = state["decision_ms"]
+    if state["line"] == "rule" and state.get("from"):
+        out["from"] = state["from"]  # a new framework's line: the version this one changes
     return out
 
 
@@ -333,6 +337,26 @@ def restore(line):
         git("clean", "-fdq", "--", rel)
     E.atomic_json(E.LOCAL / f"workdir-{line}.json", {"base": champion["id"] if champion else None, "at": time.time()})
     return champion
+
+
+def checkout(line, version):
+    """Put an evaluated rule version, kept or not, in the line's directory, to change it next.
+
+    A new framework rarely beats the best version at once: its line grows from
+    its own versions (start --from), each one change from the last, and becomes
+    the best only once it beats it on the development and confirmation sets.
+    """
+    if line != "rule":
+        raise E.Refused("checkout 只用于规则线；RL 线用 start --from 指定出发的模型。")
+    rows = [r for r in E.attempts(line="rule") if r["id"] == version and (r.get("spec") or {}).get("package_path")]
+    if not rows:
+        raise E.Refused(f"{version} 不是评估过的规则版本（记录里没有它的快照）。")
+    target = E.SOURCES[line]
+    shutil.rmtree(target)
+    shutil.copytree(E.frozen_source(rows[-1]), target, ignore=shutil.ignore_patterns("__pycache__"))
+    commit(target.relative_to(E.REPO).as_posix(), f"{E.LINE_NAMES[line]}：检出 {version} {rows[-1]['description']}")
+    E.atomic_json(E.LOCAL / f"workdir-{line}.json", {"base": version, "at": time.time()})
+    print(f"rule/ 现在是 {version}（{rows[-1]['description'][:60]}）。改一处后运行 start 并加 --from {version}。")
 
 
 def commit(rel, message):
@@ -653,14 +677,12 @@ def notes_path(line):
     return E.LOCAL / "notes" / f"{line}.md"
 
 
-def emit(records, notices, step, line, ask=None):
+def emit(records, notices, step, line):
     blocks = []
     if records:
         blocks.append("【汇报】（原样发给用户）\n" + "\n\n".join(E.report(r) for r in records))
     if notices:
         blocks.append("【通知】（原样发给用户）\n" + "\n".join(notices))
-    if ask:
-        blocks.append("【待用户决定】（原样发给用户，然后照常循环）\n" + ask)
     blocks.append(f"【下一步】{step}")
     try:
         blocks.append("【状态】\n" + "\n".join(summary(line)))
@@ -693,9 +715,9 @@ def wait(line, minutes):
         records = [r for r in E.attempts(pool_id, line) if E.report_key(r) not in done]
         notices = closed + host_notices(line)
         flagged = [r["id"] for r in records if (r.get("reference") or {}).get("above")]
-        # The user decides whether it goes on the platform; the line does not wait for the answer.
-        ask = (f"{flagged[-1]} 高于自由对战现在的上场版本，可以换上。要换上吗？同意的话回复，"
-               f"我运行 promote {flagged[-1]}。" if flagged else None)
+        # The user lets the maintainer put a stronger version on at once (2026-09-30): a notice, not a question.
+        if flagged:
+            notices.append(f"{flagged[-1]} 高于自由对战现在的上场版本，维护者会直接换上，不用等用户回复。")
         free, why_not = design_hosts(line)
         if free or records or notices or time.time() >= deadline:
             E.mark_reported(records)
@@ -715,7 +737,7 @@ def wait(line, minutes):
                 step = f"设计：{where}{base}。先读 status 与迭代笔记 {notes_path(line)}，只改一处，然后运行 {command}。"
             else:
                 step = f"等待：{why_not}。再次运行 wait。"
-            return emit(records, notices, step, line, ask)
+            return emit(records, notices, step, line)
         time.sleep(POLL_SECONDS)
 
 
@@ -726,8 +748,10 @@ def start(line, change, why, design_start, host=None, equivalent=False, hands=No
     champion = E.best(pool["id"], line)
     if equivalent and (line != "rule" or champion is None):
         raise E.Refused("等价替换只用于规则线已有最好版本之后：它要与最好版本逐个决策比较。")
-    if line == "rule" and (hands is not None or start_from != "start"):
-        raise E.Refused("--hands 与 --from 只用于 RL 线。")
+    if line == "rule" and hands is not None:
+        raise E.Refused("--hands 只用于 RL 线。")
+    if line == "rule" and start_from == "best":
+        start_from = "start"  # the rule line's default: one change from the best version
     hands = rl.HANDS if hands is None else int(hands)
     if line == "rl" and not 0 < hands <= max(b["max_hands"] for b in rl.BUDGETS.values()):
         raise E.Refused(f"训练局数要在 1 到 {max(b['max_hands'] for b in rl.BUDGETS.values()):,} 局之间（按主机规格再细分）。")
@@ -739,7 +763,11 @@ def start(line, change, why, design_start, host=None, equivalent=False, hands=No
     rel = source.relative_to(E.REPO).as_posix()
     workdir = E.LOCAL / f"workdir-{line}.json"
     base = E.read_json(workdir).get("base") if workdir.exists() else None
-    if champion:
+    lineage = line == "rule" and start_from != "start"
+    if lineage and base != start_from:
+        raise E.Refused(f"本线目录不是从 {start_from} 检出的（现在是 {base}）。"
+                        f"运行 checkout rule {start_from}，把这处改动重新做在它上面。")
+    if champion and not lineage:
         if base != champion["id"]:
             raise E.Refused(f"最好版本现在是 {champion['id']}，本线目录不是从它恢复来的。"
                             "运行 wait 恢复后，把这处改动重新做在它上面。")
@@ -778,6 +806,8 @@ def start(line, change, why, design_start, host=None, equivalent=False, hands=No
                      seed=random.SystemRandom().getrandbits(31), confirm_seed=random.SystemRandom().getrandbits(62))
         if line == "rl":
             state |= {"hands": hands, "from": start_from if warm else "start", "size": rl.size(host)}
+        elif lineage:
+            state["from"] = start_from
         save(state)
     if line == "rule":
         state["spec"] = E.freeze_rule(attempt_id)
@@ -787,7 +817,7 @@ def start(line, change, why, design_start, host=None, equivalent=False, hands=No
     spawn(attempt_id)
     number = int(attempt_id.rsplit("-", 1)[-1])
     trained = f"（{host}，{hands / 10000:g} 万局，" + (f"从 {rl.origin(state)} 继续）" if warm else "从起点）")
-    print(f"尝试 {number} · {E.LINE_NAMES[line]}：{change}" + (trained if line == "rl" else "")
+    print(f"尝试 {number} · {E.LINE_NAMES[line]}：{change}" + (trained if line == "rl" else f"（从 {start_from} 改一处）" if lineage else "")
           + ("（等价替换）" if equivalent else ""))
 
 
@@ -901,11 +931,15 @@ def main():
                    + "、".join(f"{n} {b['max_hands']:,}" for n, b in rl.BUDGETS.items()) + ")")
     s.add_argument("--from", dest="start_from", default="start",
                    help="RL: train from the fixed start, the best version this attempt is designed on (best), "
-                        "or any evaluated RL version by id")
+                        "or any evaluated RL version by id; rule: the version checked out into rule/ "
+                        "(default: the best version)")
     s.add_argument("--equivalent", action="store_true",
                    help="rule: decides exactly as the best version, only faster or simpler; checked move by move")
     for name in ("status", "stop", "takeover"):
         sub.add_parser(name).add_argument("line", choices=lines)
+    c = sub.add_parser("checkout")
+    c.add_argument("line", choices=lines)
+    c.add_argument("version")
     h = sub.add_parser("hosts")
     h.add_argument("action", nargs="?", choices=("on", "off"))
     h.add_argument("host", nargs="?")
@@ -923,6 +957,8 @@ def main():
                   args.hands, args.start_from)
         elif args.command == "status":
             status(args.line)
+        elif args.command == "checkout":
+            checkout(args.line, args.version)
         elif args.command == "stop":
             release(args.line)
             print(f"{E.LINE_NAMES[args.line]}：已退出循环；在途尝试继续跑，结果在下次 wait 时汇报")
