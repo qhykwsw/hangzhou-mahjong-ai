@@ -2129,24 +2129,33 @@ static void race_analyze_values(const int *counts, const int *avail, int open_me
 }
 
 /* The memo key: 3 bits per count and per available copy, and the rest.
- * kind: 0 waiting, 1 reshaped, 2 reshape gain. */
-static int race_key(const race_ctx *x, const int *c, int kind, int chain, int piao, int draws, int options,
-                    uint64_t *k) {
+ * kind: 0 waiting, 1 reshaped, 2 reshape gain. The hand's part is its
+ * shanten_key at the context's melds (k0, k1), which a caller walking
+ * neighbouring hands derives from one to the next. */
+static int race_key_of(const race_ctx *x, uint64_t k0, uint64_t k1, int kind, int chain, int piao, int draws,
+                       int options, uint64_t *k) {
     if (!x->keyed || chain < 0 || chain > 255 || piao < 0 || piao > 255 || draws < -64 || draws > 63) return 0;
-    uint64_t k0 = 0, k1 = 0;
-    for (int t = 0; t < NTILES; t++) {
-        if (c[t] > 7) return 0;
-        if (t < 21) k0 |= (uint64_t)c[t] << (3 * t);
-        else k1 |= (uint64_t)c[t] << (3 * (t - 21));
-    }
-    k1 |= (uint64_t)x->opened << 39 | (uint64_t)(kind & 1) << 42 | (uint64_t)(draws + 64) << 43
-        | (uint64_t)x->profile << 50 | 1ULL << 63;
     k[0] = k0;
-    k[1] = k1;
+    k[1] = k1 | (uint64_t)(kind & 1) << 42 | (uint64_t)(draws + 64) << 43 | (uint64_t)x->profile << 50 | 1ULL << 63;
     k[2] = x->a0;
     k[3] = x->a1 | (uint64_t)chain << 39 | (uint64_t)piao << 47 | (uint64_t)x->speed_key << 55
          | (uint64_t)(options != 0) << 61 | (uint64_t)(kind >> 1) << 62;
     return 1;
+}
+
+static int race_key(const race_ctx *x, const int *c, int kind, int chain, int piao, int draws, int options,
+                    uint64_t *k) {
+    for (int t = 0; t < NTILES; t++)
+        if (c[t] > 7) return 0;
+    uint64_t k0, k1;
+    shanten_key(c, x->opened, &k0, &k1);
+    return race_key_of(x, k0, k1, kind, chain, piao, draws, options, k);
+}
+
+/* The key of the hand of key (k0, k1) less one copy of tile t. */
+static void race_key_drop(uint64_t k0, uint64_t k1, int t, uint64_t *r0, uint64_t *r1) {
+    *r0 = t < 21 ? k0 - (1ULL << (3 * t)) : k0;
+    *r1 = t < 21 ? k1 : k1 - (1ULL << (3 * (t - 21)));
 }
 
 static race_slot *race_slot_of(const uint64_t *k) {
@@ -2217,29 +2226,270 @@ static int race_analysis(race_ctx *x, const int *c, int chain, int piao, analysi
     return race_analysis_at(x, c, x->opened, chain, piao, row);
 }
 
+/* The draws that bring a hand closer to a wait, as bit t, and its distance:
+ * race_draws' row (draw[t] < distance) in 24 bytes, memoised per hand and
+ * melds (shanten_key), the distance in k1 as the shanten memo keeps it. A
+ * natural tile the hand holds no copy of, with no tile of its suit within
+ * two ranks (any honor not held), joins no meld, partial or pair of any
+ * split, so its suit's table and the shape value stay as they are and the
+ * table is not looked up; the seven pairs still count the tile. */
+#define RACE_ROW_BITS 20
+
+typedef struct {
+    uint64_t k0, k1, closer;
+} race_row_slot;
+
+static race_row_slot race_rows[1 << RACE_ROW_BITS];
+
+static uint64_t race_closer(const int *c, int opened, uint64_t k0, uint64_t k1, int *distance) {
+    uint64_t h = (k0 * 0xC2B2AE3D27D4EB4FULL) ^ (k1 * 0xD6E8FEB86659FD93ULL);
+    h ^= h >> 31;
+    race_row_slot *slot = &race_rows[h >> (64 - RACE_ROW_BITS)];
+    if (slot->k0 == k0 && (slot->k1 & (KEY1_BITS | KEY_USED)) == (k1 | KEY_USED)) {
+        *distance = (int)((slot->k1 >> VALUE_SHIFT) & 63) - 16;
+        return slot->closer;
+    }
+    int natural[NTILES];
+    memcpy(natural, c, sizeof(natural));
+    int jokers = natural[WHITE];
+    natural[WHITE] = 0;
+    suit_res tables[4], drawn;
+    for (int s = 0; s < 4; s++) race_group_table(natural, s, &tables[s]);
+    /* others[s]: every group but s, from the open melds. */
+    race_groups start, others[4], tmp, full;
+    for (int m = 0; m < 5; m++)
+        for (int p = 0; p < 2; p++) start.g[m][p] = -1;
+    start.g[opened][0] = 0;
+    for (int s = 0; s < 4; s++) {
+        race_groups acc = start;
+        for (int o = 0; o < 4; o++) {
+            if (o == s) continue;
+            race_groups_add(&acc, &tables[o], &tmp);
+            acc = tmp;
+        }
+        others[s] = acc;
+    }
+    race_groups_add(&others[3], &tables[3], &full);
+    int shape = race_groups_value(&full);
+    int pairs = 0, singles = 0;
+    if (opened == 0) {
+        for (int i = 0; i < NTILES; i++) {
+            pairs += natural[i] / 2;
+            singles += natural[i] % 2;
+        }
+    }
+    int own = race_distance(shape, jokers, pairs, singles, opened);
+    uint64_t closer = 0;
+    for (int t = 0; t < NTILES; t++) {
+        if (c[t] >= 4) continue;
+        int d;
+        if (t == WHITE) {
+            d = race_distance(shape, jokers + 1, pairs, singles, opened);
+        } else {
+            int value = shape, r = t % 9;
+            int lone = !c[t] && (t >= 27 || (!(r >= 1 && c[t - 1]) && !(r >= 2 && c[t - 2]) && !(r <= 7 && c[t + 1])
+                                             && !(r <= 6 && c[t + 2])));
+            if (!lone) {
+                int s = t < 27 ? t / 9 : 3;
+                natural[t]++;
+                race_group_table(natural, s, &drawn);
+                natural[t]--;
+                race_groups_add(&others[s], &drawn, &tmp);
+                value = race_groups_value(&tmp);
+            }
+            int odd = natural[t] % 2;
+            d = race_distance(value, jokers, pairs + odd, singles + (odd ? -1 : 1), opened);
+        }
+        if (d < own) closer |= 1ULL << t;
+    }
+    *distance = own;
+    slot->k0 = k0;
+    slot->k1 = k1 | KEY_USED | ((uint64_t)(own + 16) << VALUE_SHIFT);
+    slot->closer = closer;
+    return closer;
+}
+
+/* What the analysis of a waiting hand takes from the hand alone, memoised
+ * per hand and melds: the draws that win (bit t), whether the hand is baotou
+ * (RACE_WAIT_BAOTOU, looked up when a draw wins) and per winning draw the
+ * exponent of its seven-pairs fan (three bits each, 17 draws a word). */
+#define RACE_WAIT_BITS 19
+#define RACE_WAIT_BAOTOU (1ULL << NTILES)
+
+typedef struct {
+    uint64_t k0, k1, wins, fan[2];
+} race_wait_slot;
+
+static race_wait_slot race_waits[1 << RACE_WAIT_BITS];
+
+/* race_analyze_values' winning draws of the hand (n_wins, wins, fans, copies
+ * and value; nothing else of the row) without race_draws' row. There a draw
+ * wins when it is below the winning boundary (draw[t] < 0) and
+ * draw_fans_value finds the hand with it winning; every such hand is below
+ * the boundary, so draw_fans_value's test alone decides. A standard win's
+ * naturals split into a melds, b two-tile parts a white completes, s single
+ * tiles two whites complete (beside the melds of three whites, m) and a pair
+ * that is natural (p = 1, no white) or takes w = 1 or 2 whites (p = 0): the
+ * shape value is at most 8 - 2 * (melds open + a) - b - p = b + 2 s + 2 m -
+ * p, the whites are b + 2 s + 3 m + w, and the distance at most -m - p - w
+ * <= -1. Seven pairs (nothing open): the kinds held an odd number of times,
+ * o, are at most the whites, so with P pairs 2 P + 2 o <= 14, o fits the
+ * room 7 - P and the seven-pairs distance is -1. The fans are
+ * draw_fans_value's: the memoised seven-pairs part, then the chain, the
+ * piao and the baotou. */
+static void race_wait_row(const race_ctx *x, const int *c, int opened, uint64_t k0, uint64_t k1, int chain, int piao,
+                          analysis_row *row) {
+    uint64_t h = (k0 * 0x94D049BB133111EBULL) ^ (k1 * 0x9E3779B97F4A7C15ULL);
+    h ^= h >> 31;
+    race_wait_slot *slot = &race_waits[h >> (64 - RACE_WAIT_BITS)];
+    if (slot->k0 != k0 || slot->k1 != (k1 | KEY_USED)) {
+        uint64_t wins = 0, fan[2] = {0, 0};
+        draw_fans f;
+        draw_fans_prepare(&f, c, opened, 0, 0);
+        for (int t = 0; f.sized && t < NTILES; t++) {
+            if (c[t] >= 4) continue;
+            int jokers = c[WHITE] + (t == WHITE), odd = f.odd, luxury = f.luxury;
+            if (t != WHITE) {
+                odd += c[t] % 2 ? -1 : 1;
+                luxury += c[t] + 1 == 4;
+            }
+            int pairs = opened == 0 && odd <= jokers, hu = pairs;
+            if (!hu) {
+                if (t == WHITE) {
+                    hu = meld_groups_hu(&f.g, jokers);
+                } else {
+                    int w[NTILES];
+                    memcpy(w, c, sizeof(w));
+                    w[t]++;
+                    meld_groups d = f.g;
+                    meld_groups_add(&d, w, t);
+                    hu = meld_groups_hu(&d, jokers);
+                }
+            }
+            if (!hu) continue;
+            wins |= 1ULL << t;
+            if (pairs) {
+                if (jokers == 4 && odd == 0) luxury++;
+                fan[t / 17] |= (uint64_t)(1 + luxury) << (3 * (t % 17));
+            }
+        }
+        if (wins && c[WHITE] && race_baotou_keyed(k0, k1, c, opened)) wins |= RACE_WAIT_BAOTOU;
+        slot->k0 = k0;
+        slot->k1 = k1 | KEY_USED;
+        slot->wins = wins;
+        slot->fan[0] = fan[0];
+        slot->fan[1] = fan[1];
+    }
+    const int *avail = x->avail;
+    int n = 0, baotou = (slot->wins & RACE_WAIT_BAOTOU) != 0;
+    long copies = 0, value = 0;
+    for (int t = 0; t < NTILES; t++) {
+        if (!(slot->wins >> t & 1) || avail[t] <= 0) continue;
+        long fan = 1L << ((slot->fan[t / 17] >> (3 * (t % 17))) & 7);
+        if (chain > 0) fan *= 1L << chain;
+        if (c[WHITE] + (t == WHITE) + piao == 4) fan *= 2;
+        if (baotou) fan *= 2;
+        row->wins[n] = t;
+        row->fans[n++] = fan;
+        copies += avail[t];
+        value += avail[t] * fan;
+    }
+    row->n_wins = n;
+    row->copies = copies;
+    row->value = value;
+}
+
+/* race_analysis for the valuations below, which read a row by its distance
+ * (raw: the hand's shanten_keyed, race_draws' own distance): past the
+ * winning boundary the caller's analysis, as race_analysis; at a wait the
+ * winning draws (race_wait_row; the draws below the boundary are not
+ * listed); further away the improving draws and their copies, where no draw
+ * wins (a tile more lowers the distance by one at most, see race_swaps). */
+static int race_row(race_ctx *x, const int *c, int opened, uint64_t k0, uint64_t k1, int raw, int chain, int piao,
+                    analysis_row *row) {
+    if (raw < 0) return race_fallback(x, c, opened, chain, piao, row);
+    row->distance = raw;
+    row->n_improving = row->n_wins = 0;
+    row->ukeire = row->copies = row->value = 0;
+    if (raw == 0) {
+        race_wait_row(x, c, opened, k0, k1, chain, piao, row);
+        return 0;
+    }
+    int own, n = 0;
+    uint64_t closer = race_closer(c, opened, k0, k1, &own);
+    long ukeire = 0;
+    for (int t = 0; closer >> t; t++) {
+        if (!(closer >> t & 1) || x->avail[t] <= 0 || c[t] >= 4) continue;
+        row->improving[n++] = t;
+        ukeire += x->avail[t];
+    }
+    row->n_improving = n;
+    row->ukeire = ukeire;
+    return 0;
+}
+
+/* after[tile]: the kinds of the hand c whose discard after a draw of tile
+ * may leave a wait (shanten_keyed <= 0), as bit drop; the caller asks
+ * shanten_keyed of those only. A tile more never raises the distance and
+ * lowers it by one at most: the naturals' best split stands with the tile
+ * unused, and taking the tile from the best split turns its meld into a
+ * partial, its partial or pair into a single (a white counts one by itself);
+ * the seven pairs' pairs and paired singles grow by one at most with a tile.
+ * So the hand less drop plus tile waits only when the hand less drop waits
+ * already (then with any tile), or is one away and the tile is among its
+ * closer draws. */
+static void race_swaps(int *c, int opened, uint64_t k0, uint64_t k1, uint64_t *after) {
+    memset(after, 0, NTILES * sizeof(uint64_t));
+    for (int drop = 0; drop < NTILES; drop++) {
+        if (!c[drop]) continue;
+        uint64_t r0, r1, draws = 0;
+        race_key_drop(k0, k1, drop, &r0, &r1);
+        c[drop]--;
+        int distance = shanten_keyed(r0, r1, c, opened);
+        if (distance <= 0) {
+            draws = ~0ULL;
+        } else if (distance == 1) {
+            int own;
+            draws = race_closer(c, opened, r0, r1, &own);
+            if (own != 1) draws = ~0ULL;
+        }
+        c[drop]++;
+        for (int t = 0; t < NTILES && draws >> t; t++)
+            if (draws >> t & 1) after[t] |= 1ULL << drop;
+    }
+}
+
 /* kong_draw_value: after a concealed kong of this tile (three held, the
  * fourth drawn), the replacement draw wins at double fan (chain 1). */
 static int race_kong_draw(race_ctx *x, int *c, int tile, double *out) {
     analysis_row row;
+    int opened = x->opened + 1;
+    uint64_t k0, k1;
     c[tile] -= 3;
-    int rc = race_analysis_at(x, c, x->opened + 1, 1, 0, &row);
+    shanten_key(c, opened, &k0, &k1);
+    int raw = shanten_keyed(k0, k1, c, opened), rc = 0;
+    /* One or more away nothing wins; else the winning draws. */
+    if (raw > 0) row.distance = raw;
+    else rc = race_row(x, c, opened, k0, k1, raw, 1, 0, &row);
     c[tile] += 3;
     if (rc < 0) return -1;
     *out = row.distance > 0 ? 0.0 : ((double)row.value + x->p->saved * (double)row.copies) / x->unseen;
     return 0;
 }
 
-static int race_waiting(race_ctx *x, int *c, int chain, int piao, int draws, int options, double *out);
+static int race_waiting_at(race_ctx *x, int *c, uint64_t k0, uint64_t k1, int chain, int piao, int draws, int options,
+                           double *out);
 
 /* reshape_gain(hand, draws): the trade option of reshaped_value for a wait
- * one step ahead, pricing every wait there as a plain race. */
-static int race_reshape_gain(race_ctx *x, int *c, int draws, double *out) {
+ * one step ahead, pricing every wait there as a plain race. k0, k1: the
+ * hand's shanten_key at the context's melds. */
+static int race_reshape_gain_at(race_ctx *x, int *c, uint64_t k0, uint64_t k1, int draws, double *out) {
     if (draws < 2) {
         *out = 0.0;
         return 0;
     }
     uint64_t key[4];
-    int keyed = race_key(x, c, 2, 0, 0, draws, 0, key);
+    int keyed = race_key_of(x, k0, k1, 2, 0, 0, draws, 0, key);
     race_slot *slot = keyed ? race_slot_of(key) : NULL;
     if (slot && !memcmp(slot->k, key, sizeof(key))) {
         *out = slot->value;
@@ -2247,35 +2497,32 @@ static int race_reshape_gain(race_ctx *x, int *c, int draws, double *out) {
     }
     const race_profile *p = x->p;
     const int *avail = x->avail;
-    int opened = x->opened, kinds[NTILES], n_kinds = 0;
+    int opened = x->opened;
     double unseen = x->unseen, q = p->q * x->speed;
     analysis_row row, r;
-    if (race_analysis(x, c, 0, 0, &row) < 0) return -1;
+    if (race_row(x, c, opened, k0, k1, shanten_keyed(k0, k1, c, opened), 0, 0, &row) < 0) return -1;
     int wins[NTILES] = {0};
     for (int i = 0; i < row.n_wins; i++) wins[row.wins[i]] = 1;
-    for (int t = 0; t < NTILES; t++)
-        if (c[t]) kinds[n_kinds++] = t;
     double stay = race_race(x, (double)row.copies / unseen, ((double)row.value + p->saved * (double)row.copies) / unseen,
                             draws - 1);
-    uint64_t k0, k1;
-    shanten_key(c, opened, &k0, &k1);
+    uint64_t after[NTILES];
+    race_swaps(c, opened, k0, k1, after);
     double gain = 0.0;
     long reach = 0;
     for (int tile = 0; tile < NTILES; tile++) {
         if (wins[tile] || avail[tile] <= 0 || c[tile] >= 4) continue;
-        uint64_t d0, d1;
+        uint64_t d0, d1, drops = after[tile] & ~(1ULL << tile);
         shanten_key_draw(k0, k1, tile, &d0, &d1);
         c[tile]++;
         double best = stay;
-        for (int k = 0; k < n_kinds; k++) {
-            int drop = kinds[k];
-            if (drop == tile) continue;
+        for (int drop = 0; drops >> drop; drop++) {
+            if (!(drops >> drop & 1)) continue;
             c[drop]--;
-            uint64_t r0 = drop < 21 ? d0 - (1ULL << (3 * drop)) : d0;
-            uint64_t r1 = drop < 21 ? d1 : d1 - (1ULL << (3 * (drop - 21)));
+            uint64_t r0, r1;
+            race_key_drop(d0, d1, drop, &r0, &r1);
             if (shanten_keyed(r0, r1, c, opened) <= 0) {
                 /* The C analysis as it is, even past the winning boundary. */
-                race_analyze_values(c, avail, opened, 0, 0, &r);
+                race_wait_row(x, c, opened, r0, r1, 0, 0, &r);
                 double v = race_race(x, (double)r.copies / unseen,
                                      ((double)r.value + p->saved * (double)r.copies) / unseen, draws - 1);
                 if (v > best) best = v;
@@ -2298,10 +2545,12 @@ static int race_reshape_gain(race_ctx *x, int *c, int draws, double *out) {
     return 0;
 }
 
-/* waiting_value(hand, opened, available, chain, piao, draws, options) at the context's speed */
-static int race_waiting(race_ctx *x, int *c, int chain, int piao, int draws, int options, double *out) {
+/* waiting_value(hand, opened, available, chain, piao, draws, options) at the
+ * context's speed. k0, k1: the hand's shanten_key at the context's melds. */
+static int race_waiting_at(race_ctx *x, int *c, uint64_t k0, uint64_t k1, int chain, int piao, int draws, int options,
+                           double *out) {
     uint64_t key[4];
-    int keyed = race_key(x, c, 0, chain, piao, draws, options, key);
+    int keyed = race_key_of(x, k0, k1, 0, chain, piao, draws, options, key);
     race_slot *slot = keyed ? race_slot_of(key) : NULL;
     if (slot && !memcmp(slot->k, key, sizeof(key))) {
         *out = slot->value;
@@ -2311,8 +2560,6 @@ static int race_waiting(race_ctx *x, int *c, int chain, int piao, int draws, int
     const int *avail = x->avail;
     int opened = x->opened;
     double unseen = x->unseen, result, q = p->q * x->speed;
-    uint64_t k0, k1;
-    shanten_key(c, opened, &k0, &k1);
     analysis_row row;
     if (c[WHITE] && race_baotou_keyed(k0, k1, c, opened)) {
         /* A baotou wait wins on every drawable tile: the Python loop's copies
@@ -2321,7 +2568,8 @@ static int race_waiting(race_ctx *x, int *c, int chain, int piao, int draws, int
         baotou_fans(c, avail, opened, chain, piao, &copies, &fan);
         result = race_race(x, (double)copies / unseen, ((double)fan + p->saved * (double)copies) / unseen, draws);
     } else {
-        if (race_analysis(x, c, chain, piao, &row) < 0) return -1;
+        int raw = shanten_keyed(k0, k1, c, opened);
+        if (race_row(x, c, opened, k0, k1, raw, chain, piao, &row) < 0) return -1;
         if (row.distance <= 0) {
             long copies = row.copies;
             double gain = (double)row.value + p->saved * (double)copies;
@@ -2339,15 +2587,18 @@ static int race_waiting(race_ctx *x, int *c, int chain, int piao, int draws, int
                 if (avail[WHITE] > 0 && has_fan[WHITE]) {
                     upgrade_ctx up;
                     upgrade_prepare(c, opened, k0, k1, &up);
-                    uint64_t drops = upgrade_drops_of(&up, c, WHITE);
+                    uint64_t drops = upgrade_drops_of(&up, c, WHITE), d0, d1;
+                    shanten_key_draw(k0, k1, WHITE, &d0, &d1);
                     double best = 0.0;
                     int any = 0;
                     c[WHITE]++;
                     for (int drop = 0; drops; drop++, drops >>= 1) {
                         if (!(drops & 1)) continue;
+                        uint64_t r0, r1;
+                        race_key_drop(d0, d1, drop, &r0, &r1);
                         c[drop]--;
                         double value;
-                        int rc = race_waiting(x, c, 0, 0, draws - 1, 0, &value);
+                        int rc = race_waiting_at(x, c, r0, r1, 0, 0, draws - 1, 0, &value);
                         c[drop]++;
                         if (rc < 0) {
                             c[WHITE]--;
@@ -2390,13 +2641,16 @@ static int race_waiting(race_ctx *x, int *c, int chain, int piao, int draws, int
                 for (int tile = 0; tile < NTILES; tile++) {
                     if (avail[tile] <= 0 || c[tile] >= 4) continue;
                     double best = 0.0;
-                    uint64_t drops = upgrade_drops_of(&up, c, tile);
+                    uint64_t drops = upgrade_drops_of(&up, c, tile), d0, d1;
+                    shanten_key_draw(k0, k1, tile, &d0, &d1);
                     c[tile]++;
                     for (int drop = 0; drops; drop++, drops >>= 1) {
                         if (!(drops & 1)) continue;
+                        uint64_t r0, r1;
+                        race_key_drop(d0, d1, drop, &r0, &r1);
                         c[drop]--;
                         double value;
-                        if (race_waiting(x, c, 0, 0, draws - 1, 0, &value) < 0) {
+                        if (race_waiting_at(x, c, r0, r1, 0, 0, draws - 1, 0, &value) < 0) {
                             c[drop]++;
                             c[tile]--;
                             return -1;
@@ -2419,23 +2673,28 @@ static int race_waiting(race_ctx *x, int *c, int chain, int piao, int draws, int
         } else {
             double u = (double)row.ukeire / unseen;
             if (row.distance == 1) {
+                /* The discards to ask after each draw; past the winning
+                 * boundary (the row is the caller's analysis) the hand
+                 * itself waits, so discarding the tile drawn is asked too. */
+                uint64_t after[NTILES];
+                if (draws > 1) race_swaps(c, opened, k0, k1, after);
                 double weighted = 0.0;
                 for (int i = 0; i < row.n_improving; i++) {
                     int tile = row.improving[i];
+                    uint64_t d0, d1, r0, r1;
+                    shanten_key_draw(k0, k1, tile, &d0, &d1);
                     c[tile]++;
                     double best = 0.0;
                     int target = -1; /* the discard leaving the best wait */
                     if (draws > 1) {
-                        uint64_t d0, d1;
-                        shanten_key_draw(k0, k1, tile, &d0, &d1);
-                        for (int drop = 0; drop < NTILES; drop++) {
-                            if (!c[drop]) continue;
+                        uint64_t drops = raw <= 0 ? after[tile] | 1ULL << tile : after[tile] & ~(1ULL << tile);
+                        for (int drop = 0; drops >> drop; drop++) {
+                            if (!(drops >> drop & 1)) continue;
                             c[drop]--;
-                            uint64_t r0 = drop < 21 ? d0 - (1ULL << (3 * drop)) : d0;
-                            uint64_t r1 = drop < 21 ? d1 : d1 - (1ULL << (3 * (drop - 21)));
+                            race_key_drop(d0, d1, drop, &r0, &r1);
                             if (shanten_keyed(r0, r1, c, opened) <= 0) {
                                 double value;
-                                if (race_waiting(x, c, 0, 0, draws - 1, 0, &value) < 0) {
+                                if (race_waiting_at(x, c, r0, r1, 0, 0, draws - 1, 0, &value) < 0) {
                                     c[drop]++;
                                     c[tile]--;
                                     return -1;
@@ -2451,7 +2710,8 @@ static int race_waiting(race_ctx *x, int *c, int chain, int piao, int draws, int
                     if (options && target >= 0 && chain == 0) {
                         double g;
                         c[target]--;
-                        int rc = race_reshape_gain(x, c, draws - 1, &g);
+                        race_key_drop(d0, d1, target, &r0, &r1);
+                        int rc = race_reshape_gain_at(x, c, r0, r1, draws - 1, &g);
                         c[target]++;
                         if (rc < 0) {
                             c[tile]--;
@@ -2478,11 +2738,19 @@ static int race_waiting(race_ctx *x, int *c, int chain, int piao, int draws, int
     return 0;
 }
 
+static int race_waiting(race_ctx *x, int *c, int chain, int piao, int draws, int options, double *out) {
+    uint64_t k0, k1;
+    shanten_key(c, x->opened, &k0, &k1);
+    return race_waiting_at(x, c, k0, k1, chain, piao, draws, options, out);
+}
+
 /* reshaped_value(hand, opened, available, draws): a waiting hand with the
  * option to trade a non-winning draw for a better wait. */
 static int race_reshaped(race_ctx *x, int *c, int draws, int options, double *out) {
-    uint64_t key[4];
-    int keyed = race_key(x, c, 1, 0, 0, draws, options, key);
+    uint64_t key[4], k0, k1;
+    int opened = x->opened;
+    shanten_key(c, opened, &k0, &k1);
+    int keyed = race_key_of(x, k0, k1, 1, 0, 0, draws, options, key);
     race_slot *slot = keyed ? race_slot_of(key) : NULL;
     if (slot && !memcmp(slot->k, key, sizeof(key))) {
         *out = slot->value;
@@ -2490,42 +2758,41 @@ static int race_reshaped(race_ctx *x, int *c, int draws, int options, double *ou
     }
     const race_profile *p = x->p;
     const int *avail = x->avail;
-    int opened = x->opened;
     double unseen = x->unseen, value, result, q = p->q * x->speed;
-    uint64_t k0, k1;
-    shanten_key(c, opened, &k0, &k1);
     /* sdk.shape.shanten is positive exactly when the raw distance is, and
      * then equal to it: one step away, the trade option there is wanted. */
     int distance = shanten_keyed(k0, k1, c, opened);
     if (distance > 0) {
-        if (race_waiting(x, c, 0, 0, draws, options && distance == 1, &result) < 0) return -1;
-    } else if (race_waiting(x, c, 0, 0, draws, 0, &value) < 0) {
+        if (race_waiting_at(x, c, k0, k1, 0, 0, draws, options && distance == 1, &result) < 0) return -1;
+    } else if (race_waiting_at(x, c, k0, k1, 0, 0, draws, 0, &value) < 0) {
         return -1;
     } else if (draws < 2) {
         result = value;
     } else {
         analysis_row row;
-        if (race_analysis(x, c, 0, 0, &row) < 0) return -1;
+        if (race_row(x, c, opened, k0, k1, distance, 0, 0, &row) < 0) return -1;
         int wins[NTILES] = {0};
         for (int i = 0; i < row.n_wins; i++) wins[row.wins[i]] = 1;
         double stay;
-        if (race_waiting(x, c, 0, 0, draws - 1, 0, &stay) < 0) return -1;
+        if (race_waiting_at(x, c, k0, k1, 0, 0, draws - 1, 0, &stay) < 0) return -1;
+        uint64_t after[NTILES];
+        race_swaps(c, opened, k0, k1, after);
         double gain = 0.0;
         long reach = 0;
         for (int tile = 0; tile < NTILES; tile++) {
             if (wins[tile] || avail[tile] <= 0 || c[tile] >= 4) continue;
-            uint64_t d0, d1;
+            uint64_t d0, d1, drops = after[tile] & ~(1ULL << tile);
             shanten_key_draw(k0, k1, tile, &d0, &d1);
             c[tile]++;
             double best = stay;
-            for (int drop = 0; drop < NTILES; drop++) {
-                if (drop == tile || !c[drop]) continue;
+            for (int drop = 0; drops >> drop; drop++) {
+                if (!(drops >> drop & 1)) continue;
                 c[drop]--;
-                uint64_t r0 = drop < 21 ? d0 - (1ULL << (3 * drop)) : d0;
-                uint64_t r1 = drop < 21 ? d1 : d1 - (1ULL << (3 * (drop - 21)));
+                uint64_t r0, r1;
+                race_key_drop(d0, d1, drop, &r0, &r1);
                 if (shanten_keyed(r0, r1, c, opened) <= 0) {
                     double v;
-                    if (race_waiting(x, c, 0, 0, draws - 1, 0, &v) < 0) {
+                    if (race_waiting_at(x, c, r0, r1, 0, 0, draws - 1, 0, &v) < 0) {
                         c[drop]++;
                         c[tile]--;
                         return -1;
@@ -3327,82 +3594,6 @@ static r68_memo_slot *r68_memo_of(uint64_t k0, uint64_t k1) {
     return slot;
 }
 
-/* The key of the hand of key (k0, k1) less one copy of tile t. */
-static void r68_key_drop(uint64_t k0, uint64_t k1, int t, uint64_t *r0, uint64_t *r1) {
-    *r0 = t < 21 ? k0 - (1ULL << (3 * t)) : k0;
-    *r1 = t < 21 ? k1 : k1 - (1ULL << (3 * (t - 21)));
-}
-
-/* The draws that bring a hand with a meld open closer to a wait, as bit t,
- * and its distance: race_draws' row (draw[t] < distance) without the draws
- * that cannot count. With a meld open the distance is the naturals' shape
- * value less the whites, so a white always brings the hand closer, and a
- * natural tile does when it lowers the shape value; one the hand holds no
- * copy of, with no tile of its suit within two ranks (any honor not held),
- * joins no meld, partial or pair of any split, so its suit's table and the
- * shape value stay the same and it is skipped. The others are computed as
- * race_draws does. Memoised per hand and melds (shanten_key), the distance
- * in k1 as the shanten memo keeps it. */
-#define R68_ROW_BITS 20
-
-typedef struct {
-    uint64_t k0, k1, closer;
-} r68_row_slot;
-
-static r68_row_slot r68_rows[1 << R68_ROW_BITS];
-
-static uint64_t r68_closer(const int *c, int opened, uint64_t k0, uint64_t k1, int *distance) {
-    uint64_t h = (k0 * 0xC2B2AE3D27D4EB4FULL) ^ (k1 * 0xD6E8FEB86659FD93ULL);
-    h ^= h >> 31;
-    r68_row_slot *slot = &r68_rows[h >> (64 - R68_ROW_BITS)];
-    if (slot->k0 == k0 && (slot->k1 & (KEY1_BITS | KEY_USED)) == (k1 | KEY_USED)) {
-        *distance = (int)((slot->k1 >> VALUE_SHIFT) & 63) - 16;
-        return slot->closer;
-    }
-    int natural[NTILES];
-    memcpy(natural, c, sizeof(natural));
-    int jokers = natural[WHITE];
-    natural[WHITE] = 0;
-    suit_res tables[4], drawn;
-    for (int s = 0; s < 4; s++) race_group_table(natural, s, &tables[s]);
-    /* others[s]: every group but s, from the open melds. */
-    race_groups start, others[4], tmp, full;
-    for (int m = 0; m < 5; m++)
-        for (int p = 0; p < 2; p++) start.g[m][p] = -1;
-    start.g[opened][0] = 0;
-    for (int s = 0; s < 4; s++) {
-        race_groups acc = start;
-        for (int o = 0; o < 4; o++) {
-            if (o == s) continue;
-            race_groups_add(&acc, &tables[o], &tmp);
-            acc = tmp;
-        }
-        others[s] = acc;
-    }
-    race_groups_add(&others[3], &tables[3], &full);
-    int shape = race_groups_value(&full);
-    uint64_t closer = c[WHITE] < 4 ? 1ULL << WHITE : 0;
-    for (int t = 0; t < WHITE; t++) {
-        if (c[t] >= 4) continue;
-        if (!c[t]) {
-            if (t >= 27) continue;
-            int r = t % 9;
-            if (!(r >= 1 && c[t - 1]) && !(r >= 2 && c[t - 2]) && !(r <= 7 && c[t + 1]) && !(r <= 6 && c[t + 2])) continue;
-        }
-        int s = t < 27 ? t / 9 : 3;
-        natural[t]++;
-        race_group_table(natural, s, &drawn);
-        natural[t]--;
-        race_groups_add(&others[s], &drawn, &tmp);
-        if (race_groups_value(&tmp) < shape) closer |= 1ULL << t;
-    }
-    *distance = race_distance(shape, jokers, 0, 0, opened);
-    slot->k0 = k0;
-    slot->k1 = k1 | KEY_USED | ((uint64_t)(*distance + 16) << VALUE_SHIFT);
-    slot->closer = closer;
-    return closer;
-}
-
 /* called_value's term of one kept hand by the shared functions. */
 static int r68_kept_shared(race_ctx *y, int *c, int far, int draws, double q, double *out) {
     double v, shape;
@@ -3415,7 +3606,7 @@ static int r68_kept_shared(race_ctx *y, int *c, int far, int draws, double q, do
 /* called_value's term of the hand kept after a call: (1 - q) * value +
  * shape_bonus, for a hand c = g less `gone` that is `distance` >= 1 from a
  * wait and not baotou, a meld open (k0, k1: its shanten_key at y's melds;
- * closer: r68_closer's, the draws below that distance in its race_draws
+ * closer: race_closer's, the draws below that distance in its race_draws
  * row). There race_reshaped hands the hand to race_waiting(y, c, 0, 0,
  * draws, 0), so far or not the value is race_waiting's, computed here line
  * for line as race_waiting does past its baotou test, and the bonus as
@@ -3466,14 +3657,14 @@ static int r68_kept_value(race_ctx *y, int *c, uint64_t k0, uint64_t k1, int dis
                     if (!(drops >> drop & 1) || !c[drop]) continue;
                     c[drop]--;
                     uint64_t r0, r1;
-                    r68_key_drop(d0, d1, drop, &r0, &r1);
+                    race_key_drop(d0, d1, drop, &r0, &r1);
                     if (shanten_keyed(r0, r1, c, opened) <= 0) {
                         r68_memo_slot *wait = r68_memo_of(r0, r1);
                         double value;
                         if (wait->have & R68_WAIT) {
                             value = wait->wait;
                         } else {
-                            if (race_waiting(y, c, 0, 0, draws - 1, 0, &value) < 0) {
+                            if (race_waiting_at(y, c, r0, r1, 0, 0, draws - 1, 0, &value) < 0) {
                                 c[drop]++;
                                 c[tile]--;
                                 return -1;
@@ -3507,7 +3698,7 @@ static int r68_kept_value(race_ctx *y, int *c, uint64_t k0, uint64_t k1, int dis
 
 /* native.c's called_value: the best term over the discards leaving the
  * nearest hands. Those hands' closer draws are read first (from the memo, or
- * r68_closer), as each one's tell which discards of the others can leave a
+ * race_closer), as each one's tell which discards of the others can leave a
  * wait (r68_kept_value). */
 static int r68_called_value(race_ctx *y, int *c, int a, int b, int far, int draws, double q, double *out) {
     int opened = y->opened;
@@ -3519,7 +3710,7 @@ static int r68_called_value(race_ctx *y, int *c, int a, int b, int far, int draw
     int rc = 0, near = 99, kinds[NTILES], n = 0, dist[NTILES];
     for (int d = 0; d < NTILES; d++) {
         if (!c[d]) continue;
-        r68_key_drop(k0, k1, d, &r0, &r1);
+        race_key_drop(k0, k1, d, &r0, &r1);
         c[d]--;
         dist[n] = shanten_keyed(r0, r1, c, opened);
         c[d]++;
@@ -3534,7 +3725,7 @@ static int r68_called_value(race_ctx *y, int *c, int a, int b, int far, int draw
         int d = kinds[i];
         held |= 1ULL << d;
         if (dist[i] != near) continue;
-        r68_key_drop(k0, k1, d, &r0, &r1);
+        race_key_drop(k0, k1, d, &r0, &r1);
         r68_memo_slot *slot = r68_memo_of(r0, r1);
         if (slot->have & R68_KEPT) {
             how[i] = 0;
@@ -3548,7 +3739,7 @@ static int r68_called_value(race_ctx *y, int *c, int a, int b, int far, int draw
         c[d]--;
         if (!(c[WHITE] && race_baotou_keyed(r0, r1, c, opened))) {
             int distance;
-            uint64_t row = r68_closer(c, opened, r0, r1, &distance);
+            uint64_t row = race_closer(c, opened, r0, r1, &distance);
             if (distance == near) {
                 how[i] = 1;
                 closer[i] = row;
@@ -3574,7 +3765,7 @@ static int r68_called_value(race_ctx *y, int *c, int a, int b, int far, int draw
         if (how[i] == 0) {
             v = term[i];
         } else {
-            r68_key_drop(k0, k1, d, &r0, &r1);
+            race_key_drop(k0, k1, d, &r0, &r1);
             c[d]--;
             if (how[i] == 1) rc = r68_kept_value(y, c, r0, r1, near, closer[i], d, leave, draws, q, &v);
             else rc = r68_kept_shared(y, c, far, draws, q, &v);
