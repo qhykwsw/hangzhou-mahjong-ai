@@ -166,6 +166,11 @@ def test_sums_over_a_set_add_in_pythons_order():
     for _ in range(20000):
         items = sorted(rng.sample(range(34), rng.randint(1, 34)))
         assert fast.race_set_order(items) == list(set(items))
+    # A hand's tiles repeat: a repeated tile neither takes a slot nor counts toward a resize.
+    for _ in range(20000):
+        items = sorted(rng.choice(range(34)) for _ in range(rng.randint(1, 18)))
+        assert fast.race_set_order(items) == list(set(items)), items
+    assert fast.race_set_order([22, 23, 23, 24, 25]) == [24, 25, 22, 23]
 
 
 @pytest.mark.parametrize("name", ["race-classic", "kong-eager", "peng-speed", "chi-speed", "closed-early",

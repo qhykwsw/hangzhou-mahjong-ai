@@ -1422,7 +1422,8 @@ static double race_race(const race_ctx *x, double chance, double gain, int draws
  * the slot and the nine after it when they fit, then moves to i * 5 + 1 +
  * perturb). A sum over set(hand) adds in this order, and floats added in
  * another order may round differently. */
-static void py_set_insert(int *table, int mask, int key) {
+/* Whether key was new: a key already in the set is found on its probe path, as in CPython. */
+static int py_set_insert(int *table, int mask, int key) {
     size_t perturb = (size_t)key, i = (size_t)key & (size_t)mask;
     for (;;) {
         int probes = i + 9 <= (size_t)mask ? 9 : 0;
@@ -1430,8 +1431,9 @@ static void py_set_insert(int *table, int mask, int key) {
         do {
             if (table[j] < 0) {
                 table[j] = key;
-                return;
+                return 1;
             }
+            if (table[j] == key) return 0;
             j++;
         } while (probes--);
         perturb >>= 5;
@@ -1443,8 +1445,8 @@ static int py_set_order(const int *items, int n, int *out) {
     int table[128], old[128], mask = 7, used = 0;
     for (int i = 0; i < 128; i++) table[i] = -1;
     for (int k = 0; k < n; k++) {
-        py_set_insert(table, mask, items[k]);
-        if (++used * 5 >= mask * 3) {
+        /* A repeated item neither fills a slot nor triggers a resize. */
+        if (py_set_insert(table, mask, items[k]) && ++used * 5 >= mask * 3) {
             int size = 8, old_mask = mask;
             while (size <= used * 4) size <<= 1;
             memcpy(old, table, sizeof(old));
@@ -3793,7 +3795,8 @@ static int r68_act(race_act_ctx *A, const r68_view *o, int *choice) {
                 int after;
                 if (act_after_call(A, a, &after, NULL) < 0) return -1;
                 int take = after < now;
-                if (!take && after == now) {
+                /* peng-speed also takes a call that keeps the distance with wider waits; chi-speed only closer ones. */
+                if (!take && after == now && style == 3) {
                     long wide, own;
                     int ignore;
                     if (act_after_call(A, a, &ignore, &wide) < 0) return -1;
@@ -3810,7 +3813,7 @@ static int r68_act(race_act_ctx *A, const r68_view *o, int *choice) {
             }
         }
     } else if (style == 5) {
-        if (A->size % 3 == 1 && sdk_shanten(A->c, A->opened) >= 3)
+        if (A->size % 3 == 1 && sdk_shanten(A->c, A->opened) >= 4)
             for (int i = 0; i < A->n_legal; i++)
                 if (A->legal[i].kind == ACT_CHI || A->legal[i].kind == ACT_PENG) allowed[i] = 0;
     }
