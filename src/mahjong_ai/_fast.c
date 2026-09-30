@@ -1959,7 +1959,7 @@ static inline int race_distance(int shape, int jokers, int pairs, int singles, i
     return normal;
 }
 
-#define RACE_DRAW_BITS 17
+#define RACE_DRAW_BITS 21
 
 static draw_slot race_draw_cache[1 << RACE_DRAW_BITS];
 
@@ -3229,8 +3229,18 @@ static double r68_shape(const race_ctx *base, const int *c, int opened) {
     return bonus;
 }
 
-/* native.c's shape_bonus inside the call option: the race's analysis. */
+/* native.c's shape_bonus inside the call option: the race's analysis, of
+ * which only the distance and the improving draws' copies count, so the
+ * fans of winning draws are not computed. Memoised as kind 3 of the race
+ * cache (the hand, its melds and the availability decide it). */
 static int r68_call_shape(race_ctx *y, const int *c, double *out) {
+    uint64_t key[4];
+    int keyed = race_key(y, c, 3, 0, 0, 0, 0, key);
+    race_slot *slot = keyed ? race_slot_of(key) : NULL;
+    if (slot && !memcmp(slot->k, key, sizeof(key))) {
+        *out = slot->value;
+        return 0;
+    }
     int pairs = 0, adjacent = 0, edges = 0;
     for (int t = 0; t < 33; t++)
         if (c[t] >= 2) pairs++;
@@ -3242,9 +3252,23 @@ static int r68_call_shape(race_ctx *y, const int *c, double *out) {
     }
     double bonus = R68_SHAPE[0] * pairs + R68_SHAPE[1] * adjacent;
     bonus += R68_SHAPE[4] * (adjacent - edges) + R68_SHAPE[5] * edges;
-    analysis_row row;
-    if (race_analysis_at(y, c, y->opened, 0, 0, &row) < 0) return -1;
-    bonus += R68_SHAPE[2] * (double)row.ukeire / 10 + R68_SHAPE[3] * row.distance;
+    const draw_slot *table = race_draws(c, y->opened);
+    long ukeire = 0;
+    int distance = table->distance;
+    if (distance < 0) {
+        analysis_row row;
+        if (race_analysis_at(y, c, y->opened, 0, 0, &row) < 0) return -1;
+        ukeire = row.ukeire;
+        distance = row.distance;
+    } else {
+        for (int t = 0; t < NTILES; t++)
+            if (y->avail[t] > 0 && c[t] < 4 && table->draw[t] < distance) ukeire += y->avail[t];
+    }
+    bonus += R68_SHAPE[2] * (double)ukeire / 10 + R68_SHAPE[3] * distance;
+    if (slot) {
+        memcpy(slot->k, key, sizeof(key));
+        slot->value = bonus;
+    }
     *out = bonus;
     return 0;
 }
@@ -3584,8 +3608,16 @@ static double r68_opponent_speed(const race_profile *p, const r68_view *o, int s
 }
 
 /* Race.value of fp-rule-068. */
+/* What a discard's value keeps between choose()'s two passes: only its
+ * reshaped value depends on the trade option, so the second pass reuses the
+ * first's other terms (the same doubles, added in the same order). */
+typedef struct {
+    int known, piao;
+    double gain, potential, extra;
+} r68_parts;
+
 static int r68_value(race_act_ctx *A, const r68_view *o, const race_ctx *base, const race_action *a, int options,
-                     double speed, int at_win, double *out) {
+                     double speed, int at_win, r68_parts *parts, double *out) {
     const race_profile *p = base->p;
     int *c = A->c, opened = A->opened, draws = A->draws;
     double v;
@@ -3605,29 +3637,47 @@ static int r68_value(race_act_ctx *A, const r68_view *o, const race_ctx *base, c
         return 0;
     }
     case ACT_DISCARD: {
-        int piao = 0;
-        if (a->tile == WHITE) {
+        int known = parts && parts->known, piao = known ? parts->piao : 0;
+        if (!known && a->tile == WHITE) {
             piao = act_piao(A);
             if (piao < 0) return -1;
         }
+        if (known && piao) {  /* the piao wait takes no trade option: the first pass's value */
+            *out = parts->extra;
+            return 0;
+        }
         c[a->tile]--;
         int rc = 0;
+        double gain = 0.0, potential, extra = 0.0;
         if (piao) {
             rc = r68_waiting(base, c, opened, A->chain + 1, A->piao + 1, draws, 0, speed, &v);
         } else {
             rc = r68_reshaped(base, c, opened, draws, options, speed, &v);
             if (rc == 0 && at_win) {
-                double gain;
-                rc = r68_piao_gain(base, c, opened, draws, speed, o->pungs, o->n_pungs, o->stage, o->chis, &gain);
+                if (known) gain = parts->gain;
+                else rc = r68_piao_gain(base, c, opened, draws, speed, o->pungs, o->n_pungs, o->stage, o->chis, &gain);
                 if (rc == 0) v += gain;
             }
         }
         if (rc == 0) {
-            v = (1 - p->q * speed) * v + p->tie * (double)potential_counts(c, base->avail);
+            potential = known ? parts->potential : p->tie * (double)potential_counts(c, base->avail);
+            v = (1 - p->q * speed) * v + potential;
             if (!at_win) {
-                double called;
-                rc = r68_call_option(base, c, opened, draws, o->stage, o->chis, &called);
-                if (rc == 0) v += r68_shape(base, c, opened) + (1 - p->q * speed) * called;
+                if (known) {
+                    extra = parts->extra;
+                } else {
+                    double called;
+                    rc = r68_call_option(base, c, opened, draws, o->stage, o->chis, &called);
+                    if (rc == 0) extra = r68_shape(base, c, opened) + (1 - p->q * speed) * called;
+                }
+                if (rc == 0) v += extra;
+            }
+            if (rc == 0 && parts && !known) {
+                parts->known = 1;
+                parts->piao = piao;
+                parts->gain = gain;
+                parts->potential = potential;
+                parts->extra = piao ? v : extra;
             }
         }
         c[a->tile]++;
@@ -3828,13 +3878,15 @@ static int r68_act(race_act_ctx *A, const r68_view *o, int *choice) {
         return -1;
     }
     double values[64], top = 0.0;
+    r68_parts parts[64];
+    memset(parts, 0, sizeof(parts));
     for (int k = 0; k < n; k++) {
-        if (r68_value(A, o, &base, &A->legal[idx[k]], 0, speed, has_hu, &values[k]) < 0) return -1;
+        if (r68_value(A, o, &base, &A->legal[idx[k]], 0, speed, has_hu, &parts[k], &values[k]) < 0) return -1;
         if (k == 0 || values[k] > top) top = values[k];
     }
     for (int k = 0; k < n; k++) {
         if (A->legal[idx[k]].kind == ACT_DISCARD && values[k] * R68_OPTION_REACH >= top)
-            if (r68_value(A, o, &base, &A->legal[idx[k]], 1, speed, has_hu, &values[k]) < 0) return -1;
+            if (r68_value(A, o, &base, &A->legal[idx[k]], 1, speed, has_hu, &parts[k], &values[k]) < 0) return -1;
     }
     if (has_hu && A->c[WHITE]) {
         int error;
