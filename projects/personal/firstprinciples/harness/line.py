@@ -777,7 +777,7 @@ def start(line, change, why, design_start, host=None, equivalent=False, hands=No
         if (champion["id"] != rl.start_id(pool) and same_training
                 and E.tree_hash(source) == E.tree_hash(E.frozen_source(champion))):
             raise E.Refused("本线目录与最好版本完全相同，训练局数和起点也相同，没有可评估的改动。")
-    elif git("status", "--porcelain", "--", rel).stdout.strip():
+    elif champion is None and git("status", "--porcelain", "--", rel).stdout.strip():
         raise E.Refused("还没有最好版本：第一次尝试必须是本线目录原样（v0）。运行 wait 恢复后再开跑。")
     problems = rl.check_recipe(source) if line == "rl" else E.check_source(source)
     if problems:

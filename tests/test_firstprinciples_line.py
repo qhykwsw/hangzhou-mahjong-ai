@@ -486,5 +486,9 @@ def test_a_new_rule_framework_grows_from_its_own_versions(harness, monkeypatch, 
     assert (tmp_path / "rule-src" / "strategy.py").read_text() == "new framework"
     with pytest.raises(E.Refused, match="不是从它恢复来的"):
         start()  # without --from an attempt is one change from the best version
+    monkeypatch.setattr(line, "git", lambda *args: type("Status", (), {"stdout": " M strategy.py"})())
+    monkeypatch.setattr(E, "check_source", lambda source: ["reached the source checks"])
+    with pytest.raises(E.Refused, match="reached the source checks"):
+        start(start_from="fp-rule-002")  # a changed rule/ checked out from a version passes the base checks
     with pytest.raises(E.Refused, match="只用于规则线"):
         line.checkout("rl", "fp-rl-001")
