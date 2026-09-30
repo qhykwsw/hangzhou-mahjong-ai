@@ -44,6 +44,7 @@ from pathlib import Path
 from . import equivalence
 from . import evaluate as E
 from . import rl
+from . import scale
 from guided import recipe_jobs, remote  # noqa: E402  (rl puts guided on the path)
 
 LINE_HOSTS = {"rule": ("local",), "rl": rl.HOSTS}
@@ -190,10 +191,16 @@ def ready(host):
     return host == "local" or rl.setup_path(host).exists()
 
 
-def free_hosts(line, probe=True):
-    """Switched-on, set-up hosts of the line with no attempt on them that answer now."""
+def free_hosts(line, probe=True, reserved=None):
+    """Switched-on, set-up hosts of the line with no attempt on them that answer now.
+
+    A host a scale run holds is free only to that run's segments (``reserved``),
+    whether or not it is switched on for the line.
+    """
     busy = {s.get("host") for s in E.running(line)}
-    hosts = [h for h in LINE_HOSTS[line] if enabled(h) and ready(h) and h not in busy]
+    held = scale.reserved_hosts()
+    hosts = [h for h in LINE_HOSTS[line] if ready(h) and h not in busy
+             and (h == reserved if h in held else enabled(h))]
     up = online(hosts, probe)
     return [h for h in hosts if up[h]]
 
@@ -229,10 +236,13 @@ def design_hosts(line, probe=True):
 def host_states(line):
     busy = {s["host"]: s["id"] for s in E.running(line) if s.get("host")}
     hosts = LINE_HOSTS[line]
-    up = online([h for h in hosts if enabled(h)])
+    up = online([h for h in hosts if enabled(h) and h not in scale.reserved_hosts()])
     states = {}
+    held = scale.reserved_hosts()
     for h in hosts:
-        if not enabled(h):
+        if h in held:
+            states[h] = "规模训练专用"
+        elif not enabled(h):
             states[h] = "已关闭"
         elif not ready(h):
             states[h] = "未起步"
@@ -330,7 +340,9 @@ def restore(line):
     rel = target.relative_to(E.REPO).as_posix()
     if champion:
         shutil.rmtree(target)
-        shutil.copytree(E.frozen_source(champion), target, ignore=shutil.ignore_patterns("__pycache__"))
+        # A scale segment's place in its run (segment.json) stays with it; without it
+        # the scale recipe trains as its policy gradient from the start of its schedules.
+        shutil.copytree(E.frozen_source(champion), target, ignore=shutil.ignore_patterns("__pycache__", "segment.json"))
         commit(rel, f"{E.LINE_NAMES[line]}：{champion['id']} {champion['description']}")
     else:
         git("checkout", "HEAD", "--", rel)
@@ -524,7 +536,9 @@ def equivalent(state):
 
 
 def fits(state, host):
-    """Whether a queued attempt may be redone on ``host``: RL attempts keep their model size."""
+    """Whether a queued attempt may be redone on ``host``: RL attempts keep their model size, scale segments their host."""
+    if state.get("scale"):
+        return host == state["scale"]["host"]
     return state["line"] != "rl" or rl.size(host) == state.get("size", "small")
 
 
@@ -559,7 +573,8 @@ def claim_host(state):
             current = load(state["id"])
             if current is None or current["stage"] != "queued":
                 return current
-            free, waiting = free_hosts(state["line"], probe=False), queued(state["line"])
+            reserved = (current.get("scale") or {}).get("host")
+            free, waiting = free_hosts(state["line"], probe=False, reserved=reserved), queued(state["line"])
             # Oldest first among the attempts that fit the same hosts (same model size).
             ahead = [s for s in waiting if s["id"] != state["id"] and s["started_at"] < current["started_at"]
                      and any(fits(s, h) and fits(current, h) for h in free)]

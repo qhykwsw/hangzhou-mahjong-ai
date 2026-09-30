@@ -639,7 +639,10 @@ def rebase(ids, host="local"):
 
     For a new pool: each line's earlier best versions (and the free-play
     entrant) keep their ids, so recipes that name a teacher or an opponent
-    still find it. Resumable; hosts may run disjoint ids at once.
+    still find it. Any other evaluated version may be replayed too (e.g. the
+    last version of a new rule framework, whose line grows from it); it keeps
+    its status, so only a replayed best version can become the best.
+    Resumable; hosts may run disjoint ids at once.
     """
     pool = load_pool()
     check_seal()
@@ -649,9 +652,9 @@ def rebase(ids, host="local"):
         if out.exists():
             continue
         rows = [r for r in attempts() if r["id"] == cid and r.get("spec") and r["pool"] != pool["id"]
-                and r["status"] in ("keep", "reference")]
+                and r.get("score") is not None]
         if not rows:
-            raise Refused(f"{cid} 在之前的对手池下没有成功或参照记录")
+            raise Refused(f"{cid} 在之前的对手池下没有评估过的记录")
         old = rows[-1]
         started = time.time()
         scores, stats = play(pool, cid, old["spec"], range(DEV_BLOCKS), pool["dev_seed"], "dev", host)

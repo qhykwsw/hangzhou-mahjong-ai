@@ -84,11 +84,9 @@ def test_requeued_attempts_take_free_hosts_before_new_designs(harness):
     record(E, id="fp-rl-000")
     E.reserve_attempt("rl", "4070", "busy", stage="training")
     E.reserve_attempt("rl", None, "small, lost", stage="queued", next="training")
-    # A small attempt is redone only on a small host: the free large hosts stay open.
-    assert line.design_hosts("rl") == (["4090", "5070ti"], None)
+    # A small attempt is redone only on a small host: the free large host stays open.
+    assert line.design_hosts("rl") == (["4090"], None)
     E.reserve_attempt("rl", None, "lost on a restart", stage="queued", next="training", size="large")
-    assert line.design_hosts("rl") == (["5070ti"], None)
-    E.reserve_attempt("rl", None, "lost too", stage="queued", next="training", size="large")
     hosts, why = line.design_hosts("rl")
     assert hosts == [] and "排队" in why
     line.hosts("off", "4090")
@@ -254,7 +252,7 @@ def test_rl_attempts_choose_their_hands_and_may_continue_the_best(harness, monke
         (rl.RL / f"setup-{host}.json").write_text(json.dumps({"start_actor": "/start"}))
     E.seal()
     record(E, id=rl.start_id(E.load_pool()), finished_at=1, games=16)
-    for weights, size in (("w3", "small"), ("w2", "large")):
+    for weights, size in (("w3", "small"), ("w2", "small")):
         (E.MODELS / weights).mkdir(parents=True)
         (E.MODELS / weights / "meta.json").write_text(json.dumps({"config": rl.SIZES[size]}))
     record(E, id="fp-rl-003", finished_at=2, games=16, spec={"parameters": {"weights": "w3"}},
@@ -359,19 +357,24 @@ def test_a_new_pool_takes_the_replayed_versions_and_their_best(harness, monkeypa
         (rl.RL / f"setup-{host}.json").write_text("{}")
     record(E, id="fp-rule-005", line="rule", pool="old", score=4.0, games=16, finished_at=1, spec={"package_hash": "a"})
     record(E, id="fp-rule-009", line="rule", pool="old", score=5.0, games=16, finished_at=2, spec={"package_hash": "b"})
+    # A new framework's version the rule line grows from, not a best version.
+    record(E, id="fp-rule-011", line="rule", pool="old", status="discard", score=-9.0, games=16, finished_at=3,
+           spec={"package_hash": "c"})
     (E.LOCAL / "pool.json").write_text(json.dumps({"id": "pool-b", "members": {}, "dev_seed": 3}))
     E.seal()
     E.set_drain("换对手池")
     assert line.design_hosts("rule") == ([], "换对手池：在途尝试照常跑完，之后暂不开新尝试，等维护者完成")
     monkeypatch.setattr(E, "DEV_BLOCKS", 2)
-    new = {"fp-rule-005": 1.0, "fp-rule-009": 0.5}  # the old order need not hold against new opponents
+    new = {"fp-rule-005": 1.0, "fp-rule-009": 0.5, "fp-rule-011": 2.0}  # the old order need not hold
     monkeypatch.setattr(E, "play", lambda pool, cid, spec, blocks, seed, label, host: (
         {b: new[cid] + b for b in blocks}, {"timeouts": 0, "fallback_actions": 0, "errors": 0}))
-    assert E.rebase(["fp-rule-005", "fp-rule-009"]) == ["fp-rule-005", "fp-rule-009"]
+    assert E.rebase(["fp-rule-005", "fp-rule-009", "fp-rule-011"]) == ["fp-rule-005", "fp-rule-009", "fp-rule-011"]
     assert E.rebase(["fp-rule-005"]) == []  # resumable
     E.rebase_finish("rule")
     best = E.best("pool-b", "rule")
     assert best["id"] == "fp-rule-005" and best["rebased"]["old_score"] == 4.0
+    # The replayed framework version keeps its status: scored on the new pool, never the best.
+    assert [r["status"] for r in E.attempts("pool-b", "rule") if r["id"] == "fp-rule-011"] == ["discard"]
     assert {E.report_key(r) for r in E.attempts("pool-b", "rule")} <= E.reported()
     E.set_drain("换对手池", ["rl"])  # the rule line's versions are recorded: only the RL line waits
     assert line.design_hosts("rule") == (["local"], None)
@@ -492,3 +495,51 @@ def test_a_new_rule_framework_grows_from_its_own_versions(harness, monkeypatch, 
         start(start_from="fp-rule-002")  # a changed rule/ checked out from a version passes the base checks
     with pytest.raises(E.Refused, match="只用于规则线"):
         line.checkout("rl", "fp-rl-001")
+
+
+def test_a_scale_run_chains_its_segments_on_a_host_it_holds(harness, monkeypatch, tmp_path):
+    import shutil
+
+    E, rl, line = harness
+    scale = importlib.import_module("harness.scale")
+    recipe = tmp_path / "scale-recipe"
+    shutil.copytree(scale.RECIPE, recipe, ignore=shutil.ignore_patterns("__pycache__"))
+    monkeypatch.setattr(scale, "RECIPE", recipe)
+    monkeypatch.setattr(scale, "SCALE", E.LOCAL / "scale")
+    monkeypatch.setattr(line, "spawn", lambda attempt_id: None)
+    for host in rl.HOSTS:
+        (rl.RL / f"setup-{host}.json").write_text("{}")
+    E.seal()
+    record(E, id=rl.start_id(E.load_pool()), finished_at=1, games=16)
+    with pytest.raises(E.Refused, match="大规格"):
+        scale.begin("4070")
+    first = scale.begin("4090")
+    state = E.running("rl")[0]
+    assert (state["id"], state["host"], state["from"], state["stage"]) == (first, "4090", "start", "training")
+    assert state["hands"] == 2_500_000 and state["scale"] == {"index": 0, "host": "4090"}
+    assert json.loads((rl.RL / "attempts" / first / "recipe" / "segment.json").read_text()) == {"index": 0}
+    assert "第 1/12 段" in state["description"] and "教师代打" in state["description"]
+    # The segment is recorded with its Actor: the host stays the run's, switched on or not.
+    (E.LOCAL / "running" / f"{first}.json").unlink()
+    record(E, id=first, status="discard", finished_at=2, games=16, spec={"parameters": {"weights": "w1"}})
+    assert "4090" not in line.free_hosts("rl") and line.host_states("rl")[0]["4090"] == "规模训练专用"
+    second = scale.start(1)
+    state = E.running("rl")[0]
+    assert (state["id"], state["from"], state["scale"]["index"]) == (second, first, 1)
+    # A segment the host lost is redone only on the run's host, even switched off for the line.
+    line.hosts("off", "4090")
+    line.requeue(state, "training")
+    assert line.design_hosts("rl") == (["4070", "5070ti"], None)
+    assert line.claim_host(line.load(second))["host"] == "4090"
+    # The plan is frozen: a changed recipe starts no further segment.
+    (E.LOCAL / "running" / f"{second}.json").unlink()
+    record(E, id=second, status="crash", finished_at=3, games=0)
+    (recipe / "config.json").write_text((recipe / "config.json").read_text().replace("0.015", "0.02"))
+    with pytest.raises(E.Refused, match="改动"):
+        scale.start(2)
+    # A segment without an Actor stops the chain, the run keeping its host; redone, it takes its place.
+    scale.chain()
+    assert not E.running("rl") and "4090" in scale.reserved_hosts()
+    (recipe / "config.json").write_text((recipe / "config.json").read_text().replace("0.02", "0.015"))
+    third = scale.start(1)
+    assert scale.run_state()["segments"] == [first, third] and E.running("rl")[0]["from"] == first

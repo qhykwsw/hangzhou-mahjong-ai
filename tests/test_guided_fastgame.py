@@ -211,6 +211,44 @@ def test_fast_game_plays_the_python_game(members, monkeypatch, features):
         assert any(row.get("deviated") for row in games[1].rows)
 
 
+# The third fixed pool's members (fp-rule-068 whole in C): styles 10 to 16.
+MEMBER68 = MEMBER.replace("{style})", "{style}, True, True)")
+
+
+@pytest.fixture(scope="module")
+def members68(tmp_path_factory):
+    folder = tmp_path_factory.mktemp("members68")
+    built = []
+    for k in range(7):
+        q, early, late = (0.10, 0.06, 0.22) if k == 6 else (0.15, 0.10, 0.30)
+        path = folder / f"member68_{k}.py"
+        text = MEMBER68.format(hunt=1.0, upgrade=k != 1, style=10 + k)
+        text = text.replace("Q = 0.15", f"Q = {q}").replace("0.10, 0.30,", f"{early}, {late},")
+        path.write_text(text)
+        spec = importlib.util.spec_from_file_location(f"fastgame_member68_{k}", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        built.append(module.Native())
+    return built
+
+
+def test_third_pool_members_play_the_python_game(members68, monkeypatch):
+    by_id = {f"n{i}": m for i, m in enumerate(members68)}
+    monkeypatch.setattr(artifacts, "build_policy", lambda bundle, cid: by_id[cid])
+    cfg = configuration(rounds=16, lookahead=True, gae_lambda=0.95) | {"playout_baseline": True}
+    for n, seats in enumerate([["model:current", "n0", "n1", "n2"], ["n3", "n4", "model:current", "n5"],
+                               ["n6", "model:current", "n0", "n3"]]):
+        seed = seed_for(31, "fast-game-68", n)
+        focal = seats.index("model:current")
+        games = [cls(cfg, {"entries": []}, {k: None for k in by_id}, seats, seed, focal=focal, train=True)
+                 for cls in (Game, fastgame.FastGame)]
+        assert games[1].seats is not None
+        counts = [play(game) for game in games]
+        assert counts[0] == counts[1] > 50
+        assert games[0].scores == games[1].scores and games[0].hand_no == games[1].hand_no == 16
+        assert rows_of(games[0]) == rows_of(games[1])
+
+
 def reads_events(state, seat):
     """A critic_features hook reading the Python state beyond its plain fields."""
     features = oracle(state, seat)

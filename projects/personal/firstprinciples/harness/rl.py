@@ -50,7 +50,7 @@ BUDGET = E.override("FP_RL_BUDGET", 2 * 86400)
 # each one evaluated, the next continuing from it (--from); the hands add up
 # along the path without a cap, as for the small size.
 SIZES = {"small": {"dim": 128, "layers": 4, "heads": 4}, "large": {"dim": 384, "layers": 8, "heads": 8}}
-HOST_SIZE = {"4070": "small", "4090": "large", "5070ti": "large"}
+HOST_SIZE = {"4070": "small", "4090": "large", "5070ti": "small"}
 BUDGETS = {"small": {"max_hands": 5_000_000, "max_labeled": None},
            "large": {"max_hands": 10_000_000, "max_labeled": 5_000_000}}
 MAX_HANDS = BUDGETS["small"]["max_hands"]
@@ -308,7 +308,8 @@ def catalog_facts():
             "id": cid,
             "source": {"rule": "规则线", "rl": "RL 线", "proxy": "平台代理"}.get(record["line"]) if cid in offered else "固定对手池",
             "kind": "规则" if rule else "模型",
-            "teacher": rule,
+            # RL versions teach by their argmax; platform proxies are opponents only.
+            "teacher": rule or (cid in offered and offered[cid]["record"]["line"] == "rl"),
             "default": {"opponent": cid in pool["members"], "teacher": cid == teacher},
             "score": round(record["score"], 2) if record and record.get("score") is not None else None,
             "se": round(record["se"], 2) if record and record.get("se") is not None else None,
@@ -320,7 +321,7 @@ def catalog_facts():
 
 
 def catalog_report():
-    rows = ["可选训练对手与教师（方案用 cfg[\"opponents\"] 选对手、cfg[\"teacher\"] 选教师；只有规则可当教师。"
+    rows = ["可选训练对手与教师（方案用 cfg[\"opponents\"] 选对手、cfg[\"teacher\"] 选教师；规则与 RL 线版本可当教师，平台代理只作对手。"
             "成绩是固定对手池上的开发集场均，耗时是 Mac 单进程实测的每个决策）："]
     for f in catalog_facts():
         score = f"{f['score']:+.2f}±{f['se']:.2f}" if f["score"] is not None else "未单独评估"
@@ -506,7 +507,7 @@ def train(state):
                 budget_seconds=BUDGET,
                 label_hand_budget=BUDGETS[size(host)]["max_labeled"],
                 seed=state["seed"], line="rl", limits=LIMITS[host], execution=EXECUTION[host],
-                opponents=opponents, catalog=offered, fetch_actor=False)
+                opponents=opponents, catalog=offered, opponents_only=sorted(proxies()), fetch_actor=False)
     E.log(f"{attempt_id}: training {hands} hands on {host} from {start}")
     result = recipe_jobs.trial_train(task, lambda message: None)
     E.atomic_json(job / "training.json", {k: v for k, v in result.items() if k != "metrics"})

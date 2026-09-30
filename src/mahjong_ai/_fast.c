@@ -2651,7 +2651,7 @@ static PyObject *py_race_profile(PyObject *self, PyObject *args) {
     if (!PyArg_ParseTuple(args, "dddddddpddii|pp", &p.q, &p.saved, &p.one_step, &p.far_step,
                           &p.q_early, &p.q_late, &p.hunt, &p.upgrade, &p.draw_risk, &p.tie,
                           &p.last_wall, &p.style, &p.complete, &p.guard)) return NULL;
-    if (p.style < 0 || p.style > 5) {
+    if (p.style < 0 || (p.style > 5 && p.style < 10) || p.style > 16) {
         PyErr_SetString(PyExc_ValueError, "unknown race style");
         return NULL;
     }
@@ -3122,6 +3122,863 @@ static int act_after_call(race_act_ctx *A, const race_action *a, int *shanten_ou
     return 0;
 }
 
+/* ---------- fp-rule-068 whole in C: the third fixed pool (styles 10 to 16) ---------- */
+
+/* The rule line's fp-rule-068 and its style variants, the third fixed pool's
+ * members (2026-09-30), over the race valuation above: the call option and
+ * shape correction of its native.c, piao fishing at a win, the opponents'
+ * speed read from their table, and the fitted correction to going on at a
+ * win holding a white. Every value in the Python's arithmetic order; a
+ * Python sum() of floats adds as CPython 3.12 does (Neumaier). Style 10 + k:
+ * k 0 as it is, 1 flat (no white upgrade), 2 kong-eager, 3 peng-speed,
+ * 4 chi-speed, 5 closed-early, 6 patient (its constants in the profile). */
+
+#define R68_OPTION_REACH 1.35
+#define R68_CALL_WEIGHT 0.7
+#define R68_FISH_DEPTH 8
+/* pair, adjacent, ukeire, distance, open, edge */
+static const double R68_SHAPE[6] = {0.009, 0.0114, 0.0078, -0.045, 0.0105, -0.0055};
+static const double R68_FEED_PENG[3][4] = {{9.05, 4.38, 2.24, 0.99}, {3.55, 3.97, 3.17, 2.08}, {3.41, 3.09, 2.68, 1.97}};
+static const double R68_FEED_CHI[3][4] = {{0.0, 1.50, 0.79, 0.35}, {0.0, 1.23, 1.01, 0.67}, {0.0, 0.84, 0.82, 0.57}};
+static const double R68_LOGIT[16] = {-0.0571, -0.1131, -0.2408, -0.5687, -0.2777, 0.1483, 0.0804, 0.0021,
+                                     1.0988, 0.1779, -0.4002, -0.1582, -1.9073, -0.6204, 0.1573, 5.1224};
+static const double R68_SHIFT[7] = {-0.417, -0.169, 0.833, -0.182, 0.112, -0.107, -0.083};
+
+/* What fp-rule-068 reads from the Observation beyond race_act_ctx. */
+typedef struct {
+    int wall, dealer, god, drawn, stage, chis, n_pungs, pungs[4];
+    int n_hand, hand[18];          /* obs.hand in its order (set(hand) iterates by it) */
+    int ahead;                     /* seats between the last discarder and me; -1: no discard */
+    int speed_known;               /* the table below is filled */
+    int n_discards[4], white_out[4], melds[4], since[4]; /* since: -1 without a call this hand */
+    int n_last[4], last[4][6];     /* each seat's last six discards, oldest first */
+} r68_view;
+
+/* sum() of floats in CPython 3.12: int 0 plus the first, then Neumaier. */
+typedef struct {
+    double f, c;
+    int n;
+} py_fsum;
+
+static void py_fsum_add(py_fsum *s, double x) {
+    if (s->n++ == 0) {
+        s->f = 0.0 + x;
+        return;
+    }
+    double t = s->f + x;
+    if (fabs(s->f) >= fabs(x)) s->c += (s->f - t) + x;
+    else s->c += (x - t) + s->f;
+    s->f = t;
+}
+
+/* The sum as a float (an empty sum is the int 0, which adds as 0.0). */
+static double py_fsum_value(const py_fsum *s) {
+    if (s->n == 0) return 0.0;
+    double f = s->f;
+    if (s->c != 0.0 && isfinite(s->c)) f += s->c;
+    return f;
+}
+
+static int r68_kind(int t) {
+    if (t >= 27) return 0;
+    int r = t % 9;
+    return (r == 0 || r == 8) ? 1 : (r == 1 || r == 7) ? 2 : 3;
+}
+
+/* A context of the bound availability at `opened` melds and the given speed. */
+static void r68_at(race_ctx *y, const race_ctx *base, int opened, double speed) {
+    *y = *base;
+    y->opened = opened;
+    y->size = 13 - 3 * opened;
+    race_speed(y, speed);
+}
+
+/* waiting_value(hand, opened, available, chain, piao, draws, options, speed) */
+static int r68_waiting(const race_ctx *base, int *c, int opened, int chain, int piao, int draws, int options,
+                       double speed, double *out) {
+    race_ctx y;
+    r68_at(&y, base, opened, speed);
+    return race_waiting(&y, c, chain, piao, draws, options, out);
+}
+
+/* reshaped_value(hand, opened, available, draws, options, speed) */
+static int r68_reshaped(const race_ctx *base, int *c, int opened, int draws, int options, double speed, double *out) {
+    race_ctx y;
+    r68_at(&y, base, opened, speed);
+    return race_reshaped(&y, c, draws, options, out);
+}
+
+/* strategy.shape_bonus(rest, opened, available, True): analyze_counts's row. */
+static double r68_shape(const race_ctx *base, const int *c, int opened) {
+    int pairs = 0, adjacent = 0, edges = 0;
+    for (int t = 0; t < 33; t++)
+        if (c[t] >= 2) pairs++;
+    for (int t = 0; t < 27; t++) {
+        if (t % 9 <= 7 && c[t] && c[t + 1]) {
+            adjacent++;
+            if (t % 9 == 0 || t % 9 == 7) edges++;
+        }
+    }
+    double bonus = R68_SHAPE[0] * pairs + R68_SHAPE[1] * adjacent;
+    bonus += R68_SHAPE[4] * (adjacent - edges) + R68_SHAPE[5] * edges;
+    analysis_row row;
+    analyze_values(c, base->avail, opened, 0, 0, 0, &row);
+    bonus += R68_SHAPE[2] * (double)row.ukeire / 10 + R68_SHAPE[3] * row.distance;
+    return bonus;
+}
+
+/* native.c's shape_bonus inside the call option: the race's analysis. */
+static int r68_call_shape(race_ctx *y, const int *c, double *out) {
+    int pairs = 0, adjacent = 0, edges = 0;
+    for (int t = 0; t < 33; t++)
+        if (c[t] >= 2) pairs++;
+    for (int t = 0; t < 27; t++) {
+        if (t % 9 <= 7 && c[t] && c[t + 1]) {
+            adjacent++;
+            if (t % 9 == 0 || t % 9 == 7) edges++;
+        }
+    }
+    double bonus = R68_SHAPE[0] * pairs + R68_SHAPE[1] * adjacent;
+    bonus += R68_SHAPE[4] * (adjacent - edges) + R68_SHAPE[5] * edges;
+    analysis_row row;
+    if (race_analysis_at(y, c, y->opened, 0, 0, &row) < 0) return -1;
+    bonus += R68_SHAPE[2] * (double)row.ukeire / 10 + R68_SHAPE[3] * row.distance;
+    *out = bonus;
+    return 0;
+}
+
+/* native.c's called_value. */
+static int r68_called_value(race_ctx *y, int *c, int a, int b, int far, int draws, double q, double *out) {
+    c[a]--;
+    c[b]--;
+    double best = 0.0;
+    int rc = 0, near = 99, dist[NTILES];
+    for (int d = 0; d < NTILES; d++) {
+        if (!c[d]) continue;
+        c[d]--;
+        dist[d] = shanten_raw(c, y->opened);
+        c[d]++;
+        if (dist[d] < near) near = dist[d];
+    }
+    for (int d = 0; d < NTILES && rc == 0; d++) {
+        if (!c[d] || dist[d] != near) continue;
+        c[d]--;
+        double v;
+        rc = far ? race_reshaped(y, c, draws, 0, &v) : race_waiting(y, c, 0, 0, draws, 0, &v);
+        double shape = 0.0;
+        if (rc == 0) rc = r68_call_shape(y, c, &shape);
+        c[d]++;
+        if (rc == 0) {
+            v = (1 - q) * v + shape;
+            if (v > best) best = v;
+        }
+    }
+    c[a]++;
+    c[b]++;
+    *out = best;
+    return rc;
+}
+
+/* call_option(hand, opened, available, draws, stage, chis): native.c's, at speed 1. */
+static int r68_call_option(const race_ctx *base, int *c, int opened, int draws, int stage, int chis, double *out) {
+    const race_profile *p = base->p;
+    double q = p->q, weight = R68_CALL_WEIGHT;
+    *out = 0.0;
+    if (opened >= 4) return 0;
+    race_ctx x;
+    r68_at(&x, base, opened, 1.0);
+    analysis_row row;
+    if (race_analysis(&x, c, 0, 0, &row) < 0) return -1;
+    if (row.distance < 1) return 0;
+    int far = row.distance >= 2;
+    double stay_value;
+    if (race_reshaped(&x, c, draws, 0, &stay_value) < 0) return -1;
+    double stay_shape;
+    if (r68_call_shape(&x, c, &stay_shape) < 0) return -1;
+    stay_value += stay_shape;
+    race_ctx y = x;
+    y.opened = opened + 1;
+    y.size = x.size - 3;
+    double unseen = (double)x.unseen, gain = 0.0;
+    for (int t = 0; t < WHITE; t++) {
+        if (!x.avail[t]) continue;
+        double best_gain = 0.0, best_rate = 0.0, v;
+        if (c[t] >= 2) {
+            if (r68_called_value(&y, c, t, t, far, draws, q, &v) < 0) return -1;
+            if (v - stay_value > best_gain) {
+                best_gain = v - stay_value;
+                best_rate = R68_FEED_PENG[stage][r68_kind(t)];
+            }
+        }
+        if (t < 27 && chis < 2) {
+            const int pairs[3][2] = {{t - 2, t - 1}, {t - 1, t + 1}, {t + 1, t + 2}};
+            for (int k = 0; k < 3; k++) {
+                int a = pairs[k][0], b = pairs[k][1];
+                if (a < 0 || b >= 27 || a / 9 != t / 9 || b / 9 != t / 9 || !c[a] || !c[b]) continue;
+                if (r68_called_value(&y, c, a, b, far, draws, q, &v) < 0) return -1;
+                if (v - stay_value > best_gain) {
+                    best_gain = v - stay_value;
+                    best_rate = R68_FEED_CHI[stage][r68_kind(t)];
+                }
+            }
+        }
+        gain += best_rate * (double)x.avail[t] / unseen * best_gain;
+    }
+    double u = (double)row.ukeire / unseen;
+    double stay = (1 - u) * (1 - q);
+    double rounds = stay < 1 ? (1 - pow(stay, (double)draws)) / (1 - stay) : (double)draws;
+    *out = weight * gain * rounds;
+    return 0;
+}
+
+static int r68_piao_calls(const race_ctx *base, const int *c, int opened, int chain, int piao, int draws,
+                          double speed, const int *pungs, int n_pungs, int stage, int chis, double *chance,
+                          double *worth, int *n_calls);
+
+/* piao_value(hand, opened, available, chain, piao, draws, speed, fish, pungs, stage, chis) */
+static int r68_piao_value(const race_ctx *base, const int *hand, int opened, int chain, int piao, int draws,
+                          double speed, int fish, const int *pungs, int n_pungs, int stage, int chis, double *out) {
+    const race_profile *p = base->p;
+    double unseen = (double)base->unseen;
+    int held[NTILES];
+    memcpy(held, hand, sizeof(held));
+    double q = fish ? race_hazard(p, draws) * speed : p->q * speed;
+    double total = 0.0;
+    int n_opt = 0, opt_n[NTILES];
+    double opt_best[NTILES];
+    for (int tile = 0; tile < NTILES; tile++) {
+        if (base->avail[tile] <= 0 || held[tile] >= 4) continue;
+        int in_pungs = 0;
+        for (int i = 0; i < n_pungs; i++) in_pungs |= pungs[i] == tile;
+        int kong = fish && (held[tile] == 3 || in_pungs);
+        held[tile]++;
+        double now = (double)fan_value(held, tile, opened, chain, piao, 0, 0) + p->saved;
+        double best = now;
+        if (kong) {
+            int after[NTILES];
+            memcpy(after, held, sizeof(after));
+            after[tile] -= held[tile] == 4 && !in_pungs ? 4 : 1;
+            int om = opened + (in_pungs ? 0 : 1);
+            if (om <= 4 && baotou_shape(after, om)) {
+                double twice = 2 * (now - p->saved) + p->saved;
+                if (twice > best) best = twice;
+            }
+        }
+        if (held[WHITE] >= 2) {
+            held[WHITE]--;
+            if (baotou_shape(held, opened)) {
+                double later;
+                if (r68_waiting(base, held, opened, chain + 1, piao + 1, draws - 1, 0, speed, &later) < 0) return -1;
+                if (held[WHITE] >= 2 && draws > 2) {
+                    double deeper;
+                    if (r68_piao_value(base, held, opened, chain + 1, piao + 1, draws - 1, speed, fish, pungs, n_pungs,
+                                       stage, chis, &deeper) < 0)
+                        return -1;
+                    if (deeper > later) later = deeper;
+                }
+                double v = (1 - q) * later;
+                best = v > now ? v : now;
+            }
+            held[WHITE]++;
+        }
+        held[tile]--;
+        opt_n[n_opt] = base->avail[tile];
+        opt_best[n_opt++] = best;
+        total += (double)base->avail[tile] * best;
+    }
+    double chance[NTILES], worth[NTILES];
+    int n_calls = 0;
+    if (fish && r68_piao_calls(base, hand, opened, chain, piao, draws, speed, pungs, n_pungs, stage, chis, chance, worth,
+                               &n_calls) < 0)
+        return -1;
+    double value = total / unseen;
+    int rounds = draws - 1 < R68_FISH_DEPTH ? draws - 1 : R68_FISH_DEPTH;
+    for (int r = 0; fish && r < rounds; r++) {
+        py_fsum s = {0};
+        for (int i = 0; i < n_calls; i++) {
+            double d = worth[i] - value;
+            py_fsum_add(&s, chance[i] * (d > 0.0 ? d : 0.0));
+        }
+        double again = (1 - q) * (value + py_fsum_value(&s));
+        py_fsum m = {0};
+        for (int i = 0; i < n_opt; i++) py_fsum_add(&m, (double)opt_n[i] * (again > opt_best[i] ? again : opt_best[i]));
+        value = py_fsum_value(&m) / unseen;
+    }
+    py_fsum s = {0};
+    for (int i = 0; i < n_calls; i++) {
+        double d = worth[i] - value;
+        py_fsum_add(&s, chance[i] * (d > 0.0 ? d : 0.0));
+    }
+    *out = value + py_fsum_value(&s);
+    return 0;
+}
+
+/* piao_calls: per tile the best (chance, worth) of a chi or peng keeping baotou once the white goes. */
+static int r68_piao_calls(const race_ctx *base, const int *c, int opened, int chain, int piao, int draws,
+                          double speed, const int *pungs, int n_pungs, int stage, int chis, double *chance,
+                          double *worth, int *n_calls) {
+    *n_calls = 0;
+    if (opened >= 4) return 0;
+    double unseen = (double)base->unseen;
+    for (int tile = 0; tile < WHITE; tile++) {
+        if (base->avail[tile] <= 0) continue;
+        int used[4][2], chi_count[4], n_uses = 0, peng[4];
+        double rate[4];
+        if (c[tile] >= 2) {
+            used[n_uses][0] = used[n_uses][1] = tile;
+            rate[n_uses] = R68_FEED_PENG[stage][r68_kind(tile)];
+            chi_count[n_uses] = chis;
+            peng[n_uses++] = 1;
+        }
+        if (tile < 27 && chis < 2) {
+            const int pairs[3][2] = {{tile - 2, tile - 1}, {tile - 1, tile + 1}, {tile + 1, tile + 2}};
+            for (int k = 0; k < 3; k++) {
+                int a = pairs[k][0], b = pairs[k][1];
+                if (a >= 0 && b < 27 && a / 9 == tile / 9 && tile / 9 == b / 9 && c[a] && c[b]) {
+                    used[n_uses][0] = a;
+                    used[n_uses][1] = b;
+                    rate[n_uses] = R68_FEED_CHI[stage][r68_kind(tile)];
+                    chi_count[n_uses] = chis + 1;
+                    peng[n_uses++] = 0;
+                }
+            }
+        }
+        int have = 0;
+        double best_chance = 0.0, best_worth = 0.0;
+        for (int u = 0; u < n_uses; u++) {
+            int rest[NTILES];
+            memcpy(rest, c, sizeof(rest));
+            rest[used[u][0]]--;
+            rest[used[u][1]]--;
+            rest[WHITE]--;
+            if (!baotou_shape(rest, opened + 1)) continue;
+            double w;
+            if (r68_waiting(base, rest, opened + 1, chain + 1, piao + 1, draws, 0, speed, &w) < 0) return -1;
+            if (rest[WHITE] >= 2 && draws > 1) {
+                int kept[5], n_kept = n_pungs;
+                memcpy(kept, pungs, sizeof(int) * (size_t)n_pungs);
+                if (peng[u]) kept[n_kept++] = tile;
+                double deeper;
+                if (r68_piao_value(base, rest, opened + 1, chain + 1, piao + 1, draws, speed, 1, kept, n_kept, stage,
+                                   chi_count[u], &deeper) < 0)
+                    return -1;
+                if (deeper > w) w = deeper;
+            }
+            if (!have || w > best_worth) {
+                best_chance = rate[u] * (double)base->avail[tile] / unseen;
+                best_worth = w;
+                have = 1;
+            }
+        }
+        if (have) {
+            chance[*n_calls] = best_chance;
+            worth[(*n_calls)++] = best_worth;
+        }
+    }
+    return 0;
+}
+
+/* piao_gain(rest, opened, available, draws, speed, pungs, stage, chis) */
+static int r68_piao_gain(const race_ctx *base, int *hand, int opened, int draws, double speed, const int *pungs,
+                         int n_pungs, int stage, int chis, double *out) {
+    const race_profile *p = base->p;
+    *out = 0.0;
+    if (!p->upgrade || !hand[WHITE] || draws < 2) return 0;
+    if (is_baotou_counts(hand, 13 - 3 * opened, opened)) {
+        if (hand[WHITE] < 2) return 0;
+        double pv, wv;
+        if (r68_piao_value(base, hand, opened, 0, 0, draws, speed, 1, pungs, n_pungs, stage, chis, &pv) < 0) return -1;
+        if (r68_waiting(base, hand, opened, 0, 0, draws, 0, speed, &wv) < 0) return -1;
+        *out = pv - wv;
+        return 0;
+    }
+    int held[NTILES];
+    memcpy(held, hand, sizeof(held));
+    analysis_row row;
+    analyze_values(held, base->avail, opened, 0, 0, 0, &row);
+    if (row.distance > 0) return 0;
+    double unseen = (double)base->unseen, q = p->q * speed;
+    int kinds[NTILES], n_kinds = 0;
+    for (int t = 0; t < NTILES; t++)
+        if (held[t]) kinds[n_kinds++] = t;
+    double plain = 0.0, richer = 0.0;
+    long reach = 0;
+    for (int tile = 0; tile < NTILES; tile++) {
+        if (base->avail[tile] <= 0 || held[tile] >= 4) continue;
+        held[tile]++;
+        double best = 0.0, best_p = 0.0;
+        for (int k = 0; k < n_kinds; k++) {
+            int drop = kinds[k];
+            if (drop == tile || !held[drop]) continue;
+            held[drop]--;
+            if (baotou_shape(held, opened)) {
+                double v, vp;
+                if (r68_waiting(base, held, opened, 0, 0, draws - 1, 0, speed, &v) < 0) return -1;
+                if (held[WHITE] >= 2) {
+                    if (r68_piao_value(base, held, opened, 0, 0, draws - 1, speed, 0, NULL, 0, 1, 0, &vp) < 0) return -1;
+                } else {
+                    vp = v;
+                }
+                if (v > best) best = v;
+                if (vp > best_p) best_p = vp;
+            }
+            held[drop]++;
+        }
+        held[tile]--;
+        int fan_index = -1;
+        for (int i = 0; i < row.n_wins; i++)
+            if (row.wins[i] == tile) fan_index = i;
+        double n = (double)base->avail[tile];
+        if (fan_index >= 0) {
+            double win = (double)row.fans[fan_index] + p->saved;
+            double a = (1 - q) * best, b = (1 - q) * best_p;
+            plain += n * (a > win ? a : win);
+            richer += n * (b > win ? b : win);
+        } else if (best != 0.0) {
+            plain += n * (1 - q) * best;
+            richer += n * (1 - q) * best_p;
+            reach += base->avail[tile];
+        }
+    }
+    double stay = (1 - race_hazard(p, draws) * speed) * (1 - (double)(row.copies + reach) / unseen);
+    *out = (richer - plain) / unseen * (1 - pow(stay, (double)draws)) / (1 - stay);
+    return 0;
+}
+
+/* opponent_speed(obs, draws): the opponents' chance to win before my next draw
+ * over the generic tenpai hazard, in steps of 0.05 within 0.1 to 3. */
+static double r68_opponent_speed(const race_profile *p, const r68_view *o, int seat, int draws) {
+    int d = draws < 16 ? draws : 16;
+    double stay = 1.0;
+    for (int s = 0; s < 4; s++) {
+        if (s == seat) continue;
+        int n = o->n_last[s], last3 = n < 3 ? n : 3;
+        const int *tail = o->last[s];
+        int mid3 = 0, mid6 = 0, honors3 = 0, ends3 = 0;
+        for (int i = n - last3; i < n; i++) {
+            int t = tail[i];
+            if (t < 27 && t % 9 >= 2 && t % 9 <= 6) mid3++;
+            if (t >= 27) honors3++;
+            if (t < 27 && (t % 9 == 0 || t % 9 == 8)) ends3++;
+        }
+        for (int i = 0; i < n; i++) {
+            int t = tail[i];
+            if (t < 27 && t % 9 >= 2 && t % 9 <= 6) mid6++;
+        }
+        int melds = o->melds[s] < 3 ? o->melds[s] : 3;
+        int since = o->since[s] < 0 ? 9 : o->since[s];
+        if (since > 9) since = 9;
+        double x[16] = {1, (double)d, (double)(d * d) / 16, melds == 1, melds == 2, melds == 3, (double)((melds >= 1) * d),
+                        (double)mid3, last3 == 3, (double)mid6, (double)honors3, (double)ends3,
+                        (double)o->n_discards[s] / 10, (double)since / 9, o->dealer == s, o->white_out[s]};
+        py_fsum logit = {0};
+        for (int i = 0; i < 16; i++) py_fsum_add(&logit, R68_LOGIT[i] * x[i]);
+        stay *= 1 - 1 / (1 + exp(-py_fsum_value(&logit)));
+    }
+    double ratio = (1 - stay) / race_hazard(p, draws);
+    double r = rint(ratio * 20) / 20;
+    r = r > 0.1 ? r : 0.1;
+    return r < 3.0 ? r : 3.0;
+}
+
+/* Race.value of fp-rule-068. */
+static int r68_value(race_act_ctx *A, const r68_view *o, const race_ctx *base, const race_action *a, int options,
+                     double speed, int at_win, double *out) {
+    const race_profile *p = base->p;
+    int *c = A->c, opened = A->opened, draws = A->draws;
+    double v;
+    switch (a->kind) {
+    case ACT_HU:
+        *out = (double)A->hu_fan + p->saved;
+        return 0;
+    case ACT_PASS: {
+        if (o->ahead < 0) {
+            PyErr_SetString(PyExc_StopIteration, "no discard to pass on");
+            return -1;
+        }
+        if (r68_waiting(base, c, opened, A->chain, A->piao, draws, 0, 1.0, &v) < 0) return -1;
+        double shape = r68_shape(base, c, opened), called;
+        if (r68_call_option(base, c, opened, draws, o->stage, o->chis, &called) < 0) return -1;
+        *out = pow(1 - p->draw_risk, (double)o->ahead) * v + shape + called;
+        return 0;
+    }
+    case ACT_DISCARD: {
+        int piao = 0;
+        if (a->tile == WHITE) {
+            piao = act_piao(A);
+            if (piao < 0) return -1;
+        }
+        c[a->tile]--;
+        int rc = 0;
+        if (piao) {
+            rc = r68_waiting(base, c, opened, A->chain + 1, A->piao + 1, draws, 0, speed, &v);
+        } else {
+            rc = r68_reshaped(base, c, opened, draws, options, speed, &v);
+            if (rc == 0 && at_win) {
+                double gain;
+                rc = r68_piao_gain(base, c, opened, draws, speed, o->pungs, o->n_pungs, o->stage, o->chis, &gain);
+                if (rc == 0) v += gain;
+            }
+        }
+        if (rc == 0) {
+            v = (1 - p->q * speed) * v + p->tie * (double)potential_counts(c, base->avail);
+            if (!at_win) {
+                double called;
+                rc = r68_call_option(base, c, opened, draws, o->stage, o->chis, &called);
+                if (rc == 0) v += r68_shape(base, c, opened) + (1 - p->q * speed) * called;
+            }
+        }
+        c[a->tile]++;
+        if (rc < 0) return -1;
+        *out = v;
+        return 0;
+    }
+    case ACT_PENG:
+    case ACT_CHI: {
+        int used[2], n = 2;
+        if (a->kind == ACT_CHI) {
+            used[0] = a->tiles[0];
+            used[1] = a->tiles[1];
+        } else {
+            used[0] = used[1] = a->tile;
+        }
+        /* hand.remove(tile) for each used tile: the list order without them. */
+        int list[18], m = 0, taken[2] = {0, 0};
+        for (int i = 0; i < o->n_hand; i++) {
+            int t = o->hand[i], skip = 0;
+            for (int k = 0; k < n && !skip; k++)
+                if (!taken[k] && used[k] == t) taken[k] = skip = 1;
+            if (!skip) list[m++] = t;
+        }
+        int h[NTILES];
+        memset(h, 0, sizeof(h));
+        for (int i = 0; i < m; i++) h[list[i]]++;
+        int order[18];
+        int kinds = py_set_order(list, m, order);
+        /* kept = max(rests, key=waiting_value at opened + 1): the first best in set order. */
+        int kept = -1;
+        double best = 0.0;
+        for (int k = 0; k < kinds; k++) {
+            int t = order[k];
+            h[t]--;
+            int rc = r68_waiting(base, h, opened + 1, 0, 0, draws, 0, 1.0, &v);
+            h[t]++;
+            if (rc < 0) return -1;
+            if (kept < 0 || v > best) {
+                kept = order[k];
+                best = v;
+            }
+        }
+        double value = best;
+        if (h[WHITE] && is_baotou_counts(c, A->size, opened)) {
+            h[WHITE]--;
+            if (is_baotou_counts(h, A->size - n - 1, opened + 1)) {
+                int owner = o->god == A->seat;
+                int chain = (owner ? A->chain : 0) + 1, piao = (owner ? A->piao : 0) + 1;
+                if (r68_waiting(base, h, opened + 1, chain, piao, draws, 0, 1.0, &v) < 0) return -1;
+                if (v > value) value = v;
+            }
+            h[WHITE]++;
+        }
+        h[kept]--;
+        double called;
+        if (r68_call_option(base, h, opened + 1, draws, o->stage, o->chis + (a->kind == ACT_CHI), &called) < 0) return -1;
+        double shape = r68_shape(base, h, opened + 1);
+        *out = (1 - p->q) * value + shape + (1 - p->q) * called;
+        return 0;
+    }
+    case ACT_GANG: {
+        int h[NTILES];
+        memcpy(h, c, sizeof(h));
+        h[a->tile] -= a->kong;
+        int after = a->added ? opened : opened + 1;
+        race_ctx y;
+        r68_at(&y, base, after, 1.0);
+        analysis_row row;
+        if (race_analysis(&y, h, A->chain + 1, A->piao, &row) < 0) return -1;
+        double shape = r68_shape(base, h, after);
+        if (r68_waiting(base, h, after, 0, 0, draws, 0, speed, &v) < 0) return -1;
+        if (row.distance > 0) {
+            double called;
+            if (r68_call_option(base, h, after, draws, o->stage, o->chis, &called) < 0) return -1;
+            *out = v + shape + called;
+            return 0;
+        }
+        double unseen = base->unseen;
+        long copies = row.copies;
+        double now = ((double)row.value + p->saved * (double)copies) / unseen;
+        double miss = 1 - (double)copies / unseen;
+        *out = now + miss * (1 - p->q * speed) * v + shape;
+        return 0;
+    }
+    default:
+        *out = -INFINITY;
+        return 0;
+    }
+}
+
+/* Race.continue_shift: the fitted correction to going on at a win holding a white. */
+static double r68_continue_shift(const race_act_ctx *A, const r68_view *o, double speed, int *error) {
+    *error = 0;
+    int whites = A->c[WHITE];
+    if (o->drawn < 0 || !A->c[o->drawn]) {
+        PyErr_SetString(PyExc_ValueError, "list.remove(x): x not in list");
+        *error = 1;
+        return 0.0;
+    }
+    int h[NTILES];
+    memcpy(h, A->c, sizeof(h));
+    h[o->drawn]--;
+    int fishing = is_baotou_counts(h, A->size - 1, A->opened);
+    if (fishing && whites < 2) return 0.0;
+    int draws = A->draws < 16 ? A->draws : 16;
+    const double *s = R68_SHIFT;
+    return s[0] + s[1] * (!fishing && whites == 1) + s[2] * draws / 16 + s[3] * (draws >= 12) + s[4] * speed
+           + s[5] * (A->hu_fan >= 2) + s[6] * (A->opened >= 2);
+}
+
+/* Style.act of the third pool: the style's rule, then fp-rule-068's valuation. */
+static int r68_act(race_act_ctx *A, const r68_view *o, int *choice) {
+    const race_profile *p = A->x.p;
+    race_ctx base = A->x;
+    int style = p->style - 10;
+    int has_hu = 0;
+    for (int i = 0; i < A->n_legal; i++) has_hu |= A->legal[i].kind == ACT_HU;
+    if (has_hu) {
+        int d = act_double(A);
+        if (d == -2) return -1;
+        if (d >= 0) {
+            *choice = d;
+            return 0;
+        }
+    }
+    int allowed[64];
+    for (int i = 0; i < A->n_legal; i++) allowed[i] = 1;
+    if (style == 2) {
+        int now;
+        if (A->size % 3 == 2) {
+            now = 1000;
+            for (int t = 0; t < NTILES; t++) {
+                if (!A->c[t]) continue;
+                A->c[t]--;
+                int s = sdk_shanten(A->c, A->opened);
+                A->c[t]++;
+                if (s < now) now = s;
+            }
+        } else {
+            now = sdk_shanten(A->c, A->opened);
+        }
+        for (int i = 0; i < A->n_legal; i++) {
+            race_action *a = &A->legal[i];
+            if (a->kind != ACT_GANG) continue;
+            int take = now > 0;
+            if (!take) {
+                int h[NTILES];
+                memcpy(h, A->c, sizeof(h));
+                h[a->tile] -= a->kong;
+                take = sdk_shanten(h, a->added ? A->opened : A->opened + 1) <= 0;
+            }
+            if (take) {
+                *choice = i;
+                return 0;
+            }
+        }
+    } else if (style == 3 || style == 4) {
+        int kind = style == 3 ? ACT_PENG : ACT_CHI;
+        if (A->size % 3 == 1) {
+            int now = sdk_shanten(A->c, A->opened);
+            for (int i = 0; i < A->n_legal; i++) {
+                race_action *a = &A->legal[i];
+                if (a->kind != kind) continue;
+                int after;
+                if (act_after_call(A, a, &after, NULL) < 0) return -1;
+                int take = after < now;
+                if (!take && after == now) {
+                    long wide, own;
+                    int ignore;
+                    if (act_after_call(A, a, &ignore, &wide) < 0) return -1;
+                    ctx_at(A, A->opened);
+                    analysis_row row;
+                    if (race_analysis(&A->x, A->c, 0, 0, &row) < 0) return -1;
+                    own = row.ukeire;
+                    take = wide > own;
+                }
+                if (take) {
+                    *choice = i;
+                    return 0;
+                }
+            }
+        }
+    } else if (style == 5) {
+        if (A->size % 3 == 1 && sdk_shanten(A->c, A->opened) >= 3)
+            for (int i = 0; i < A->n_legal; i++)
+                if (A->legal[i].kind == ACT_CHI || A->legal[i].kind == ACT_PENG) allowed[i] = 0;
+    }
+    /* choose(): fp-rule-068's valuation over the allowed actions. */
+    double speed = 1.0;
+    if (has_hu) speed = r68_opponent_speed(p, o, A->seat, A->draws);
+    int idx[64], n = 0;
+    for (int i = 0; i < A->n_legal; i++)
+        if (allowed[i]) idx[n++] = i;
+    if (!n) {
+        PyErr_SetString(PyExc_ValueError, "max() arg is an empty sequence");
+        return -1;
+    }
+    double values[64], top = 0.0;
+    for (int k = 0; k < n; k++) {
+        if (r68_value(A, o, &base, &A->legal[idx[k]], 0, speed, has_hu, &values[k]) < 0) return -1;
+        if (k == 0 || values[k] > top) top = values[k];
+    }
+    for (int k = 0; k < n; k++) {
+        if (A->legal[idx[k]].kind == ACT_DISCARD && values[k] * R68_OPTION_REACH >= top)
+            if (r68_value(A, o, &base, &A->legal[idx[k]], 1, speed, has_hu, &values[k]) < 0) return -1;
+    }
+    if (has_hu && A->c[WHITE]) {
+        int error;
+        double shift = r68_continue_shift(A, o, speed, &error);
+        if (error) return -1;
+        for (int k = 0; k < n; k++)
+            if (A->legal[idx[k]].kind != ACT_HU) values[k] = values[k] + shift;
+    }
+    int best = 0;
+    for (int k = 1; k < n; k++)
+        if (values[k] > values[best]) best = k;
+    *choice = idx[best];
+    return 0;
+}
+
+/* The r68_view of an Observation (what race_act needs beyond its context). */
+static int r68_view_of(PyObject *obs, int seat, int has_hu, int has_pass, r68_view *o) {
+    memset(o, 0, sizeof(*o));
+    long v;
+    PyObject *stage = NULL, *melds = NULL, *discards = NULL, *events = NULL, *seq = NULL, *hand = NULL;
+    int rc = -1;
+    if (attr_int(obs, "wall_remaining", &v) < 0) goto done;
+    o->wall = (int)v;
+    o->stage = o->wall >= 70 ? 0 : o->wall >= 45 ? 1 : 2;
+    if (attr_int(obs, "god_discarder_seat", &v) < 0) goto done;
+    o->god = (int)v;
+    if (attr_int(obs, "drawn_tile", &v) < 0) goto done;
+    o->drawn = (int)v;
+    if (!(stage = PyObject_GetAttrString(obs, "stage"))) goto done;
+    if (attr_int(stage, "dealer", &v) < 0) goto done;
+    o->dealer = (int)v;
+    if (!(hand = PyObject_GetAttrString(obs, "hand"))) goto done;
+    {
+        PyObject *hs = PySequence_Fast(hand, "expected tiles");
+        if (!hs) goto done;
+        Py_ssize_t n = PySequence_Fast_GET_SIZE(hs);
+        if (n > 18) {
+            Py_DECREF(hs);
+            PyErr_SetString(PyExc_ValueError, "hand too long");
+            goto done;
+        }
+        o->n_hand = (int)n;
+        for (Py_ssize_t i = 0; i < n; i++) o->hand[i] = (int)PyLong_AsLong(PySequence_Fast_GET_ITEM(hs, i));
+        Py_DECREF(hs);
+        if (PyErr_Occurred()) goto done;
+    }
+    if (!(melds = PyObject_GetAttrString(obs, "melds"))) goto done;
+    for (int s = 0; s < 4; s++) {
+        PyObject *mine = PySequence_GetItem(melds, s);
+        if (!mine) goto done;
+        PyObject *ms = PySequence_Fast(mine, "expected melds");
+        Py_DECREF(mine);
+        if (!ms) goto done;
+        Py_ssize_t n = PySequence_Fast_GET_SIZE(ms);
+        o->melds[s] = (int)n;
+        for (Py_ssize_t i = 0; i < n && s == seat; i++) {
+            PyObject *m = PySequence_Fast_GET_ITEM(ms, i);
+            PyObject *kind = PyObject_GetAttrString(m, "kind");
+            if (!kind) { Py_DECREF(ms); goto done; }
+            int chi = PyUnicode_CompareWithASCIIString(kind, "chi") == 0;
+            int peng = PyUnicode_CompareWithASCIIString(kind, "peng") == 0;
+            Py_DECREF(kind);
+            if (chi) o->chis++;
+            if (peng && o->n_pungs < 4) {
+                PyObject *tiles = PyObject_GetAttrString(m, "tiles");
+                PyObject *first = tiles ? PySequence_GetItem(tiles, 0) : NULL;
+                Py_XDECREF(tiles);
+                if (!first) { Py_DECREF(ms); goto done; }
+                o->pungs[o->n_pungs++] = (int)PyLong_AsLong(first);
+                Py_DECREF(first);
+            }
+        }
+        Py_DECREF(ms);
+    }
+    if (!(discards = PyObject_GetAttrString(obs, "discards"))) goto done;
+    for (int s = 0; s < 4; s++) {
+        PyObject *river = PySequence_GetItem(discards, s);
+        if (!river) goto done;
+        PyObject *rs = PySequence_Fast(river, "expected tiles");
+        Py_DECREF(river);
+        if (!rs) goto done;
+        Py_ssize_t n = PySequence_Fast_GET_SIZE(rs);
+        o->n_discards[s] = (int)n;
+        Py_ssize_t from = n > 6 ? n - 6 : 0;
+        o->n_last[s] = (int)(n - from);
+        for (Py_ssize_t i = 0; i < n; i++) {
+            long t = PyLong_AsLong(PySequence_Fast_GET_ITEM(rs, i));
+            if (t == WHITE) o->white_out[s] = 1;
+            if (i >= from) o->last[s][i - from] = (int)t;
+        }
+        Py_DECREF(rs);
+        if (PyErr_Occurred()) goto done;
+    }
+    o->ahead = -1;
+    for (int s = 0; s < 4; s++) o->since[s] = -1;
+    if (has_hu || has_pass) {
+        if (!(events = PyObject_GetAttrString(obs, "public_events"))) goto done;
+        if (!(seq = PySequence_Fast(events, "expected events"))) goto done;
+        Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
+        if (has_pass) {
+            for (Py_ssize_t i = n - 1; i >= 0; i--) {
+                PyObject *e = PySequence_Fast_GET_ITEM(seq, i);
+                PyObject *kind = PyObject_GetAttrString(e, "kind");
+                if (!kind) goto done;
+                int is_discard = PyUnicode_CompareWithASCIIString(kind, "discard") == 0;
+                Py_DECREF(kind);
+                if (is_discard) {
+                    if (attr_int(e, "seat", &v) < 0) goto done;
+                    o->ahead = ((seat - (int)v - 1) % 4 + 4) % 4;
+                    break;
+                }
+            }
+        }
+        if (has_hu && n > 0) {
+            long hand_no;
+            if (attr_int(PySequence_Fast_GET_ITEM(seq, n - 1), "hand_no", &hand_no) < 0) goto done;
+            for (Py_ssize_t i = 0; i < n; i++) {
+                PyObject *e = PySequence_Fast_GET_ITEM(seq, i);
+                long no, s;
+                if (attr_int(e, "hand_no", &no) < 0) goto done;
+                if (no != hand_no) continue;
+                PyObject *kind = PyObject_GetAttrString(e, "kind");
+                if (!kind) goto done;
+                int call = PyUnicode_CompareWithASCIIString(kind, "chi") == 0 ||
+                           PyUnicode_CompareWithASCIIString(kind, "peng") == 0 ||
+                           PyUnicode_CompareWithASCIIString(kind, "gang") == 0;
+                int discard = PyUnicode_CompareWithASCIIString(kind, "discard") == 0;
+                Py_DECREF(kind);
+                if (!call && !discard) continue;
+                if (attr_int(e, "seat", &s) < 0) goto done;
+                if (s < 0 || s > 3) continue;
+                if (call) o->since[s] = 0;
+                else if (o->since[s] >= 0) o->since[s]++;
+            }
+        }
+    }
+    rc = 0;
+done:
+    Py_XDECREF(stage);
+    Py_XDECREF(hand);
+    Py_XDECREF(melds);
+    Py_XDECREF(discards);
+    Py_XDECREF(events);
+    Py_XDECREF(seq);
+    return rc;
+}
+
 static PyObject *py_race_act(PyObject *self, PyObject *args) {
     PyObject *obs, *fallback;
     int profile;
@@ -3186,6 +4043,19 @@ static PyObject *py_race_act(PyObject *self, PyObject *args) {
             }
         }
         Py_DECREF(seq);
+    }
+    if (p->style >= 10) {
+        /* the third pool: fp-rule-068 and its styles */
+        int hu = 0, pass = 0, choice;
+        for (int i = 0; i < A->n_legal; i++) {
+            hu |= A->legal[i].kind == ACT_HU;
+            pass |= A->legal[i].kind == ACT_PASS;
+        }
+        r68_view o;
+        if (r68_view_of(obs, A->seat, hu, pass, &o) < 0) goto done;
+        if (r68_act(A, &o, &choice) < 0) goto done;
+        result = PyLong_FromLong(choice);
+        goto done;
     }
     int has_hu = 0;
     for (int i = 0; i < A->n_legal; i++) has_hu |= A->legal[i].kind == ACT_HU;

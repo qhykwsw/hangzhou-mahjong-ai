@@ -615,6 +615,42 @@ static PyObject *g_int_tuple(const int *v, int n) {
     return t;
 }
 
+/* r68_view of the seat to move (the third pool's members, fp-rule-068 whole in C),
+ * as the Observation shows it: the hand sorted, each river, the calls and
+ * discards of this hand, the catch-play owner and the drawn tile. */
+static void g_r68_view(const g_hand *h, int s, r68_view *o) {
+    memset(o, 0, sizeof(*o));
+    o->wall = wall_len(h);
+    o->stage = o->wall >= 70 ? 0 : o->wall >= 45 ? 1 : 2;
+    o->god = h->catch_owner;
+    o->drawn = h->phase == PH_DRAW ? h->drawn : -1;
+    o->dealer = h->dealer;
+    for (int t = 0; t < NTILES; t++)
+        for (int k = 0; k < h->c[s][t] && o->n_hand < 18; k++) o->hand[o->n_hand++] = t;
+    for (int i = 0; i < h->n_melds[s]; i++) {
+        if (h->melds[s][i].kind == EV_CHI) o->chis++;
+        if (h->melds[s][i].kind == EV_PENG && o->n_pungs < 4) o->pungs[o->n_pungs++] = h->melds[s][i].tiles[0];
+    }
+    for (int seat = 0; seat < 4; seat++) {
+        int n = h->n_river[seat], from = n > 6 ? n - 6 : 0;
+        o->melds[seat] = h->n_melds[seat];
+        o->n_discards[seat] = n;
+        o->n_last[seat] = n - from;
+        for (int i = 0; i < n; i++) {
+            if (h->river[seat][i] == WHITE) o->white_out[seat] = 1;
+            if (i >= from) o->last[seat][i - from] = h->river[seat][i];
+        }
+        o->since[seat] = -1;
+    }
+    o->ahead = h->discarder >= 0 ? ((s - h->discarder - 1) % 4 + 4) % 4 : -1;
+    for (int i = 0; i < h->n_ev; i++) {
+        const g_event *e = &h->ev[i];
+        if (e->seat < 0 || e->seat > 3) continue;
+        if (e->kind == EV_CHI || e->kind == EV_PENG || e->kind == EV_GANG) o->since[e->seat] = 0;
+        else if (e->kind == EV_DISCARD && o->since[e->seat] >= 0) o->since[e->seat]++;
+    }
+}
+
 /* py_race_act for the seat to move: the index of its choice among the legal actions. */
 static int g_member_act(const g_hand *h, const g_action *legal, int n_legal, int profile,
                         PyObject *fallback, int *choice) {
@@ -651,6 +687,12 @@ static int g_member_act(const g_hand *h, const g_action *legal, int n_legal, int
     for (int i = 0; i < n_legal; i++) g_race_action(&legal[i], &A->legal[i]);
     A->piao_known = 1;
     A->piao_ok = g_act_piao(h, s, A->c, A->size, A->opened);
+    if (p->style >= 10) {
+        r68_view o;
+        g_r68_view(h, s, &o);
+        rc = r68_act(A, &o, choice);
+        goto done;
+    }
     int has_hu = 0;
     for (int i = 0; i < A->n_legal; i++) has_hu |= A->legal[i].kind == ACT_HU;
     if (has_hu) {
