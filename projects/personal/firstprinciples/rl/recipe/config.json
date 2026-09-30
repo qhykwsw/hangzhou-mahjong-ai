@@ -14,5 +14,6 @@
   "teacher": "fp-rule-062",
   "chunks_per_step": 3,
   "playout_baseline": true,
-  "tail_average": 0.5
+  "tail_average": 0.5,
+  "pg_top_layers": 1
 }

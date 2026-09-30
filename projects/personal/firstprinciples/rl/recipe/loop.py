@@ -224,6 +224,18 @@ def train(ctx):
         if budget is None:
             # The policy-gradient budget as it stands before its first step.
             budget = ctx.hands_left() if ctx.hands_left() is not None else ctx.time_left()
+            # A KL step spends its budget on the noise in every direction the
+            # gradient can move; the more parameters, the more of it goes to
+            # noise (the large Actor gained a third as much per hand). Only the
+            # top transformer layers and the heads then take policy-gradient
+            # steps; the representation distillation built stays fixed.
+            top_layers = int(cfg.get("pg_top_layers", 0))
+            if top_layers:
+                blocks = actor.encoder.transformer.layers
+                trainable = tuple(f"encoder.transformer.layers.{i}." for i in range(len(blocks) - top_layers, len(blocks)))
+                trainable += ("encoder.norm.", "discard_head.", "claim_head.", "state_head.")
+                for name, parameter in actor.named_parameters():
+                    parameter.requires_grad_(name.startswith(trainable))
         params, direction, batches, parts, count = None, None, None, [], 0
         collected = fitted = 0.0
         for part in range(chunks):
