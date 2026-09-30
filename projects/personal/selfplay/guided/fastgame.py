@@ -1,9 +1,10 @@
 """The training game on the C engine (native.c): the same games, rows and requests, faster.
 
 A training game whose rule seats are all fixed pool members deciding whole
-in the runtime's race_act (and without a teacher) plays its hands in C: the
-engine, every member's turn, the learner's encoding and the default Critic
-features. Python keeps the game's bookkeeping, the requests and the rows,
+in the runtime's race_act (and without a rule teacher; a model teacher
+labels in the collection parent) plays its hands in C: the engine, every
+member's turn, the learner's encoding and the default Critic features.
+Python keeps the game's bookkeeping, the requests and the rows,
 line for line as Game and Shadow do. Any other game stays on the Python
 engine. Imported by a worker after it binds the rules runtime, before any
 rule package loads.
@@ -52,7 +53,7 @@ def race_member(policy):
 
 
 class FastGame(Game):
-    """Game on native.Hand when every rule seat is a race member and no teacher labels."""
+    """Game on native.Hand when every rule seat is a race member and no rule teacher labels."""
 
     def _next_hand(self):
         if not hasattr(self, "seats"):
@@ -146,11 +147,14 @@ class FastGame(Game):
         if self.seats is None:
             return super().apply(response)
         row, legal, seat = self.pending
-        index, logprob, value, *greedy = response
+        index, logprob, value, *more = response
+        greedy = more[:1]
         if index not in legal:
             raise ValueError("neural policy returned an illegal action")
         if self.train and seat == self.focal:
             row.update(action=index, logprob=logprob, value=value)
+            if len(more) > 1:  # a model teacher's label, from the collection parent
+                row["teacher"] = more[1]
             if self.playout:
                 if not greedy:
                     raise ValueError("the playout baseline needs the argmax with each collection answer")

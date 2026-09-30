@@ -69,7 +69,9 @@ class Game:
                 policy.reset(seed_for(seed, "policy", seat))
                 self.policies[seat] = policy
         self.teacher = None
-        if teacher:
+        # A model teacher (a "model:" slot) labels in the collection parent,
+        # whose answer carries the label (apply); only a rule teacher acts here.
+        if teacher and not teacher.startswith("model:"):
             # A teacher outside the bundle (a frozen version the trial offers) is borrowed like an opponent.
             bundled = bundle is not None and any(e["id"] == teacher for e in bundle["entries"])
             if not bundled and external is not None and teacher in external.specs:
@@ -210,13 +212,17 @@ class Game:
         from selfplay_core.actions import action_index
 
         row, legal, seat = self.pending
-        # Collection answers (action, logprob, value, argmax); evaluation (action, logprob, value).
-        index, logprob, value, *greedy = response
+        # Collection answers (action, logprob, value, argmax), and after them a
+        # model teacher's label on a learning decision; evaluation (action, logprob, value).
+        index, logprob, value, *more = response
+        greedy = more[:1]
         action = next((a for a in legal if action_index(a) == index), None)
         if action is None:
             raise ValueError("neural policy returned an illegal action")
         if self.train and seat == self.focal:
             row.update(action=index, logprob=logprob, value=value)
+            if len(more) > 1:
+                row["teacher"] = more[1]
             if self.playout:
                 if not greedy:
                     raise ValueError("the playout baseline needs the argmax with each collection answer")
