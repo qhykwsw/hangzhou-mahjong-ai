@@ -19,7 +19,10 @@ discard leaves also counts its non-winning draws that a later discard turns
 into a better wait; a discard leaving a hand one step away counts the same
 option for the waits it leads to, pricing each wait there as a plain race
 (only when discarding, to keep call and pass replies fast). Discards of
-equal value keep the hand whose tiles connect to more live tiles. When the hand is already baotou (every draw wins), a win now is traded for a
+equal value keep the hand whose tiles connect to more live tiles. A discard
+leaving a hand one step away also counts the draws that do not improve it
+but, kept in place of another tile, leave a better hand one step away (the
+best such trade by a quick proxy, priced by the race; native.c). When the hand is already baotou (every draw wins), a win now is traded for a
 doubling that keeps the certain win: a kong whose replacement draw still wins,
 else a white discard that scores piao. A call from a baotou wait is priced with
 the piao its white discard scores when the wait stays baotou; fishing for
@@ -142,8 +145,13 @@ def waiting_value(hand, opened, available, chain=0, piao=0, draws=LONG, options=
 
 
 def reshaped_value(hand, opened, available, draws, options=True, speed=1.0):
-    """A waiting hand with the option to trade a non-winning draw for a better wait."""
-    return _fast.race_reshaped(hand, opened, available, draws, PROFILE, analyze, options, speed)
+    """A waiting hand with the option to trade a non-winning draw for a better
+    wait; with options, a hand one step away also counts trading a draw that
+    does not improve it for a better hand one step away (native.c)."""
+    value = _fast.race_reshaped(hand, opened, available, draws, PROFILE, analyze, options, speed)
+    if options:
+        value += native.reshape_gain(hand, opened, available, draws, NATIVE_PROFILE, analyze, Q, speed)
+    return value
 
 
 
