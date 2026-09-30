@@ -66,6 +66,31 @@
   "step_kl_end": 0.0075,
   "kl_rows": 20000,
   "tail_average": 0.5,
-  "pg_top_layers": 1,
-  "pg_top_layers_until": 30000000
+  "opponents": [
+    "fp68-classic",
+    "fp68-flat",
+    "fp68-kong-eager",
+    "fp68-peng-speed",
+    "fp68-chi-speed",
+    "fp68-closed-early",
+    "fp68-patient-big"
+  ],
+  "pg_top_layers_schedule": [
+    [
+      0,
+      1
+    ],
+    [
+      20000000,
+      2
+    ],
+    [
+      40000000,
+      4
+    ],
+    [
+      60000000,
+      0
+    ]
+  ]
 }

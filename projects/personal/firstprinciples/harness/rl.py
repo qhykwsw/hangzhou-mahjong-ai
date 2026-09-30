@@ -17,7 +17,9 @@ What the recipe may not decide is fixed here and sealed with the pool: each
 host's model size, the hand budgets per size, each host's resource limits and
 collection execution (workers, tables, batching), and which modules a recipe
 may import. The catalog also offers the platform proxies the maintainer
-registered (harness.rl proxies), as training opponents only.
+registered (harness.rl proxies), as training opponents only, and the rule
+packages registered as training opponents (harness.rl training-rules), which
+run under the pool's runtime but are never evaluated against.
 """
 import argparse
 import json
@@ -28,6 +30,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 from . import evaluate as E
 
@@ -206,7 +209,50 @@ def catalog(pool=None):
             if spec.get("family") != "model":
                 spec["runtime_path"] = pool["runtime_path"]
             offered[r["id"]] = {"spec": spec, "record": r}
-    return offered | proxies()
+    return offered | training_rules(pool) | proxies()
+
+
+def training_rules_path():
+    return RL / "training-rules.json"
+
+
+def training_rules(pool=None):
+    """Rule packages the maintainer registered as extra training opponents (harness.rl training-rules).
+
+    They run under the pool's runtime like its members but are not in the
+    pool: evaluation stays on the fixed pool. As rules they may also teach.
+    """
+    if not training_rules_path().exists():
+        return {}
+    pool = pool or E.load_pool()
+    out = {}
+    for name, m in E.read_json(training_rules_path())["members"].items():
+        spec = {"family": "code", "version": name, "parameters": {}, "model_path": None, "program": None,
+                "package_path": m["package_path"], "package_hash": m["package_hash"],
+                "python_path": str(E.REPO / ".venv/bin/python"), "runtime_path": pool["runtime_path"]}
+        record = {"id": name, "line": "training", "score": m.get("score"), "se": m.get("se"),
+                  "description": m["description"]}
+        out[name] = {"spec": spec, "record": record}
+    return out
+
+
+def register_training_rules(packages, scores=None):
+    """Freeze rule packages as the training opponents offered in the catalog; replaces the previous registration."""
+    members = {}
+    for package in map(Path, packages):
+        if not (package / "strategy.py").is_file():
+            raise SystemExit(f"{package} 不是规则代码包")
+        problems = E.check_source(package)
+        if problems:
+            raise SystemExit(f"{package.name}：" + "；".join(problems))
+        target = E.LOCAL / "training-rules" / package.name / f"package-{E.tree_hash(package)[:16]}"
+        if not target.exists():
+            shutil.copytree(package, target, ignore=shutil.ignore_patterns("__pycache__"))
+        doc = (package / "strategy.py").read_text().split('"""')[1].strip().splitlines()
+        members[package.name] = {"package_path": str(target), "package_hash": E.tree_hash(target),
+                                 "description": doc[-1].strip()} | ((scores or {}).get(package.name) or {})
+    E.atomic_json(training_rules_path(), {"at": time.time(), "members": members})
+    return len(members)
 
 
 def proxies_path():
@@ -306,7 +352,8 @@ def catalog_facts():
         rule = spec.get("family") != "model"
         facts.append({
             "id": cid,
-            "source": {"rule": "规则线", "rl": "RL 线", "proxy": "平台代理"}.get(record["line"]) if cid in offered else "固定对手池",
+            "source": {"rule": "规则线", "rl": "RL 线", "proxy": "平台代理", "training": "训练对手"}.get(record["line"])
+            if cid in offered else "固定对手池",
             "kind": "规则" if rule else "模型",
             # RL versions teach by their argmax; platform proxies are opponents only.
             "teacher": rule or (cid in offered and offered[cid]["record"]["line"] == "rl"),
@@ -555,6 +602,9 @@ def main():
     x.add_argument("checkpoint")
     x.add_argument("--name", required=True)
     x.add_argument("--host", required=True)
+    t = sub.add_parser("training-rules", help="offer rule packages in the catalog as training opponents (not evaluated against)")
+    t.add_argument("packages", nargs="+")
+    t.add_argument("--scores", help="JSON {name: {score, se}} of the packages on the pool's development set")
     q = sub.add_parser("proxies", help="offer a proxy panel's members in the catalog (training opponents only)")
     q.add_argument("panel", help="panel.json of the online calibration")
     b = sub.add_parser("baseline", help="score the start Actor as the RL line's first best version (once per pool)")
@@ -562,6 +612,9 @@ def main():
     args = parser.parse_args()
     if args.command == "setup":
         print(json.dumps(setup(args.source, args.name, args.host), ensure_ascii=False))
+    elif args.command == "training-rules":
+        scores = E.read_json(Path(args.scores)) if args.scores else None
+        print(f"已登记 {register_training_rules(args.packages, scores)} 个训练对手")
     elif args.command == "proxies":
         print(f"已登记 {register_proxies(args.panel)} 个平台代理")
     elif args.command == "baseline":

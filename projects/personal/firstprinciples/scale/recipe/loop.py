@@ -8,6 +8,10 @@ the plan every segment reads its schedules from, so nothing changes on the
 way. A schedule is a function of the hands its phase has trained, counted
 from the planned sizes of the phase's earlier segments.
 
+Every game's other three seats are drawn from `opponents`: the third
+generation of rule opponents (fp-rule-068's styles), registered as training
+opponents; evaluation stays on the fixed pool.
+
 Imitation (the first segments): from a random initialisation, the learning
 seat first plays the teacher's moves (behaviour cloning, the first
 `bc_fraction` of the imitation's hands), then its own sampled moves while the
@@ -24,8 +28,10 @@ moves along them until KL(current || new) on a subset of the last one equals
 the step KL; a segment's result is the mean of its iterates over the second
 half of its hands (rollouts use the latest). Along the policy gradient's
 hands the rollouts per step grow from `chunks_start` to `chunks_end` (the
-critical batch grows as the loss falls), and the step KL holds at `step_kl`
-until `kl_hold_hands`, then falls linearly to `step_kl_end` at the end. Every
+critical batch grows as the loss falls), the step KL holds at `step_kl`
+until `kl_hold_hands`, then falls linearly to `step_kl_end` at the end, and
+the layers that take steps grow from the top one to all (gradual
+unfreezing, `pg_top_layers_schedule`). Every
 step logs the gradient noise scale (the batch at which the gradient's noise
 equals its signal), for diagnosis only.
 """
@@ -227,7 +233,8 @@ def imitate(ctx, cfg, before, total):
         actor = ctx.new_actor()
     else:
         actor = ctx.actor
-    collect_cfg = {"history_probability": 0.0, "finish_game": "recipe.returns:finish_game", "teacher": cfg["teacher"]}
+    collect_cfg = {"history_probability": 0.0, "finish_game": "recipe.returns:finish_game", "teacher": cfg["teacher"],
+                   "opponents": cfg["opponents"]}
     target_rows = cfg["smoke_rows"] if ctx.smoke else cfg["rows"]
     reserve = 5 if ctx.smoke else 60
     rng = np.random.default_rng(ctx.seed)
@@ -264,15 +271,16 @@ def improve(ctx, cfg, before, total):
     """This segment's share of the policy gradient, on the schedules of rollouts per step and step KL."""
     actor = ctx.actor
     pg_cfg = {"history_probability": 0.0, "critic_features": "recipe.features:dealer",
-              "finish_game": "recipe.returns:finish_game", "playout_baseline": True}
+              "finish_game": "recipe.returns:finish_game", "playout_baseline": True, "opponents": cfg["opponents"]}
     target_rows = cfg["smoke_rows"] if ctx.smoke else cfg["rows"]
     microbatch = int(cfg["microbatch"])
     reserve = 5 if ctx.smoke else 60
     rng = np.random.default_rng(ctx.seed)
-    # Segments before `pg_top_layers_until` step only the top transformer
-    # layers, the last norm and the heads (098 on the small Actor); later ones
-    # step every parameter.
-    top_layers = int(cfg.get("pg_top_layers", 0)) if before < float(cfg.get("pg_top_layers_until", 0)) else 0
+    # Gradual unfreezing: a segment steps only its top transformer layers, the
+    # last norm and the heads (098 on the small Actor, 102 on the large one),
+    # the number of layers set by `pg_top_layers_schedule` at the segment's
+    # start ([policy-gradient hands, layers], 0 for every parameter).
+    top_layers = [int(n) for start, n in cfg["pg_top_layers_schedule"] if before >= start][-1]
     if top_layers:
         blocks = actor.encoder.transformer.layers
         trainable = tuple(f"encoder.transformer.layers.{i}." for i in range(len(blocks) - top_layers, len(blocks)))

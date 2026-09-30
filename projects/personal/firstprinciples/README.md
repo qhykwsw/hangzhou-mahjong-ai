@@ -4,7 +4,7 @@
 
 - **规则线**：`rule/` 是唯一被修改的目录。v0 是最朴素的牌效策略，之后按杭州麻将规则的第一性原理逐次改进，大方向是速度优先、必胜时追求翻倍。规则线也可以另起炉灶：`checkout rule <版本>` 把任意评估过的规则版本放回 `rule/`，`start --from <版本>` 沿新框架自己的版本接着改（见[规则线手册](handbooks/rule.md)）。
 - **RL 线**：沿用训练方案框架（`../selfplay/recipes`、`guided.trial`）。模型规格按主机固定：4070 与 5070 Ti 是小规格 128/4/4（约 0.84M 参数），起点是它对 piao-call-channel 做 10 万局（每场 16 局）的模仿；4090 是大规格 384/8/8（约 14.3M 参数），起点是同一教师的大规格模仿 imitation-piao-1h。两种规格共享一个最好版本，续训只在同规格之间。每次尝试的训练局数由迭代 Agent 选（默认 100 万；小规格最多 500 万，大规格最多 1000 万、其中带教师标签的最多 500 万，大规格靠一段段续训累积训练量），可以从固定起点、当前最好版本、任意一个评估过的 RL 版本出发，或在方案里从随机初始化开始（例如换教师重做模仿），在 4070、4090 或 5070 Ti 上进行。任意两个版本可以用 `harness.evaluate compare <A> <B>` 在开发集上配对比较。
-- **规模训练**（维护者）：大规格从随机初始化开始，按开跑前固定的方案与计划（`scale/recipe`）模仿 500 万局、RL 1 亿局，分 12 段，每段是 RL 线的一次尝试，照常评估与确认。`harness.scale begin` 冻结方案并开跑第一段，之后的段在上一段记录后自动开跑；进行期间它的主机只给它用。`harness.scale status` 看各段进度。
+- **规模训练**（维护者）：大规格从随机初始化开始，按开跑前固定的方案与计划（`scale/recipe`）模仿 500 万局、RL 1 亿局，分 12 段，每段是 RL 线的一次尝试，照常评估与确认。训练对手是第三代训练对手（fp-rule-068 派生的 7 种风格，`harness.rl training-rules` 登记），评估仍对固定对手池。`harness.scale begin` 冻结方案并开跑第一段，之后的段在上一段记录后自动开跑；进行期间它的主机只给它用。`harness.scale status` 看各段进度。
 
 ## 评估
 
@@ -38,6 +38,7 @@ cd projects/personal/firstprinciples
 ../../../.venv/bin/python -m harness.rl setup <主机上的 checkpoint | 权重 sha> --name <起点名> --host 4070|4090|5070ti  # RL 起点（每台主机一次）
 ../../../.venv/bin/python -m harness.rl baseline [--host 4070]                                   # 起点的完整开发集成绩，作为 RL 线最初的最好版本（每个对手池一次）
 ../../../.venv/bin/python -m harness.rl proxies <panel.json>                                     # 把代理面板的成员登记为可选训练对手（替换上一次登记）
+../../../.venv/bin/python -m harness.rl training-rules <代码包目录>... [--scores <json>]            # 把规则代码包登记为可选训练对手（不参与评估，替换上一次登记）
 ../../../.venv/bin/python -m harness.evaluate implement <对手池规则成员> <代码包目录>          # 登记成员的等价实现（更快、决策一致）
 ../../../.venv/bin/python -m harness.evaluate seal                                          # 接受当前的评估条件
 ```

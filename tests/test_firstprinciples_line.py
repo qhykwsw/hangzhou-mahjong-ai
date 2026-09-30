@@ -212,6 +212,22 @@ def test_catalog_offers_every_version_that_became_a_line_best(harness):
     assert "runtime_path" not in offered["fp-rl-001"]["spec"]
 
 
+def test_registered_training_rules_are_offered_but_never_evaluated_against(harness, tmp_path):
+    E, rl, _ = harness
+    pool = {"id": "pool-a", "members": {"piao": {"family": "code"}}, "runtime_path": "/pool-runtime"}
+    (E.LOCAL / "pool.json").write_text(json.dumps(pool))
+    package = tmp_path / "fp68-classic"
+    package.mkdir()
+    (package / "strategy.py").write_text('"""Header.\n\nClassic: fp-rule-068 as it is.\n"""\n')
+    assert rl.register_training_rules([package], {"fp68-classic": {"score": 5.7, "se": 0.6}}) == 1
+    offered = rl.catalog()
+    spec, entry = offered["fp68-classic"]["spec"], offered["fp68-classic"]["record"]
+    assert spec["runtime_path"] == "/pool-runtime" and spec["family"] == "code"
+    assert Path(spec["package_path"]).parent.parent == E.LOCAL / "training-rules"  # a frozen copy
+    assert (entry["line"], entry["score"], entry["description"]) == ("training", 5.7, "Classic: fp-rule-068 as it is.")
+    assert "fp68-classic" not in E.load_pool()["members"]  # evaluation stays on the fixed pool
+
+
 @pytest.mark.parametrize("mismatches, best_after", [(0, "fp-rule-003"), (2, "fp-rule-002")])
 def test_equivalent_code_takes_over_the_best_versions_scores(harness, monkeypatch, mismatches, best_after):
     E, _, line = harness

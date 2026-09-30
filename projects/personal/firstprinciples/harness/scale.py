@@ -58,8 +58,10 @@ def describe(index, cfg):
         detail = (f"从随机初始化，前 {bc / 1e4:g} 万局教师代打（BC），之后 DAgger" if before == 0 else "DAgger")
         detail += f"；教师 {cfg['teacher']}，学习率 {cfg['distill_learning_rate']:g} 线性降到 0，每批 {cfg['distill_epochs']} 遍"
     else:
+        layers = [n for start, n in cfg["pg_top_layers_schedule"] if before >= start][-1]
         detail = (f"playout 反事实优势 PG，每步 rollout {cfg['chunks_start']}→{cfg['chunks_end']} 个、"
-                  f"KL {cfg['step_kl']:g}（{cfg['kl_hold_hands'] / 1e4:g} 万局后线性降到 {cfg['step_kl_end']:g}），尾段平均")
+                  f"KL {cfg['step_kl']:g}（{cfg['kl_hold_hands'] / 1e4:g} 万局后线性降到 {cfg['step_kl_end']:g}），尾段平均，"
+                  + (f"只训最后 {layers} 层与输出头" if layers else "全部参数"))
     return (f"规模训练第 {index + 1}/{len(segments)} 段（维护者，固定方案）：{PHASES[segment['phase']]} {order}/{len(phase)}，"
             f"{PHASES[segment['phase']]}阶段 {span}；{detail}")
 
