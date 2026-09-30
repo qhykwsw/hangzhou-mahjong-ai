@@ -142,10 +142,23 @@ static PyObject *py_call_option(PyObject *self, PyObject *args) {
     return PyFloat_FromDouble(weight * gain * rounds);
 }
 
+/* feed_rate(stage, tile, chi): the rate above for one tile. */
+static PyObject *py_feed_rate(PyObject *self, PyObject *args) {
+    int stage, tile, chi;
+    if (!PyArg_ParseTuple(args, "iip", &stage, &tile, &chi)) return NULL;
+    if (stage < 0 || stage > 2 || tile < 0 || tile >= WHITE) {
+        PyErr_SetString(PyExc_ValueError, "stage must be 0..2 and tile 0..32");
+        return NULL;
+    }
+    return PyFloat_FromDouble(chi ? FEED_CHI[stage][tile_kind(tile)] : FEED_PENG[stage][tile_kind(tile)]);
+}
+
 static PyMethodDef native_methods[] = {
     {"race_profile", py_race_profile, METH_VARARGS,
      "Register a race profile in this module's own table (the runtime's ids do not carry over)."},
     {"shape_constants", py_shape_constants, METH_VARARGS, "Set the strategy's shape correction constants."},
+    {"feed_rate", py_feed_rate, METH_VARARGS,
+     "feed_rate(stage, tile, chi): opponents' discards of a tile per round over my chance of drawing it."},
     {"call_option", py_call_option, METH_VARARGS,
      "call_option(hand, opened, available, draws, stage, chis, profile, fallback, q, weight): the value "
      "calls add to a hand not yet waiting."},
