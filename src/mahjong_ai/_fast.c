@@ -3210,23 +3210,17 @@ static int r68_reshaped(const race_ctx *base, int *c, int opened, int draws, int
     return race_reshaped(&y, c, draws, options, out);
 }
 
-/* strategy.shape_bonus(rest, opened, available, True): analyze_counts's row. */
+static double r68_shape_bonus(const int *c, long ukeire, int distance);
+
+/* strategy.shape_bonus(rest, opened, available, True): analyze_counts's
+ * row, of which only the distance and the improving draws' copies count, read
+ * from the race's draw table (draw_distances' values) without the fans. */
 static double r68_shape(const race_ctx *base, const int *c, int opened) {
-    int pairs = 0, adjacent = 0, edges = 0;
-    for (int t = 0; t < 33; t++)
-        if (c[t] >= 2) pairs++;
-    for (int t = 0; t < 27; t++) {
-        if (t % 9 <= 7 && c[t] && c[t + 1]) {
-            adjacent++;
-            if (t % 9 == 0 || t % 9 == 7) edges++;
-        }
-    }
-    double bonus = R68_SHAPE[0] * pairs + R68_SHAPE[1] * adjacent;
-    bonus += R68_SHAPE[4] * (adjacent - edges) + R68_SHAPE[5] * edges;
-    analysis_row row;
-    analyze_values(c, base->avail, opened, 0, 0, 0, &row);
-    bonus += R68_SHAPE[2] * (double)row.ukeire / 10 + R68_SHAPE[3] * row.distance;
-    return bonus;
+    const draw_slot *table = race_draws(c, opened);
+    long ukeire = 0;
+    for (int t = 0; t < NTILES; t++)
+        if (base->avail[t] > 0 && c[t] < 4 && table->draw[t] < table->distance) ukeire += base->avail[t];
+    return r68_shape_bonus(c, ukeire, table->distance);
 }
 
 /* native.c's shape_bonus of a hand from its distance and the copies of its improving draws. */
