@@ -695,7 +695,7 @@ def wait(line, minutes):
         flagged = [r["id"] for r in records if (r.get("reference") or {}).get("above")]
         # The user decides whether it goes on the platform; the line does not wait for the answer.
         ask = (f"{flagged[-1]} 高于自由对战现在的上场版本，可以换上。要换上吗？同意的话回复，"
-               f"我运行 promote {int(flagged[-1].rsplit('-', 1)[-1])}。" if flagged else None)
+               f"我运行 promote {flagged[-1]}。" if flagged else None)
         free, why_not = design_hosts(line)
         if free or records or notices or time.time() >= deadline:
             E.mark_reported(records)
