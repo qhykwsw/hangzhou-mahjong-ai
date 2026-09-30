@@ -143,91 +143,12 @@ static PyObject *py_call_option(PyObject *self, PyObject *args) {
     return PyFloat_FromDouble(weight * gain * rounds);
 }
 
-/* The mean over a hand's improving draws (weighted by their live copies) of
- * the best wait each allows, a wait scored by the fan of its live winning
- * draws: a quick proxy for how good a hand one step away is (the runtime's
- * tenpai_route_value, here without the Python wrapper). */
-typedef struct {
-    uint64_t k0, k1, a0, a1;
-    double value;
-    long ukeire;
-} route_slot;
-
-#define ROUTE_BITS 12
-static route_slot route_cache[1 << ROUTE_BITS];
-
-/* The same with its live improving tiles, memoised per hand, melds and live
- * tiles (a small direct-mapped table). */
-static double route_value(int *c, const int *avail, int opened);
-
-static double route_of(race_ctx *x, int *c, long *ukeire) {
-    uint64_t k0, k1;
-    shanten_key(c, x->opened, &k0, &k1);
-    k1 ^= (uint64_t)x->opened << 60;
-    uint64_t h = (k0 * 0x9E3779B97F4A7C15ULL) ^ (k1 * 0xC2B2AE3D27D4EB4FULL) ^ (x->a0 * 0x165667B19E3779F9ULL) ^ x->a1;
-    route_slot *slot = &route_cache[(h >> 20) & ((1 << ROUTE_BITS) - 1)];
-    if (x->keyed && slot->k0 == k0 && slot->k1 == k1 && slot->a0 == x->a0 && slot->a1 == x->a1) {
-        *ukeire = slot->ukeire;
-        return slot->value;
-    }
-    const draw_slot *table = draw_distances(c, x->opened);
-    long u = 0;
-    for (int t = 0; t < NTILES; t++)
-        if (x->avail[t] > 0 && c[t] < 4 && table->draw[t] < table->distance) u += x->avail[t];
-    double v = route_value(c, x->avail, x->opened);
-    if (x->keyed) {
-        slot->k0 = k0; slot->k1 = k1; slot->a0 = x->a0; slot->a1 = x->a1;
-        slot->value = v; slot->ukeire = u;
-    }
-    *ukeire = u;
-    return v;
-}
-
-static double route_value(int *c, const int *avail, int opened) {
-    const draw_slot *table = draw_distances(c, opened);
-    if (table->distance != 1) return 0.0;
-    uint64_t improving = 0;
-    for (int t = 0; t < NTILES; t++)
-        if (avail[t] > 0 && c[t] < 4 && table->draw[t] < 1) improving |= (uint64_t)1 << t;
-    long total = 0;
-    double weighted = 0.0;
-    for (int tile = 0; tile < NTILES; tile++) {
-        if (!(improving >> tile & 1)) continue;
-        c[tile]++;
-        long best = 0;
-        for (int drop = 0; drop < NTILES; drop++) {
-            if (!c[drop]) continue;
-            c[drop]--;
-            if (shanten_raw(c, opened) > 0) {
-                c[drop]++;
-                continue;
-            }
-            const draw_slot *dest = draw_distances(c, opened);
-            if (dest->distance <= 0) {
-                long value = 0;
-                for (int t = 0; t < NTILES; t++) {
-                    if (avail[t] <= 0 || c[t] >= 4 || dest->draw[t] >= 0) continue;
-                    c[t]++;
-                    value += avail[t] * fan_value(c, t, opened, 0, 0, 0, 0);
-                    c[t]--;
-                }
-                if (value > best) best = value;
-            }
-            c[drop]++;
-        }
-        c[tile]--;
-        total += avail[tile];
-        weighted += (double)avail[tile] * best;
-    }
-    return total ? weighted / total : 0.0;
-}
-
 /* reshape_gain(hand, opened, available, draws, profile, fallback, q, speed):
  * the option of a hand one step from waiting to keep a draw that does not
  * improve it and discard another tile, when that leaves a better hand one
- * step away. For each such draw the best trade (by the quick proxy: route
- * value times live improving tiles) is priced by the race against staying as
- * I am; the gains accrue each round the hand has not yet moved on. */
+ * step away. For each such draw every trade that stays one step away with at
+ * least as many live improving tiles is priced by the race, and the best is taken against staying as I
+ * am; the gains accrue each round the hand has not yet moved on. */
 static PyObject *py_reshape_gain(PyObject *self, PyObject *args) {
     PyObject *hand, *available, *fallback;
     int opened, draws, profile, c[NTILES], held[NTILES];
@@ -247,8 +168,6 @@ static PyObject *py_reshape_gain(PyObject *self, PyObject *args) {
     double stay;
     if (race_waiting(&x, c, 0, 0, draws - 1, 0, &stay) < 0) return NULL;
     memcpy(held, c, sizeof(held));
-    long own;
-    double floor_ = ukeire * route_of(&x, c, &own);
     double gain = 0.0;
     long reach = 0;
     for (int tile = 0; tile < NTILES; tile++) {
@@ -260,32 +179,27 @@ static PyObject *py_reshape_gain(PyObject *self, PyObject *args) {
                 near = u >= 0 && u < 27 && u / 9 == tile / 9 && c[u] > 0;
         if (!near) continue;
         c[tile]++;
-        int pick = -1;
-        double lead = floor_;
+        double best = stay;
         for (int drop = 0; drop < NTILES; drop++) {
             if (!held[drop] || drop == tile) continue;
             c[drop]--;
-            if (shanten_raw(c, opened) == 1) {
-                long alt;
-                double estimate = route_of(&x, c, &alt);
-                if (estimate > 0) {
-                    estimate *= (double)alt;
-                    if (estimate > lead) {
-                        pick = drop;
-                        lead = estimate;
+            const draw_slot *table = draw_distances(c, opened);
+            if (table->distance == 1) {
+                long alt = 0;
+                for (int t = 0; t < NTILES; t++)
+                    if (x.avail[t] > 0 && c[t] < 4 && table->draw[t] < 1) alt += x.avail[t];
+                if (alt >= row.ukeire) {
+                    double v, shape = 0.0;
+                    int rc = race_waiting(&x, c, 0, 0, draws - 1, 0, &v);
+                    if (rc < 0) {
+                        c[drop]++;
+                        c[tile]--;
+                        return NULL;
                     }
+                    if (v + shape > best) best = v + shape;
                 }
             }
             c[drop]++;
-        }
-        double best = stay;
-        if (pick >= 0) {
-            c[pick]--;
-            double v;
-            int rc = race_waiting(&x, c, 0, 0, draws - 1, 0, &v);
-            c[pick]++;
-            if (rc < 0) return NULL;
-            if (v > best) best = v;
         }
         c[tile]--;
         if (best > stay) {
