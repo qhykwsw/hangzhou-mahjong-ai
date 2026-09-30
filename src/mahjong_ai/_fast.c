@@ -3229,6 +3229,23 @@ static double r68_shape(const race_ctx *base, const int *c, int opened) {
     return bonus;
 }
 
+/* native.c's shape_bonus of a hand from its distance and the copies of its improving draws. */
+static double r68_shape_bonus(const int *c, long ukeire, int distance) {
+    int pairs = 0, adjacent = 0, edges = 0;
+    for (int t = 0; t < 33; t++)
+        if (c[t] >= 2) pairs++;
+    for (int t = 0; t < 27; t++) {
+        if (t % 9 <= 7 && c[t] && c[t + 1]) {
+            adjacent++;
+            if (t % 9 == 0 || t % 9 == 7) edges++;
+        }
+    }
+    double bonus = R68_SHAPE[0] * pairs + R68_SHAPE[1] * adjacent;
+    bonus += R68_SHAPE[4] * (adjacent - edges) + R68_SHAPE[5] * edges;
+    bonus += R68_SHAPE[2] * (double)ukeire / 10 + R68_SHAPE[3] * distance;
+    return bonus;
+}
+
 /* native.c's shape_bonus inside the call option: the race's analysis, of
  * which only the distance and the improving draws' copies count, so the
  * fans of winning draws are not computed. Memoised as kind 3 of the race
@@ -3241,17 +3258,6 @@ static int r68_call_shape(race_ctx *y, const int *c, double *out) {
         *out = slot->value;
         return 0;
     }
-    int pairs = 0, adjacent = 0, edges = 0;
-    for (int t = 0; t < 33; t++)
-        if (c[t] >= 2) pairs++;
-    for (int t = 0; t < 27; t++) {
-        if (t % 9 <= 7 && c[t] && c[t + 1]) {
-            adjacent++;
-            if (t % 9 == 0 || t % 9 == 7) edges++;
-        }
-    }
-    double bonus = R68_SHAPE[0] * pairs + R68_SHAPE[1] * adjacent;
-    bonus += R68_SHAPE[4] * (adjacent - edges) + R68_SHAPE[5] * edges;
     const draw_slot *table = race_draws(c, y->opened);
     long ukeire = 0;
     int distance = table->distance;
@@ -3264,7 +3270,7 @@ static int r68_call_shape(race_ctx *y, const int *c, double *out) {
         for (int t = 0; t < NTILES; t++)
             if (y->avail[t] > 0 && c[t] < 4 && table->draw[t] < distance) ukeire += y->avail[t];
     }
-    bonus += R68_SHAPE[2] * (double)ukeire / 10 + R68_SHAPE[3] * distance;
+    double bonus = r68_shape_bonus(c, ukeire, distance);
     if (slot) {
         memcpy(slot->k, key, sizeof(key));
         slot->value = bonus;
@@ -3273,31 +3279,314 @@ static int r68_call_shape(race_ctx *y, const int *c, double *out) {
     return 0;
 }
 
-/* native.c's called_value. */
+/* The call option's memo. One decision prices the option of every discard,
+ * and the hands those leave after a call share most of their work: the hand
+ * kept after discard x, call (a, b) and discard d is the one after d, (a, b)
+ * and x, and the waits one draw from two such hands are mostly the same
+ * hands. Per hand at its melds (shanten_key), while the availability, the
+ * profile and the draws stay the same: what the call is worth when the hand
+ * is kept (away from a wait, where race_reshaped and race_waiting agree)
+ * with the draws that bring it closer, and race_waiting one draw later when
+ * the hand waits. The memo only saves recomputation: a slot taken by another
+ * hand is computed again. */
+#define R68_MEMO_BITS 13
+#define R68_KEPT 1
+#define R68_WAIT 2
+
+typedef struct {
+    uint64_t k0, k1, closer;
+    uint32_t stamp;
+    int have;
+    double kept, wait;
+} r68_memo_slot;
+
+static struct {
+    int avail[NTILES], profile, draws;
+    uint32_t stamp;  /* 0: nothing bound yet */
+    r68_memo_slot slot[1 << R68_MEMO_BITS];
+} r68_memo;
+
+static void r68_memo_bind(const race_ctx *base, int draws) {
+    if (r68_memo.stamp && r68_memo.profile == base->profile && r68_memo.draws == draws
+        && !memcmp(r68_memo.avail, base->avail, sizeof(r68_memo.avail)))
+        return;
+    memcpy(r68_memo.avail, base->avail, sizeof(r68_memo.avail));
+    r68_memo.profile = base->profile;
+    r68_memo.draws = draws;
+    if (++r68_memo.stamp == 0) {
+        memset(r68_memo.slot, 0, sizeof(r68_memo.slot));
+        r68_memo.stamp = 1;
+    }
+}
+
+/* The hand's slot, emptied when it held another hand or an earlier binding. */
+static r68_memo_slot *r68_memo_of(uint64_t k0, uint64_t k1) {
+    uint64_t h = (k0 * 0xD6E8FEB86659FD93ULL) ^ (k1 * 0x94D049BB133111EBULL);
+    h ^= h >> 31;
+    r68_memo_slot *slot = &r68_memo.slot[h >> (64 - R68_MEMO_BITS)];
+    if (slot->stamp != r68_memo.stamp || slot->k0 != k0 || slot->k1 != k1) {
+        slot->k0 = k0;
+        slot->k1 = k1;
+        slot->stamp = r68_memo.stamp;
+        slot->have = 0;
+    }
+    return slot;
+}
+
+/* The key of the hand of key (k0, k1) less one copy of tile t. */
+static void r68_key_drop(uint64_t k0, uint64_t k1, int t, uint64_t *r0, uint64_t *r1) {
+    *r0 = t < 21 ? k0 - (1ULL << (3 * t)) : k0;
+    *r1 = t < 21 ? k1 : k1 - (1ULL << (3 * (t - 21)));
+}
+
+/* The draws that bring a hand with a meld open closer to a wait, as bit t,
+ * and its distance: race_draws' row (draw[t] < distance) without the draws
+ * that cannot count. With a meld open the distance is the naturals' shape
+ * value less the whites, so a white always brings the hand closer, and a
+ * natural tile does when it lowers the shape value; one the hand holds no
+ * copy of, with no tile of its suit within two ranks (any honor not held),
+ * joins no meld, partial or pair of any split, so its suit's table and the
+ * shape value stay the same and it is skipped. The others are computed as
+ * race_draws does. Memoised per hand and melds (shanten_key), the distance
+ * in k1 as the shanten memo keeps it. */
+#define R68_ROW_BITS 20
+
+typedef struct {
+    uint64_t k0, k1, closer;
+} r68_row_slot;
+
+static r68_row_slot r68_rows[1 << R68_ROW_BITS];
+
+static uint64_t r68_closer(const int *c, int opened, uint64_t k0, uint64_t k1, int *distance) {
+    uint64_t h = (k0 * 0xC2B2AE3D27D4EB4FULL) ^ (k1 * 0xD6E8FEB86659FD93ULL);
+    h ^= h >> 31;
+    r68_row_slot *slot = &r68_rows[h >> (64 - R68_ROW_BITS)];
+    if (slot->k0 == k0 && (slot->k1 & (KEY1_BITS | KEY_USED)) == (k1 | KEY_USED)) {
+        *distance = (int)((slot->k1 >> VALUE_SHIFT) & 63) - 16;
+        return slot->closer;
+    }
+    int natural[NTILES];
+    memcpy(natural, c, sizeof(natural));
+    int jokers = natural[WHITE];
+    natural[WHITE] = 0;
+    suit_res tables[4], drawn;
+    for (int s = 0; s < 4; s++) race_group_table(natural, s, &tables[s]);
+    /* others[s]: every group but s, from the open melds. */
+    race_groups start, others[4], tmp, full;
+    for (int m = 0; m < 5; m++)
+        for (int p = 0; p < 2; p++) start.g[m][p] = -1;
+    start.g[opened][0] = 0;
+    for (int s = 0; s < 4; s++) {
+        race_groups acc = start;
+        for (int o = 0; o < 4; o++) {
+            if (o == s) continue;
+            race_groups_add(&acc, &tables[o], &tmp);
+            acc = tmp;
+        }
+        others[s] = acc;
+    }
+    race_groups_add(&others[3], &tables[3], &full);
+    int shape = race_groups_value(&full);
+    uint64_t closer = c[WHITE] < 4 ? 1ULL << WHITE : 0;
+    for (int t = 0; t < WHITE; t++) {
+        if (c[t] >= 4) continue;
+        if (!c[t]) {
+            if (t >= 27) continue;
+            int r = t % 9;
+            if (!(r >= 1 && c[t - 1]) && !(r >= 2 && c[t - 2]) && !(r <= 7 && c[t + 1]) && !(r <= 6 && c[t + 2])) continue;
+        }
+        int s = t < 27 ? t / 9 : 3;
+        natural[t]++;
+        race_group_table(natural, s, &drawn);
+        natural[t]--;
+        race_groups_add(&others[s], &drawn, &tmp);
+        if (race_groups_value(&tmp) < shape) closer |= 1ULL << t;
+    }
+    *distance = race_distance(shape, jokers, 0, 0, opened);
+    slot->k0 = k0;
+    slot->k1 = k1 | KEY_USED | ((uint64_t)(*distance + 16) << VALUE_SHIFT);
+    slot->closer = closer;
+    return closer;
+}
+
+/* called_value's term of one kept hand by the shared functions. */
+static int r68_kept_shared(race_ctx *y, int *c, int far, int draws, double q, double *out) {
+    double v, shape;
+    if ((far ? race_reshaped(y, c, draws, 0, &v) : race_waiting(y, c, 0, 0, draws, 0, &v)) < 0) return -1;
+    if (r68_call_shape(y, c, &shape) < 0) return -1;
+    *out = (1 - q) * v + shape;
+    return 0;
+}
+
+/* called_value's term of the hand kept after a call: (1 - q) * value +
+ * shape_bonus, for a hand c = g less `gone` that is `distance` >= 1 from a
+ * wait and not baotou, a meld open (k0, k1: its shanten_key at y's melds;
+ * closer: r68_closer's, the draws below that distance in its race_draws
+ * row). There race_reshaped hands the hand to race_waiting(y, c, 0, 0,
+ * draws, 0), so far or not the value is race_waiting's, computed here line
+ * for line as race_waiting does past its baotou test, and the bonus as
+ * r68_call_shape does, from the one row:
+ *   - the row: race_analyze_values' improving draws (ascending) and ukeire;
+ *     no draw wins, so no fans, and no fallback (distance >= 1);
+ *   - distance 1: race_waiting's `row.distance == 1` loop with options 0
+ *     (no reshape gain): per improving draw the best race_waiting(.., draws
+ *     - 1, 0) over the discards leaving shanten_keyed <= 0, best starting at
+ *     0.0 and replaced on strictly greater, weighted summed in draw order;
+ *   - distance 2 or more: race_waiting's far step.
+ * Keep in step with race_waiting.
+ *
+ * At distance 1 most discards after a draw are known not to leave a wait
+ * without asking shanten_keyed. With a meld open the distance is the
+ * naturals' shape value less the whites (no seven pairs), which a tile more
+ * never raises (the hand's best split stands, the tile unused) and lowers by
+ * one at most (take the tile from the best split: its meld becomes a partial,
+ * its partial or pair a single). So the hand g less gone, plus tile, less
+ * drop waits only if g less drop plus tile (one tile more) does, that is
+ * only if g less drop is one away too and tile is among its closer draws;
+ * and dropping the tile drawn leaves the hand itself, one away. leave[tile]
+ * holds those discards of g (every discard for a draw g holds four of). */
+static int r68_kept_value(race_ctx *y, int *c, uint64_t k0, uint64_t k1, int distance, uint64_t closer, int gone,
+                          const uint64_t *leave, int draws, double q, double *out) {
+    const race_profile *p = y->p;
+    const int *avail = y->avail;
+    int opened = y->opened, improving[NTILES], n = 0;
+    long ukeire = 0;
+    for (int t = 0; closer >> t; t++) {
+        if (!(closer >> t & 1) || avail[t] <= 0 || c[t] >= 4) continue;
+        improving[n++] = t;
+        ukeire += avail[t];
+    }
+    double unseen = y->unseen, result, speed_q = p->q * y->speed;
+    double u = (double)ukeire / unseen;
+    if (distance == 1) {
+        double weighted = 0.0;
+        for (int i = 0; i < n; i++) {
+            int tile = improving[i];
+            double best = 0.0;
+            if (draws > 1) {
+                uint64_t d0, d1;
+                shanten_key_draw(k0, k1, tile, &d0, &d1);
+                c[tile]++;
+                uint64_t drops = (leave[tile] | 1ULL << gone) & ~(1ULL << tile);
+                for (int drop = 0; drops >> drop; drop++) {
+                    if (!(drops >> drop & 1) || !c[drop]) continue;
+                    c[drop]--;
+                    uint64_t r0, r1;
+                    r68_key_drop(d0, d1, drop, &r0, &r1);
+                    if (shanten_keyed(r0, r1, c, opened) <= 0) {
+                        r68_memo_slot *wait = r68_memo_of(r0, r1);
+                        double value;
+                        if (wait->have & R68_WAIT) {
+                            value = wait->wait;
+                        } else {
+                            if (race_waiting(y, c, 0, 0, draws - 1, 0, &value) < 0) {
+                                c[drop]++;
+                                c[tile]--;
+                                return -1;
+                            }
+                            wait = r68_memo_of(r0, r1);
+                            wait->wait = value;
+                            wait->have |= R68_WAIT;
+                        }
+                        if (value > best) best = value;
+                    }
+                    c[drop]++;
+                }
+                c[tile]--;
+            }
+            weighted += (double)avail[tile] * best;
+        }
+        double stay = (1 - u) * (1 - speed_q);
+        result = (1 - speed_q) * (weighted / unseen) * race_repeat_x(y, stay, draws - 1);
+    } else {
+        double step = (1 - speed_q) * u * race_repeat_x(y, (1 - u) * (1 - speed_q), draws - distance);
+        result = step * p->one_step * pow(p->far_step, (double)(distance - 2));
+    }
+    double v = (1 - q) * result + r68_shape_bonus(c, ukeire, distance);
+    r68_memo_slot *slot = r68_memo_of(k0, k1);
+    slot->kept = v;
+    slot->closer = closer;
+    slot->have |= R68_KEPT;
+    *out = v;
+    return 0;
+}
+
+/* native.c's called_value: the best term over the discards leaving the
+ * nearest hands. Those hands' closer draws are read first (from the memo, or
+ * r68_closer), as each one's tell which discards of the others can leave a
+ * wait (r68_kept_value). */
 static int r68_called_value(race_ctx *y, int *c, int a, int b, int far, int draws, double q, double *out) {
+    int opened = y->opened;
     c[a]--;
     c[b]--;
+    uint64_t k0, k1, r0, r1;
+    shanten_key(c, opened, &k0, &k1);
     double best = 0.0;
-    int rc = 0, near = 99, dist[NTILES];
+    int rc = 0, near = 99, kinds[NTILES], n = 0, dist[NTILES];
     for (int d = 0; d < NTILES; d++) {
         if (!c[d]) continue;
+        r68_key_drop(k0, k1, d, &r0, &r1);
         c[d]--;
-        dist[d] = shanten_raw(c, y->opened);
+        dist[n] = shanten_keyed(r0, r1, c, opened);
         c[d]++;
-        if (dist[d] < near) near = dist[d];
+        if (dist[n] < near) near = dist[n];
+        kinds[n++] = d;
     }
-    for (int d = 0; d < NTILES && rc == 0; d++) {
-        if (!c[d] || dist[d] != near) continue;
-        c[d]--;
-        double v;
-        rc = far ? race_reshaped(y, c, draws, 0, &v) : race_waiting(y, c, 0, 0, draws, 0, &v);
-        double shape = 0.0;
-        if (rc == 0) rc = r68_call_shape(y, c, &shape);
-        c[d]++;
-        if (rc == 0) {
-            v = (1 - q) * v + shape;
-            if (v > best) best = v;
+    /* how: 0 the term is known, 1 by r68_kept_value, 2 by the shared functions */
+    int how[NTILES];
+    uint64_t closer[NTILES], held = 0, unknown = 0;
+    double term[NTILES];
+    for (int i = 0; i < n; i++) {
+        int d = kinds[i];
+        held |= 1ULL << d;
+        if (dist[i] != near) continue;
+        r68_key_drop(k0, k1, d, &r0, &r1);
+        r68_memo_slot *slot = r68_memo_of(r0, r1);
+        if (slot->have & R68_KEPT) {
+            how[i] = 0;
+            term[i] = slot->kept;
+            closer[i] = slot->closer;
+            continue;
         }
+        how[i] = 2;
+        unknown |= 1ULL << d;
+        if (near < 1 || opened < 1) continue;
+        c[d]--;
+        if (!(c[WHITE] && race_baotou_keyed(r0, r1, c, opened))) {
+            int distance;
+            uint64_t row = r68_closer(c, opened, r0, r1, &distance);
+            if (distance == near) {
+                how[i] = 1;
+                closer[i] = row;
+                unknown &= ~(1ULL << d);
+            }
+        }
+        c[d]++;
+    }
+    /* leave[tile]: the discards of g that may leave a wait after that draw. */
+    uint64_t leave[NTILES];
+    if (near == 1) {
+        for (int t = 0; t < NTILES; t++) leave[t] = c[t] < 4 ? unknown : held;
+        for (int i = 0; i < n; i++) {
+            if (dist[i] != near || how[i] == 2) continue;
+            for (int t = 0; closer[i] >> t; t++)
+                if (closer[i] >> t & 1) leave[t] |= 1ULL << kinds[i];
+        }
+    }
+    for (int i = 0; i < n && rc == 0; i++) {
+        if (dist[i] != near) continue;
+        int d = kinds[i];
+        double v = 0.0;
+        if (how[i] == 0) {
+            v = term[i];
+        } else {
+            r68_key_drop(k0, k1, d, &r0, &r1);
+            c[d]--;
+            if (how[i] == 1) rc = r68_kept_value(y, c, r0, r1, near, closer[i], d, leave, draws, q, &v);
+            else rc = r68_kept_shared(y, c, far, draws, q, &v);
+            c[d]++;
+        }
+        if (rc == 0 && v > best) best = v;
     }
     c[a]++;
     c[b]++;
@@ -3325,6 +3614,10 @@ static int r68_call_option(const race_ctx *base, int *c, int opened, int draws, 
     race_ctx y = x;
     y.opened = opened + 1;
     y.size = x.size - 3;
+    r68_memo_bind(base, draws);
+    /* A chi with the run (a, a + 1) takes the tile below it or the one above: valued once. */
+    double run[27];
+    int run_known[27] = {0};
     double unseen = (double)x.unseen, gain = 0.0;
     for (int t = 0; t < WHITE; t++) {
         if (!x.avail[t]) continue;
@@ -3341,7 +3634,15 @@ static int r68_call_option(const race_ctx *base, int *c, int opened, int draws, 
             for (int k = 0; k < 3; k++) {
                 int a = pairs[k][0], b = pairs[k][1];
                 if (a < 0 || b >= 27 || a / 9 != t / 9 || b / 9 != t / 9 || !c[a] || !c[b]) continue;
-                if (r68_called_value(&y, c, a, b, far, draws, q, &v) < 0) return -1;
+                if (b == a + 1 && run_known[a]) {
+                    v = run[a];
+                } else {
+                    if (r68_called_value(&y, c, a, b, far, draws, q, &v) < 0) return -1;
+                    if (b == a + 1) {
+                        run[a] = v;
+                        run_known[a] = 1;
+                    }
+                }
                 if (v - stay_value > best_gain) {
                     best_gain = v - stay_value;
                     best_rate = R68_FEED_CHI[stage][r68_kind(t)];
