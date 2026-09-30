@@ -11,9 +11,9 @@
 | 角色 | 主机 | 用途 |
 | --- | --- | --- |
 | Mac | 本机 | 控制面：冻结源码与教师、写运行计划、启动远端任务、汇总报告；研究评估中的模型座位用 MLX／MPS 推理，不训练 |
-| 4090 | `gpu-4090-wsl` | 模仿阶段（大模型 384/8/8）、RL 方案分支的训练与评估、第一性原理 RL 线的一个尝试位、规模试验与共同大乱斗；大乱斗派到这里时，本机训练进程被暂停，结束后恢复 |
-| 4070 | `gpu-4070-wsl` | 用户的办公机，显卡同时负责桌面显示；正式内网比赛在这里推理。第一性原理 RL 线的一个尝试位（小模型 128/4/4，训练与评估都在本机），对局进程与显存留出余量给桌面（[ADR-0016](../../../../docs/adr/0016-maintainer-iteration-lines.md)）。不跑显存压力探针 |
-| 5070 Ti | `gpu-5070ti-wsl` | 第一性原理 RL 线的一个尝试位（训练与评估都在本机）；为桌面保留 CPU、显存和内存余量 |
+| 4090 | `gpu-4090-wsl` | 第一性原理 RL 线的大规格（384/8/8）尝试位；此前也做模仿阶段、RL 方案分支的训练与评估、规模试验与共同大乱斗（大乱斗派到这里时，本机训练进程被暂停，结束后恢复） |
+| 4070 | `gpu-4070-wsl` | 用户的办公机，显卡同时负责桌面显示；正式内网比赛在这里推理。第一性原理 RL 线的小规格（128/4/4）尝试位（训练与评估都在本机），对局进程与显存留出余量给桌面（[ADR-0016](../../../../docs/adr/0016-maintainer-iteration-lines.md)）。不跑显存压力探针 |
+| 5070 Ti | `gpu-5070ti-wsl` | 第一性原理 RL 线的大规格（384/8/8）尝试位（训练与评估都在本机）；用户借用的机器，开放时段由维护者用 `harness.line hosts` 设定；为桌面保留 CPU、显存和内存余量 |
 
 - 连接由 [`remote.py`](remote.py) 的 `PROFILES` 定义：经 Windows 宿主 SSH，再按主机的分发名与用户进入 WSL；命令按 argv 传递，不拼接 shell。长任务用 `remote.command(..., background_log=...)` 启动，进程脱离 wsl.exe 会话。
 - 4070 与 4090 的项目路径都是 `~/code/leihuo_majiang`，解释器 `~/softwares/miniconda3/envs/py311_cu130/bin/python` 自带 CUDA torch，不要重装 CUDA 环境。统一版本的 numpy 放在 `.local/guided-deps/numpy-2.1.2`，`remote.command` 会自动加进 `PYTHONPATH`，不改共享 Conda 环境。
@@ -49,7 +49,7 @@
 | `trial` / `recipe_jobs` | 训练方案迭代：远端框架在固定时限和显存、内存上限内调用 `recipe.train(ctx)`，对手取研究冻结的评估对手（规则版本按各自运行时隔离运行）；训练出的 Actor 拉回 Mac 交给研究框架评估。Mac 侧任务负责部署、上传方案、脱离运行与轮询，主机不可达时无限期等待，主机重启时记为主机故障、从头重跑 |
 | `platform_replays` / `platform_dataset` | 平台牌谱转成模仿数据（[ADR-0015](../../../../docs/adr/0015-platform-replays-as-training-data.md)）：每手按牌谱的起手牌与摸牌顺序在本地引擎里重放，每个多选决策点取决策方的合法观察，标签是该玩家在平台上的实际动作；摸牌、合法性、每手结算与总分任一处与平台不一致，这一场整场丢弃。`scan` 增量入库并刷新外部玩家实力表 `players.json`，`freeze` 按文件哈希冻结训练清单，`rows` 在训练时现场还原并编码，默认去掉平台代打的超时和我方座位 |
 | `collection` | 采集父进程：CPU worker 打整场，父进程跑所有网络。CUDA 上整个决策（前向、掩码、采样或 argmax、选中动作的对数概率）按模型和补齐形状捕获 CUDA Graph 原地重放（`inference.ActorGraphs`），线性层以 fp16 autocast 计算，输入直接写入固定内存缓冲，答案在同一条流上拷回固定内存后才读（各图共用一个内存池，别的图重放会覆盖设备上的输出）。父进程保持两轮在途：一轮发到设备后先收下一轮请求（`gather_seconds` 内到达的一起攒成更大的批），再读上一轮的答案回复；内置 Critic 或纯模仿时仍走完整批同步执行。每次采集把各阶段耗时与批大小写入运行目录的 `collection.jsonl` |
-| `model_server` / `mlx_actor` / `mlx_runner` | 每台主机一个批量模型服务，按权重 SHA-256 加载 Actor。CUDA 用 Graph，macOS 26+ 的 Apple Silicon 安装 `.[model]` 后自动用 MLX 0.32；较早系统或未安装受支持的 MLX 时用 MPS；可用 `--device mps` 显式选择 Torch 后端。线性层 fp16，embedding、残差和归一化 fp32；冻结权重只转换一次，学习 Actor 保持 fp32 参数。事件循环保留两批在途，Apple 后端按历史长度分组减少补齐，CUDA 轮询完成事件，Apple 等待线程通过管道唤醒。服务每分钟记录累计请求、批次与耗时 |
+| `model_server` / `mlx_actor` / `mlx_runner` | 每台主机一个批量模型服务，按权重 SHA-256 加载 Actor。CUDA 用 Graph，macOS 26+ 的 Apple Silicon 安装 `.[model]` 后自动用 MLX 0.32；较早系统或未安装受支持的 MLX 时用 MPS；可用 `--device mps` 显式选择 Torch 后端。线性层 fp16，embedding、残差和归一化 fp32；冻结权重只转换一次，学习 Actor 保持 fp32 参数。事件循环保留两批在途，Apple 后端按历史长度分组减少补齐，CUDA 轮询完成事件，Apple 等待线程通过管道唤醒。服务每分钟记录累计请求、批次与耗时。模型目录的 `meta.json` 带 `"sampling": {"temperature": T}` 时，该权重按温度采样出牌（CUDA 图内的 Gumbel-max；MLX 后端不支持），用于要保留随机性的对手，例如平台代理对手；采样版本另存一份权重，按自己的 SHA-256 寻址 |
 | `overnight` | 同机启动方式对照（A 直接联合训练，B 先纯模仿再联合训练） |
 | `bc_curve` | 纯模仿时长曲线：定时快照逐个与规则冠军配对评估 |
 | `scale_probe` / `scale_batch` / `scale_study` / `scale_monitor` | 模型规模的资源探针、微批次测量、较长的监督学习对照与只读监控 |

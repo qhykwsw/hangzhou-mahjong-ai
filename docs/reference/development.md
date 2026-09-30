@@ -20,7 +20,7 @@
 
 人工自我对弈项目 `projects/personal/selfplay/` 的训练器直接驱动 `HandState`，不经过候选运行时；它只复用引擎、规则、SDK 与发布流程，见该项目 README 与 [ADR-0009](../adr/0009-independent-selfplay-trainer-for-personal-project.md)。同项目的规则教师指导路线 `guided/` 同样直接驱动 `HandState`，教师以冻结规则包的运行时参与对局，见[训练手册](../../projects/personal/selfplay/guided/README.md)与 [ADR-0011](../adr/0011-rule-guided-policy-learning.md)。训练方案迭代的编排器 `src/mahjong_ai/recipes/` 与规则研究同在工作台服务进程，状态存于该项目 `.local/recipes/`；它为方案分支设计并训练候选（远端由冻结的 `guided/trial.py` 执行），训练好的模型交回研究框架做评估与大乱斗，见 [ADR-0013](../adr/0013-unified-research-branches-and-common-brawl.md)。
 
-策略项目的组织、冻结发布包和跨项目注册见[策略项目](projects.md)。默认自动研究根目录是 `projects/agent-research/`。
+维护者的迭代线（规则线与 RL 线）不走研究框架：`projects/personal/firstprinciples/harness/` 负责固定对手池评估、封存、尝试循环与主机分配，见[项目说明](../../projects/personal/firstprinciples/README.md)与 [ADR-0016](../adr/0016-maintainer-iteration-lines.md)。策略项目的组织、冻结发布包和跨项目注册见[策略项目](projects.md)。默认自动研究根目录是 `projects/agent-research/`。
 
 独立 CLI 的 `rule`、`rl` 是基础策略入口；多方向研究的组合基线由 `strategies/catalog.py` 提供。CLI 的基础吞吐测试不替代各研究组合在冻结对手池上的实际训练和评估测量。
 
