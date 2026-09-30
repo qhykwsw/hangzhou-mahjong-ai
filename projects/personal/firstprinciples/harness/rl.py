@@ -436,6 +436,23 @@ def training_opponents(host_name):
             host.remote_path(pool["runtime_path"]))
 
 
+def prebuild_fastgame(host_name, code, runtime):
+    """Compile the training framework's C engine (guided/native.c) on the host under the pool's runtime.
+
+    Workers load it on their first training game (_fast.load_native, cached
+    per machine by source and runtime); compiled there, the compiler's
+    processes would count against the training's process limit, as the rule
+    packages' own native.c would (RemoteHost.build_packages). Once built, a
+    no-op.
+    """
+    fastgame = code + "/projects/personal/selfplay/guided/fastgame.py"
+    script = ("import subprocess,sys\n"
+              "subprocess.run([sys.executable,'-c','import sys;sys.path.insert(0,sys.argv[1]);"
+              "from mahjong_ai import _fast;_fast.load_native(sys.argv[2])'," + repr(runtime) + "," + repr(fastgame)
+              + "],check=True,capture_output=True)\nprint('built')\n")
+    remote.execute(host_name, script, timeout=900)
+
+
 def origin(state):
     """The version an attempt trains from: None for the fixed start."""
     source = state["base"] if state.get("from") == "best" else state.get("from")
@@ -497,6 +514,7 @@ def train(state):
         # A fresh launch (the first, or after the work was lost): nothing left from an earlier run.
         remote.execute(host, f"import shutil\nshutil.rmtree({remote_job!r}, ignore_errors=True)", timeout=120)
     opponents, offered, runtime = training_opponents(host)
+    prebuild_fastgame(host, setup_["code"], runtime)
     # What this attempt could choose from, as the agent saw it.
     E.atomic_json(job / "catalog.json", catalog_facts())
     hands = state.get("hands") or HANDS

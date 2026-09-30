@@ -67,5 +67,5 @@
   "kl_rows": 20000,
   "tail_average": 0.5,
   "pg_top_layers": 1,
-  "pg_top_layers_until": 0
+  "pg_top_layers_until": 30000000
 }
