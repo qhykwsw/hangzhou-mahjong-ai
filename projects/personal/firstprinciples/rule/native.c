@@ -146,7 +146,8 @@ static PyObject *py_call_option(PyObject *self, PyObject *args) {
 /* The mean over a hand's improving draws (weighted by their live copies) of
  * the best wait each allows, a wait scored by the fan of its live winning
  * draws: a quick proxy for how good a hand one step away is (the runtime's
- * tenpai_route_value, here without the Python wrapper). */
+ * tenpai_route_value; route_value below computes the same over the race's
+ * own discard filter and wait rows). */
 typedef struct {
     uint64_t k0, k1, a0, a1;
     double value;
@@ -158,7 +159,7 @@ static route_slot route_cache[1 << ROUTE_BITS];
 
 /* The same with its live improving tiles, memoised per hand, melds and live
  * tiles (a small direct-mapped table). */
-static double route_value(int *c, const int *avail, int opened);
+static double route_value(race_ctx *x, int *c);
 
 static double route_of(race_ctx *x, int *c, long *ukeire) {
     uint64_t k0, k1;
@@ -174,7 +175,7 @@ static double route_of(race_ctx *x, int *c, long *ukeire) {
     long u = 0;
     for (int t = 0; t < NTILES; t++)
         if (x->avail[t] > 0 && c[t] < 4 && table->draw[t] < table->distance) u += x->avail[t];
-    double v = route_value(c, x->avail, x->opened);
+    double v = route_value(x, c);
     if (x->keyed) {
         slot->k0 = k0; slot->k1 = k1; slot->a0 = x->a0; slot->a1 = x->a1;
         slot->value = v; slot->ukeire = u;
@@ -183,35 +184,37 @@ static double route_of(race_ctx *x, int *c, long *ukeire) {
     return v;
 }
 
-static double route_value(int *c, const int *avail, int opened) {
+static double route_value(race_ctx *x, int *c) {
+    int opened = x->opened;
+    const int *avail = x->avail;
     const draw_slot *table = draw_distances(c, opened);
     if (table->distance != 1) return 0.0;
     uint64_t improving = 0;
     for (int t = 0; t < NTILES; t++)
         if (avail[t] > 0 && c[t] < 4 && table->draw[t] < 1) improving |= (uint64_t)1 << t;
+    /* Only the discards race_swaps admits can leave a wait; the winning
+     * draws and their fans are the race's own wait row. */
+    uint64_t k0, k1, after[NTILES];
+    shanten_key(c, opened, &k0, &k1);
+    race_swaps(c, opened, k0, k1, after);
     long total = 0;
     double weighted = 0.0;
     for (int tile = 0; tile < NTILES; tile++) {
         if (!(improving >> tile & 1)) continue;
+        uint64_t d0, d1;
+        shanten_key_draw(k0, k1, tile, &d0, &d1);
         c[tile]++;
         long best = 0;
-        for (int drop = 0; drop < NTILES; drop++) {
-            if (!c[drop]) continue;
+        uint64_t drops = after[tile];
+        for (int drop = 0; drops >> drop; drop++) {
+            if (!(drops >> drop & 1) || !c[drop]) continue;
+            uint64_t r0, r1;
+            race_key_drop(d0, d1, drop, &r0, &r1);
             c[drop]--;
-            if (shanten_raw(c, opened) > 0) {
-                c[drop]++;
-                continue;
-            }
-            const draw_slot *dest = draw_distances(c, opened);
-            if (dest->distance <= 0) {
-                long value = 0;
-                for (int t = 0; t < NTILES; t++) {
-                    if (avail[t] <= 0 || c[t] >= 4 || dest->draw[t] >= 0) continue;
-                    c[t]++;
-                    value += avail[t] * fan_value(c, t, opened, 0, 0, 0, 0);
-                    c[t]--;
-                }
-                if (value > best) best = value;
+            if (shanten_keyed(r0, r1, c, opened) <= 0) {
+                analysis_row row;
+                race_wait_row(x, c, opened, r0, r1, 0, 0, &row);
+                if (row.value > best) best = row.value;
             }
             c[drop]++;
         }
