@@ -110,6 +110,7 @@ WHITE_PENG = (0.06, 0.03, 0.02)
 # further back on the usual route is still worth more than the race sees.
 SEVEN_PAIR_PENG = 0.05
 FISH_DEPTH = 8  # draws a baotou wait may let go while fishing for piao
+MIMIC = 0.5
 LONG = 16  # more draws of mine than any hand holds
 # At a win holding a white, what simulation says the valuation misses in the
 # gap between going on and winning now (ridge fit over 7916 such windows,
@@ -117,6 +118,43 @@ LONG = 16  # more draws of mine than any hand holds
 # left /16, 12 draws or more, the opponents' speed, a win worth two fan or
 # more, two melds or more.
 CONTINUE_SHIFT = (-0.417, -0.169, 0.833, -0.182, 0.112, -0.107, -0.083)
+
+
+# Distilled from RL fp-rl-112's discards (conditional logit over 100,431 of this
+# line's own discard decisions): next to this line's value (first weight), the
+# weights of the kept hand's shape and of the discarded tile's kind, alone and
+# with a white held, late in the hand and with melds out. A discard's value gets
+# MIMIC times their sum, in value units.
+MIMIC_WEIGHTS = (12.07424, -21.50168, 5.17406, -2.61723, -0.13037, 2.33058, 3.67273, -3.96270, -1.20612, 1.96853, 0.29954, 0.25531, 2.21583, 1.92847, 0.88114, 1.17634, -1.51741, 0.25293, 0.13306, -1.00701, 0.04009, 0.73132, -0.35830, 0.31570, 0.36217, -0.89332, 0.00817, -1.37332, 0.05249, 0.04338, -0.04022, 1.07465, 0.97234, 2.60352, -1.74300, -0.63231, 0.86518, 2.10580, -0.00184, -0.57836, -0.43935, -0.49518, -1.61133, -2.35906, -1.25093, -1.09613, -2.66601, 0.35719, 1.94601, -1.87869, 0.57157, -0.24584, 0.89032, 0.20651, -0.81745, -0.11285, 0.17953, -0.63445, -0.17978, 0.04245, -0.67540)
+
+
+def mimic_features(rest, opened, available, tile, held):
+    c = list(_fast.counts(rest))
+    row = _fast.analyze_counts(list(c), opened, available, 0, 0, 0)
+    dist, improving, ukeire = row[0], row[1], row[4]
+    wincp = row[5] if dist == 0 else 0
+    pairs = sum(1 for t in range(33) if c[t] >= 2)
+    trips = sum(1 for t in range(33) if c[t] >= 3)
+    isoh = sum(1 for t in range(27, 33) if c[t] == 1)
+    isos = sum(1 for t in range(27) if c[t] == 1 and not any(0 <= u < 27 and u // 9 == t // 9 and c[u] for u in (t - 2, t - 1, t + 1, t + 2)))
+    adj = sum(1 for t in range(27) if t % 9 <= 7 and c[t] and c[t + 1])
+    edge = sum(1 for t in range(27) if t % 9 in (0, 7) and c[t] and c[t + 1])
+    gap = sum(1 for t in range(27) if t % 9 <= 6 and c[t] and c[t + 2] and not c[t + 1])
+    kind = 0 if tile >= 27 else 1 if tile % 9 in (0, 8) else 2 if tile % 9 in (1, 7) else 3
+    seen = 4 - available[tile] - held[tile]
+    return [dist, ukeire / 10, len(improving) / 5, wincp / 5, pairs, trips, isoh, isos, adj, edge, gap, kind == 0, kind == 1, kind == 2, seen]
+
+
+def mimic_shift(obs, tile, opened, available):
+    held = _fast.counts(tuple(obs.hand))
+    rest = list(obs.hand)
+    rest.remove(tile)
+    base = mimic_features(tuple(sorted(rest)), opened, available, tile, held)
+    w = 1.0 if held[WHITE] else 0.0
+    late = max(0.0, (60 - obs.wall_remaining) / 40)
+    op = min(opened, 2) / 2
+    x = base + [f * w for f in base] + [f * late for f in base] + [f * op for f in base]
+    return MIMIC * sum(b * f for b, f in zip(MIMIC_WEIGHTS[1:], x)) / (10 * MIMIC_WEIGHTS[0])
 
 
 def tenpai_hazard(draws, speed=1.0):
@@ -525,6 +563,9 @@ class Race:
         for i, a in enumerate(obs.legal_actions):
             if a.action == "discard" and values[i] * OPTION_REACH >= top:
                 values[i] = self.value(obs, a, opened, available, True, speed, at_win)
+        if not at_win and obs.phase == "draw" and not any(a.action == "gang" for a in obs.legal_actions):
+            values = [v + mimic_shift(obs, a.tile, opened, available) if a.action == "discard" else v
+                      for a, v in zip(obs.legal_actions, values)]
         if at_win and WHITE in obs.hand:
             shift = self.continue_shift(obs, opened, speed)
             values = [v if a.action == "hu" else v + shift for a, v in zip(obs.legal_actions, values)]
