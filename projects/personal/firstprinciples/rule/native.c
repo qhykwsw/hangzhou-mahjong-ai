@@ -413,10 +413,87 @@ static PyObject *py_call_net(PyObject *self, PyObject *args) {
     return scores;
 }
 
+/* mimic_features(held, opened, available, tile): the hand kept after discarding tile, as the
+ * distilled discard correction reads it (strategy.mimic_features): steps, live
+ * improving copies, improving kinds, winning copies, pairs, triplets, lone
+ * honors and suit tiles, adjacent, edge and gapped pairs, the discard's kind
+ * and seen copies, and for a hand one or two steps away the live copies of
+ * draws reaching a wait of five or more copies and the mean best next level. */
+static PyObject *py_mimic_features(PyObject *self, PyObject *args) {
+    PyObject *held_obj, *available;
+    int opened, tile, c[NTILES], av[NTILES], held[NTILES];
+    if (!PyArg_ParseTuple(args, "OiOi", &held_obj, &opened, &available, &tile)) return NULL;
+    if (parse_counts(held_obj, held) < 0 || parse_vector(available, av, 4, "available") < 0) return NULL;
+    if (tile < 0 || tile >= NTILES || !held[tile]) {
+        PyErr_SetString(PyExc_ValueError, "tile must be held");
+        return NULL;
+    }
+    memcpy(c, held, sizeof c);
+    c[tile]--;
+    analysis_row row;
+    analyze_values(c, av, opened, 0, 0, 0, &row);
+    int dist = row.distance;
+    long wincp = dist == 0 ? row.copies : 0;
+    int pairs = 0, trips = 0, isoh = 0, isos = 0, adj = 0, edge = 0, gap = 0;
+    for (int t = 0; t < 33; t++) {
+        if (c[t] >= 2) pairs++;
+        if (c[t] >= 3) trips++;
+    }
+    for (int t = 27; t < 33; t++)
+        if (c[t] == 1) isoh++;
+    for (int t = 0; t < 27; t++) {
+        if (c[t] == 1) {
+            int near = 0;
+            for (int u = t - 2; u <= t + 2 && !near; u++)
+                if (u != t && u >= 0 && u < 27 && u / 9 == t / 9 && c[u]) near = 1;
+            if (!near) isos++;
+        }
+        if (t % 9 <= 7 && c[t] && c[t + 1]) {
+            adj++;
+            if (t % 9 == 0 || t % 9 == 7) edge++;
+        }
+        if (t % 9 <= 6 && c[t] && c[t + 2] && !c[t + 1]) gap++;
+    }
+    int kind = tile >= 27 ? 0 : (tile % 9 == 0 || tile % 9 == 8) ? 1 : (tile % 9 == 1 || tile % 9 == 7) ? 2 : 3;
+    int seen = 4 - av[tile] - held[tile];
+    double good = 0.0, avgw = 0.0, tot = 0.0;
+    if (dist == 1 || dist == 2) {
+        for (int i = 0; i < row.n_improving; i++) {
+            int t = row.improving[i];
+            if (av[t] <= 0) continue;
+            c[t]++;
+            long best = -1;
+            for (int x = 0; x < 33; x++) {
+                if (c[x] && (x != t || c[x] > 1)) {
+                    c[x]--;
+                    analysis_row rr;
+                    analyze_values(c, av, opened, 0, 0, 0, &rr);
+                    if (rr.distance == dist - 1) {
+                        long q = dist == 1 ? rr.copies : rr.ukeire;
+                        if (q > best) best = q;
+                    }
+                    c[x]++;
+                }
+            }
+            c[t]--;
+            if (best >= 0) {
+                tot += av[t];
+                avgw += av[t] * (double)best;
+                if (dist == 1 && best >= 5) good += av[t];
+            }
+        }
+        avgw = tot > 0 ? avgw / tot : 0.0;
+    }
+    return Py_BuildValue("(ddddddddddddddddd)", (double)dist, row.ukeire / 10.0, row.n_improving / 5.0, wincp / 5.0,
+                         (double)pairs, (double)trips, (double)isoh, (double)isos, (double)adj, (double)edge, (double)gap,
+                         (double)(kind == 0), (double)(kind == 1), (double)(kind == 2), (double)seen, good / 10.0, avgw / 10.0);
+}
+
 static PyMethodDef native_methods[] = {
     {"race_profile", py_race_profile, METH_VARARGS,
      "Register a race profile in this module's own table (the runtime's ids do not carry over)."},
     {"shape_constants", py_shape_constants, METH_VARARGS, "Set the strategy's shape correction constants."},
+    {"mimic_features", py_mimic_features, METH_VARARGS, "mimic_features(held, opened, available, tile): the distilled correction's features."},
     {"call_net", py_call_net, METH_VARARGS,
      "call_net(held, opened, available, options, wall, dealer, ahead): each response option's distilled score."},
     {"feed_rate", py_feed_rate, METH_VARARGS,

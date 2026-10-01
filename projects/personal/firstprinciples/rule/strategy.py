@@ -121,41 +121,33 @@ LONG = 16  # more draws of mine than any hand holds
 CONTINUE_SHIFT = (-0.417, -0.169, 0.833, -0.182, 0.112, -0.107, -0.083)
 
 
-# Distilled from RL fp-rl-112's discards (conditional logit over 100,431 of this
-# line's own discard decisions): next to this line's value (first weight), the
-# weights of the kept hand's shape and of the discarded tile's kind, alone and
-# with a white held, late in the hand and with melds out. A discard's value gets
-# MIMIC times their sum, in value units.
-MIMIC_WEIGHTS = (12.07424, -21.50168, 5.17406, -2.61723, -0.13037, 2.33058, 3.67273, -3.96270, -1.20612, 1.96853, 0.29954, 0.25531, 2.21583, 1.92847, 0.88114, 1.17634, -1.51741, 0.25293, 0.13306, -1.00701, 0.04009, 0.73132, -0.35830, 0.31570, 0.36217, -0.89332, 0.00817, -1.37332, 0.05249, 0.04338, -0.04022, 1.07465, 0.97234, 2.60352, -1.74300, -0.63231, 0.86518, 2.10580, -0.00184, -0.57836, -0.43935, -0.49518, -1.61133, -2.35906, -1.25093, -1.09613, -2.66601, 0.35719, 1.94601, -1.87869, 0.57157, -0.24584, 0.89032, 0.20651, -0.81745, -0.11285, 0.17953, -0.63445, -0.17978, 0.04245, -0.67540)
+# Distilled from RL fp-rl-112's discards (conditional logits over 200,328 of
+# fp-rule-113's own discard decisions, one per best reachable steps: 0, 1, 2, 3+):
+# next to this line's value (first weight), the weights of the kept hand's shape
+# (native.c: mimic_features) and of the discarded tile's kind, alone and with a
+# white held, late in the hand and with melds out. A discard's value gets MIMIC
+# times their sum, in value units.
+MIMIC_WEIGHTS = (
+    (8.49804, -2.82415, 0.13226, 2.66164, 3.46129, 1.50783, 2.49394, -1.01515, -0.16094, 1.38564, -0.67288, -0.37826, 0.35961, 1.36882, 0.98300, 0.47412, -1.42470, -1.01132, -1.45497, -0.43071, -1.05968, -2.98879, 0.21718, 0.79259, -0.44034, -0.04730, -0.14254, -0.28562, 0.22294, 0.18813, 0.00558, -0.27585, -0.00393, 1.06450, 0.25085, 0.15255, -0.72849, 0.27882, -0.90991, 1.00490, 0.73153, 0.04974, -0.30781, 0.98706, 0.59105, 0.63799, 0.79359, -0.43611, -0.57394, 0.04654, -0.20590, 0.04795, -0.64761, 0.40493, -0.89147, -0.38804, 0.46558, 1.02809, -0.59225, 0.33661, 0.21520, -0.09084, 0.68030, -0.10176, -0.09091, -0.05132, 0.05946, 0.72457, 0.21139),
+    (10.97233, -1.06045, 1.59918, 0.72562, 0.00000, 2.84223, 3.61476, -2.99149, -0.35018, 2.40768, -0.31287, 0.63956, 1.06874, 1.59796, 0.58406, 0.54468, 5.95084, 2.07496, 0.43510, 0.68317, -1.47343, 0.00000, -0.06022, 0.23083, -0.21064, -0.18405, -0.26723, -0.09159, -0.23991, -0.17750, 0.26362, 0.23558, 0.17382, -2.58205, 3.10883, -0.16088, -0.48300, 0.48468, 0.00000, -0.29341, 0.18381, 0.21072, -0.78329, 0.84392, -0.75444, -0.00580, -0.63672, -1.08319, -0.91898, -0.64059, 0.25130, -0.63987, 0.48470, 0.61727, -0.57247, 0.00000, 1.78258, -0.76248, 0.42601, -0.42122, -0.07502, 0.19266, 0.24357, 0.62695, 0.25245, 0.25822, -0.02892, -0.45671, 1.24652),
+    (38.28590, -11.65169, 4.57407, -3.20465, 0.00000, 3.01443, 1.82548, -3.93259, -1.11880, -0.22298, 1.58098, -0.08617, 2.80829, 2.68201, 1.38190, 0.83202, 0.00000, -1.28703, -2.76498, 2.37974, -1.97332, 0.00000, 1.33193, 0.07615, 0.18513, 0.17085, 0.45586, -0.43426, 0.03923, -0.19616, 0.43945, 0.32297, -0.03911, 0.00000, 0.07045, 0.04374, 0.84779, 0.72043, 0.00000, 0.22509, 0.04196, 0.39141, -0.94427, -0.54932, -0.29774, 0.52868, -0.42482, -1.36019, -0.36418, -1.71356, 0.00000, -0.49572, -2.56563, 1.21863, -0.26418, 0.00000, 1.70359, 0.02971, 0.29175, -0.23315, -0.49127, -0.11170, -0.55583, -0.12680, 0.23240, 0.08856, -0.16778, 0.00000, -0.19175),
+    (147.94558, -0.06125, 1.91347, -2.23011, 0.00000, 0.52381, -2.13582, -3.53971, -0.91679, -1.22770, 0.10889, 0.45657, 4.15390, 3.36319, 1.53247, 2.02909, 0.00000, 0.00000, -0.00149, 1.34472, 0.67094, 0.00000, 0.00000, -0.43225, -0.21757, -0.58585, 1.32288, 1.32032, 0.17601, 0.61791, 0.06106, -0.75331, 0.69094, 0.00000, 0.00000, -0.00051, -0.07879, -0.00949, 0.00000, 0.00004, 0.00000, -0.02611, 0.11148, -0.19975, -0.20046, 0.09546, 0.02611, 0.26575, -0.05760, -0.92275, 0.00000, 0.00000, 0.00206, 0.17307, 0.19860, 0.00000, -0.00456, 0.11196, 0.45359, -0.11117, 0.29294, 0.29079, -0.70431, -0.45360, -0.14910, 0.07923, -1.70450, 0.00000, 0.00000),
+)
 
 
-def mimic_features(rest, opened, available, tile, held):
-    c = list(_fast.counts(rest))
-    row = _fast.analyze_counts(list(c), opened, available, 0, 0, 0)
-    dist, improving, ukeire = row[0], row[1], row[4]
-    wincp = row[5] if dist == 0 else 0
-    pairs = sum(1 for t in range(33) if c[t] >= 2)
-    trips = sum(1 for t in range(33) if c[t] >= 3)
-    isoh = sum(1 for t in range(27, 33) if c[t] == 1)
-    isos = sum(1 for t in range(27) if c[t] == 1 and not any(0 <= u < 27 and u // 9 == t // 9 and c[u] for u in (t - 2, t - 1, t + 1, t + 2)))
-    adj = sum(1 for t in range(27) if t % 9 <= 7 and c[t] and c[t + 1])
-    edge = sum(1 for t in range(27) if t % 9 in (0, 7) and c[t] and c[t + 1])
-    gap = sum(1 for t in range(27) if t % 9 <= 6 and c[t] and c[t + 2] and not c[t + 1])
-    kind = 0 if tile >= 27 else 1 if tile % 9 in (0, 8) else 2 if tile % 9 in (1, 7) else 3
-    seen = 4 - available[tile] - held[tile]
-    return [dist, ukeire / 10, len(improving) / 5, wincp / 5, pairs, trips, isoh, isos, adj, edge, gap, kind == 0, kind == 1, kind == 2, seen]
-
-
-def mimic_shift(obs, tile, opened, available):
+def mimic_shifts(obs, tiles, opened, available):
+    """The distilled correction of each discard, by the weights of the decision's level."""
     held = _fast.counts(tuple(obs.hand))
-    rest = list(obs.hand)
-    rest.remove(tile)
-    base = mimic_features(tuple(sorted(rest)), opened, available, tile, held)
     w = 1.0 if held[WHITE] else 0.0
     late = max(0.0, (60 - obs.wall_remaining) / 40)
     op = min(opened, 2) / 2
-    x = base + [f * w for f in base] + [f * late for f in base] + [f * op for f in base]
-    return MIMIC * sum(b * f for b, f in zip(MIMIC_WEIGHTS[1:], x)) / (10 * MIMIC_WEIGHTS[0])
+    rows = [list(native.mimic_features(held, opened, available, tile)) for tile in tiles]
+    weights = MIMIC_WEIGHTS[min(3, int(min(r[0] for r in rows)))]
+    out = []
+    for base in rows:
+        x = base + [f * w for f in base] + [f * late for f in base] + [f * op for f in base]
+        out.append(MIMIC * sum(b * f for b, f in zip(weights[1:], x)) / (10 * weights[0]))
+    return out
 
 
 # Distilled from RL fp-rl-112's responses: a small network (native.c: call_net)
@@ -583,8 +575,11 @@ class Race:
             if a.action == "discard" and values[i] * OPTION_REACH >= top:
                 values[i] = self.value(obs, a, opened, available, True, speed, at_win)
         if not at_win and obs.phase == "draw" and not any(a.action == "gang" for a in obs.legal_actions):
-            values = [v + mimic_shift(obs, a.tile, opened, available) if a.action == "discard" else v
-                      for a, v in zip(obs.legal_actions, values)]
+            discards = [i for i, a in enumerate(obs.legal_actions) if a.action == "discard"]
+            if discards:
+                shifts = mimic_shifts(obs, [obs.legal_actions[i].tile for i in discards], opened, available)
+                for i, s in zip(discards, shifts):
+                    values[i] += s
         if obs.phase.startswith("response") and all(a.action in ("pass", "chi", "peng") for a in obs.legal_actions):
             values = [v + s for v, s in zip(values, call_shifts(obs, opened, available))]
         if at_win and WHITE in obs.hand:
