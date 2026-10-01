@@ -51,7 +51,15 @@ from mahjong_ai.sdk.shape import analyze, remaining_tiles
 
 Q = 0.15  # an opponent self-draws during the three draws between two of mine
 DRAW_RISK = 1 - (1 - Q) ** (1 / 3)  # the same, for one opponent's draw
-SAVED = 0.467  # my win cancels the payment to another winner, in fan units
+SAVED = 0.467  # my win cancels the payment to another winner, in fan units (set per hand below)
+# What my win is worth beyond its fan, against another player's win, in fan
+# units of my own win: the payment it saves (the pool's winners average 1.52
+# fan; as dealer I pay 8 to any winner, otherwise 8 to the dealer and 1 to the
+# others, and the dealer wins a little more often), plus the next hand as
+# dealer, which the winner takes (measured: a hand as dealer is worth 1.0
+# point more than one as another player), except in the game's last hand.
+# By (dealer, last hand).
+SAVED_BY_ROLE = {(True, False): 0.54, (False, False): 0.63, (True, True): 0.50, (False, True): 0.53}
 ONE_STEP = 0.22  # typical value of a hand one step from waiting
 FAR_STEP = 0.45  # discount for each further step
 KONG_TILES = {"concealed": 4, "exposed": 3, "added": 1}
@@ -130,14 +138,18 @@ def opponent_speed(obs, draws):
 
 # The valuation above, run by the SDK's C race valuation with this line's
 # constants: completed waits and a guard for no draws left switched on.
-PROFILE = _fast.race_profile(
-    Q, SAVED, ONE_STEP, FAR_STEP, Q_EARLY, Q_LATE, 1.0, True, DRAW_RISK, TIE, LAST_WALL, 0, True, True
-)
+PROFILES = {
+    saved: _fast.race_profile(Q, saved, ONE_STEP, FAR_STEP, Q_EARLY, Q_LATE, 1.0, True, DRAW_RISK, TIE, LAST_WALL, 0, True, True)
+    for saved in (SAVED, *SAVED_BY_ROLE.values())
+}
+PROFILE = PROFILES[SAVED]
 # This line's own C (native.c) keeps its own table of race profiles.
 native = _fast.load_native(__file__)
-NATIVE_PROFILE = native.race_profile(
-    Q, SAVED, ONE_STEP, FAR_STEP, Q_EARLY, Q_LATE, 1.0, True, DRAW_RISK, TIE, LAST_WALL, 0, True, True
-)
+NATIVE_PROFILES = {
+    saved: native.race_profile(Q, saved, ONE_STEP, FAR_STEP, Q_EARLY, Q_LATE, 1.0, True, DRAW_RISK, TIE, LAST_WALL, 0, True, True)
+    for saved in (SAVED, *SAVED_BY_ROLE.values())
+}
+NATIVE_PROFILE = NATIVE_PROFILES[SAVED]
 # The call option weighs hands with the same shape correction the decisions use.
 native.shape_constants(SHAPE_PAIR, SHAPE_ADJACENT, SHAPE_UKEIRE, SHAPE_DISTANCE, SHAPE_OPEN, SHAPE_EDGE)
 
@@ -160,7 +172,7 @@ def reshaped_value(hand, opened, available, draws, options=True, speed=1.0):
 
 
 @lru_cache(maxsize=2000)
-def piao_value(hand, opened, available, chain, piao, draws, speed=1.0, fish=False, pungs=(), stage=1, chis=0):
+def piao_value(hand, opened, available, chain, piao, draws, speed=1.0, fish=False, pungs=(), stage=1, chis=0, saved=SAVED):
     """A baotou wait holding a spare white: each draw either wins now or, when
     a white discard keeps baotou, scores piao and waits on at double fan. At a
     win (fish) a kong that keeps baotou doubles too, an opponent's discard I
@@ -178,29 +190,29 @@ def piao_value(hand, opened, available, chain, piao, draws, speed=1.0, fish=Fals
             continue
         kong = fish and (held[tile] == 3 or tile in pungs)
         held[tile] += 1
-        now = _fast.fan_value(held, tile, opened, chain, piao, False, False) + SAVED
+        now = _fast.fan_value(held, tile, opened, chain, piao, False, False) + saved
         best = now
         if kong:
             # A kong keeping baotou: its replacement draw wins at double fan.
             after = list(held)
             after[tile] -= 4 if held[tile] == 4 and tile not in pungs else 1
             if _fast.baotou(after, opened + (0 if tile in pungs else 1)):
-                best = max(best, 2 * (now - SAVED) + SAVED)
+                best = max(best, 2 * (now - saved) + saved)
         if held[WHITE] >= 2:
             held[WHITE] -= 1
             if _fast.baotou(held, opened):
                 rest = sorted((*hand, tile))
                 rest.remove(WHITE)
                 rest = tuple(rest)
-                later = _fast.race_waiting(rest, opened, available, chain + 1, piao + 1, draws - 1, PROFILE, analyze, False, speed)
+                later = _fast.race_waiting(rest, opened, available, chain + 1, piao + 1, draws - 1, PROFILES[saved], analyze, False, speed)
                 if held[WHITE] >= 2 and draws > 2:
-                    later = max(later, piao_value(rest, opened, available, chain + 1, piao + 1, draws - 1, speed, fish, pungs, stage, chis))
+                    later = max(later, piao_value(rest, opened, available, chain + 1, piao + 1, draws - 1, speed, fish, pungs, stage, chis, saved))
                 best = max(now, (1 - q) * later)
             held[WHITE] += 1
         held[tile] -= 1
         options.append((available[tile], now, best))
         total += available[tile] * best
-    calls = piao_calls(hand, opened, available, chain, piao, draws, speed, pungs, stage, chis) if fish else ()
+    calls = piao_calls(hand, opened, available, chain, piao, draws, speed, pungs, stage, chis, saved) if fish else ()
 
     def called(value):
         """The value after my discard: a call that scores piao is taken."""
@@ -215,7 +227,7 @@ def piao_value(hand, opened, available, chain, piao, draws, speed=1.0, fish=Fals
     return called(value)
 
 
-def piao_calls(hand, opened, available, chain, piao, draws, speed, pungs, stage, chis):
+def piao_calls(hand, opened, available, chain, piao, draws, speed, pungs, stage, chis, saved=SAVED):
     """The opponents' discards a baotou wait with a spare white can chi or peng
     and stay baotou once the white goes (a piao): each tile's chance per round
     at its measured feed rate, and the wait it leaves."""
@@ -242,9 +254,9 @@ def piao_calls(hand, opened, available, chain, piao, draws, speed, pungs, stage,
             rest = tuple(rest)
             if not _fast.baotou(list(_fast.counts(rest)), opened + 1):
                 continue
-            worth = _fast.race_waiting(rest, opened + 1, available, chain + 1, piao + 1, draws, PROFILE, analyze, False, speed)
+            worth = _fast.race_waiting(rest, opened + 1, available, chain + 1, piao + 1, draws, PROFILES[saved], analyze, False, speed)
             if rest.count(WHITE) >= 2 and draws > 1:
-                worth = max(worth, piao_value(rest, opened + 1, available, chain + 1, piao + 1, draws, speed, True, kept, stage, chi_count))
+                worth = max(worth, piao_value(rest, opened + 1, available, chain + 1, piao + 1, draws, speed, True, kept, stage, chi_count, saved))
             if best is None or worth > best[1]:
                 best = (rate * available[tile] / unseen, worth)
         if best is not None:
@@ -261,7 +273,7 @@ def piao_gain(hand, opened, available, draws, speed, pungs=(), stage=1, chis=0):
     if is_baotou(hand, opened):
         if hand.count(WHITE) < 2:
             return 0.0
-        return piao_value(hand, opened, available, 0, 0, draws, speed, True, pungs, stage, chis) - waiting_value(hand, opened, available, draws=draws, speed=speed)
+        return piao_value(hand, opened, available, 0, 0, draws, speed, True, pungs, stage, chis, SAVED) - waiting_value(hand, opened, available, draws=draws, speed=speed)
     held = list(_fast.counts(hand))
     row = _fast.analyze_counts(held, opened, available, 0, 0, 0)
     if row[0] > 0:
@@ -286,7 +298,7 @@ def piao_gain(hand, opened, available, draws, speed, pungs=(), stage=1, chis=0):
                 rest.remove(drop)
                 rest = tuple(rest)
                 v = waiting_value(rest, opened, available, draws=draws - 1, speed=speed)
-                vp = piao_value(rest, opened, available, 0, 0, draws - 1, speed) if rest.count(WHITE) >= 2 else v
+                vp = piao_value(rest, opened, available, 0, 0, draws - 1, speed, saved=SAVED) if rest.count(WHITE) >= 2 else v
                 best, best_p = max(best, v), max(best_p, vp)
             held[drop] += 1
         held[tile] -= 1
@@ -302,12 +314,12 @@ def piao_gain(hand, opened, available, draws, speed, pungs=(), stage=1, chis=0):
 
 
 @lru_cache(maxsize=4096)
-def call_option(hand, opened, available, draws, stage, chis):
+def call_option(hand, opened, available, draws, stage, chis, saved=SAVED):
     """What a hand not yet waiting gains from the calls it can make: each tile a
     pair of mine can peng, or two neighbours of mine can chi from my left, comes
     at its measured rate per round (native.c), and is taken when the best hand
     the call keeps beats staying as I am, over the rounds the hand stays as it is."""
-    return native.call_option(hand, opened, available, draws, stage, chis, NATIVE_PROFILE, analyze, Q, CALL_WEIGHT)
+    return native.call_option(hand, opened, available, draws, stage, chis, NATIVE_PROFILES[saved], analyze, Q, CALL_WEIGHT)
 
 
 def shape_bonus(rest, opened, available, full):
@@ -373,7 +385,7 @@ class Race:
             return (1 - DRAW_RISK) ** ahead * waiting_value(
                 tuple(hand), opened, available, obs.chain_count, obs.piao_count, draws
             ) + shape_bonus(tuple(sorted(hand)), opened, available, True) + call_option(
-                tuple(sorted(hand)), opened, available, draws, stage, chis
+                tuple(sorted(hand)), opened, available, draws, stage, chis, SAVED
             )
         if action.action == "discard":
             rest = tuple(sorted(without(hand, action.tile)))
@@ -390,7 +402,7 @@ class Race:
                     value += piao_gain(rest, opened, available, draws, speed, pungs, stage, chis)
             value = (1 - Q * speed) * value + TIE * potential(rest, available)
             if not at_win:
-                called = call_option(rest, opened, available, draws, stage, chis)
+                called = call_option(rest, opened, available, draws, stage, chis, SAVED)
                 value += shape_bonus(rest, opened, available, True) + (1 - Q * speed) * called
             return value
         if action.action in ("peng", "chi"):
@@ -412,7 +424,7 @@ class Race:
                         value,
                         waiting_value(rest, opened + 1, available, chain, piao, draws),
                     )
-            called = call_option(kept, opened + 1, available, draws, stage, chis + (action.action == "chi"))
+            called = call_option(kept, opened + 1, available, draws, stage, chis + (action.action == "chi"), SAVED)
             cost = 0.0
             if action.action == "chi" and opened == 0:
                 distance = _fast.shanten_raw(list(_fast.counts(kept)), opened + 1)
@@ -427,7 +439,7 @@ class Race:
             shape = shape_bonus(rest, after, available, True)
             if row["shanten"] > 0:
                 return waiting_value(rest, after, available, draws=draws, speed=speed) + shape + call_option(
-                    rest, after, available, draws, stage, chis
+                    rest, after, available, draws, stage, chis, SAVED
                 )
             # The replacement draw comes at once and carries the kong's doubling.
             unseen = max(1, sum(available))
@@ -458,6 +470,10 @@ class Race:
         return None
 
     def act(self, obs):
+        global SAVED, PROFILE, NATIVE_PROFILE
+        last = obs.stage.round_no >= obs.stage.rounds_total
+        SAVED = SAVED_BY_ROLE[(obs.stage.dealer == obs.stage.seat, last)]
+        PROFILE, NATIVE_PROFILE = PROFILES[SAVED], NATIVE_PROFILES[SAVED]
         available = remaining_tiles(obs)
         opened = len(obs.melds[obs.stage.seat])
         speed = 1.0
