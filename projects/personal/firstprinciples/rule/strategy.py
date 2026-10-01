@@ -91,6 +91,9 @@ OPEN_CHI = (0.10, 0.03)
 # peng there is worth more than the race sees, for each pair beyond two, by the
 # hand's steps from waiting (one, two or more).
 PAIR_PENG = (0.06, 0.02)
+# When seven pairs is the hand's shortest route, a peng that sets it one step
+# further back on the usual route is still worth more than the race sees.
+SEVEN_PAIR_PENG = 0.05
 FISH_DEPTH = 8  # draws a baotou wait may let go while fishing for piao
 LONG = 16  # more draws of mine than any hand holds
 # At a win holding a white, what simulation says the valuation misses in the
@@ -438,6 +441,8 @@ class Race:
                 steps = _fast.shanten_raw(list(held), 0)
                 extra = max(0, sum(1 for t in range(33) if held[t] >= 2) - 2)
                 cost = -extra * (PAIR_PENG[0] if steps == 1 else PAIR_PENG[1] if steps >= 2 else 0.0)
+                if _fast.shanten_raw(list(_fast.counts(kept)), opened + 1) > steps:
+                    cost -= SEVEN_PAIR_PENG
             return (1 - Q) * value + shape_bonus(kept, opened + 1, available, True) + (1 - Q) * called - cost
         if action.action == "gang":
             for _ in range(KONG_TILES[action.kind]):
