@@ -63,6 +63,23 @@ def gradient(actor, rows, weights, size, device, *, batch_source=None, capture=F
     return params, total
 
 
+def tempered(temperature):
+    """A sample hook drawing from softmax(logits / temperature) over the legal actions.
+
+    A sharp policy almost never tries its unlikely actions, so the playouts
+    never learn whether they are better. Each deviation's advantage is exact
+    against the argmax continuation whatever drew it, so the rows keep their
+    weight (no importance ratio): a better action is pushed up as soon as it
+    is tried, not only as often as the current policy would try it.
+    """
+    def sample(logits, mask):
+        logp = torch.log_softmax(logits.float().masked_fill(~mask, -1e9) / temperature, dim=-1)
+        actions = torch.multinomial(logp.exp(), 1).squeeze(1)
+        return actions, logp.gather(1, actions[:, None]).squeeze(1)
+
+    return sample
+
+
 def kl_step(actor, params, direction, batches, goal):
     """Move params to start + eta * direction with KL(start || new) ~= goal."""
     start = [p.detach().clone() for p in params]
@@ -167,6 +184,8 @@ def train(ctx):
     opt = torch.optim.Adam(actor.parameters(), lr=float(cfg["distill_learning_rate"]), eps=1e-5)
     permuter = SuitPermuter(ctx.device)
     chunks = max(1, int(cfg["chunks_per_step"]))
+    temperature = float(cfg.get("sample_temperature", 1.0))
+    sampler = tempered(temperature) if temperature != 1.0 else None
     step, iteration, rollouts, last = 0, 0, 0, 0.0
     hands = lambda: ctx.hands_left() is None or ctx.hands_left() > 0  # noqa: E731
     # Near the optimum each KL step moves the policy along its noise as much as
@@ -188,6 +207,7 @@ def train(ctx):
                     actor, collect_cfg if distilling else pg_cfg, samples=min(40000, target_rows),
                     iteration=iteration,
                     labels=distilling, inference_session=session,
+                    hooks=None if distilling or sampler is None else {"sample": sampler},
                 )
                 rows += got
         if not rows or (len(rows) < target_rows and hands()):
