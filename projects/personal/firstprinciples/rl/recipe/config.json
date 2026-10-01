@@ -16,5 +16,6 @@
   "playout_baseline": true,
   "tail_average": 0.5,
   "pg_top_layers": 1,
-  "sample_temperature": 1.5
+  "sample_temperature": 1.5,
+  "step_kl_start": 0.03
 }

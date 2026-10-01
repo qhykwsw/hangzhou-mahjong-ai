@@ -298,8 +298,16 @@ def train(ctx):
         step += 1
         direction = [d / len(parts) for d in direction]
         stats = {key: float(np.mean([p[key] for p in parts])) for key in parts[0]}
-        stats |= kl_step(actor, params, direction, batches, float(cfg["step_kl"]))
         left = ctx.hands_left() if ctx.hands_left() is not None else ctx.time_left()
+        # Heat, then cool: the step KL falls linearly from step_kl_start to
+        # step_kl over the policy-gradient budget, so the early large steps can
+        # leave a local optimum the small ones then settle.
+        goal = float(cfg["step_kl"])
+        if cfg.get("step_kl_start"):
+            done = min(1.0, max(0.0, 1.0 - left / budget))
+            goal = float(cfg["step_kl_start"]) + (goal - float(cfg["step_kl_start"])) * done
+        stats |= kl_step(actor, params, direction, batches, goal)
+        stats["kl_goal"] = goal
         if tail > 0 and left <= tail * budget:
             averaged += 1
             with torch.no_grad():
