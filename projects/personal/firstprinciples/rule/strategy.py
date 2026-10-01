@@ -79,6 +79,9 @@ CALL_WEIGHT = 0.7  # the share of the call option measured best against the pool
 # (seven pairs, the shapes a full hand still allows) than the race sees: by the
 # kept hand's steps from waiting: one, and two or more.
 OPEN_CHI = (0.10, 0.03)
+# A closed hand of many pairs holds on to seven pairs more than it should: a
+# peng there (each pair beyond two) is worth this much more than the race sees.
+PAIR_PENG = 0.04
 FISH_DEPTH = 8  # draws a baotou wait may let go while fishing for piao
 LONG = 16  # more draws of mine than any hand holds
 # At a win holding a white, what simulation says the valuation misses in the
@@ -417,6 +420,9 @@ class Race:
             if action.action == "chi" and opened == 0:
                 distance = _fast.shanten_raw(list(_fast.counts(kept)), opened + 1)
                 cost = OPEN_CHI[1] if distance >= 2 else OPEN_CHI[0] if distance == 1 else 0.0
+            elif action.action == "peng" and opened == 0:
+                held = _fast.counts(tuple(obs.hand))
+                cost = -PAIR_PENG * max(0, sum(1 for t in range(33) if held[t] >= 2) - 2)
             return (1 - Q) * value + shape_bonus(kept, opened + 1, available, True) + (1 - Q) * called - cost
         if action.action == "gang":
             for _ in range(KONG_TILES[action.kind]):
