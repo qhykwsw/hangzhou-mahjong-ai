@@ -75,6 +75,7 @@ SHAPE_DISTANCE = -0.045
 SHAPE_OPEN = 0.0105
 SHAPE_EDGE = -0.0055
 CALL_WEIGHT = 0.7  # the share of the call option measured best against the pool
+FAR_CHI = 0.05  # a chi that leaves the hand two or more steps away gives up more flexibility than the race sees
 FISH_DEPTH = 8  # draws a baotou wait may let go while fishing for piao
 LONG = 16  # more draws of mine than any hand holds
 # At a win holding a white, what simulation says the valuation misses in the
@@ -409,7 +410,8 @@ class Race:
                         waiting_value(rest, opened + 1, available, chain, piao, draws),
                     )
             called = call_option(kept, opened + 1, available, draws, stage, chis + (action.action == "chi"))
-            return (1 - Q) * value + shape_bonus(kept, opened + 1, available, True) + (1 - Q) * called
+            far = action.action == "chi" and _fast.shanten_raw(list(_fast.counts(kept)), opened + 1) >= 2
+            return (1 - Q) * value + shape_bonus(kept, opened + 1, available, True) + (1 - Q) * called - FAR_CHI * far
         if action.action == "gang":
             for _ in range(KONG_TILES[action.kind]):
                 hand.remove(action.tile)
