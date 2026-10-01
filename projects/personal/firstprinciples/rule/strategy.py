@@ -120,12 +120,17 @@ LONG = 16  # more draws of mine than any hand holds
 CONTINUE_SHIFT = (-0.417, -0.169, 0.833, -0.182, 0.112, -0.107, -0.083)
 
 
-# Distilled from RL fp-rl-112's discards (conditional logit over 100,431 of this
-# line's own discard decisions): next to this line's value (first weight), the
+# Distilled from RL fp-rl-112's discards (conditional logits over 403,301 of this
+# line's own discard decisions, one per best reachable steps: 0, 1, 2, 3+): next to this line's value (first weight), the
 # weights of the kept hand's shape and of the discarded tile's kind, alone and
 # with a white held, late in the hand and with melds out. A discard's value gets
 # MIMIC times their sum, in value units.
-MIMIC_WEIGHTS = (12.07424, -21.50168, 5.17406, -2.61723, -0.13037, 2.33058, 3.67273, -3.96270, -1.20612, 1.96853, 0.29954, 0.25531, 2.21583, 1.92847, 0.88114, 1.17634, -1.51741, 0.25293, 0.13306, -1.00701, 0.04009, 0.73132, -0.35830, 0.31570, 0.36217, -0.89332, 0.00817, -1.37332, 0.05249, 0.04338, -0.04022, 1.07465, 0.97234, 2.60352, -1.74300, -0.63231, 0.86518, 2.10580, -0.00184, -0.57836, -0.43935, -0.49518, -1.61133, -2.35906, -1.25093, -1.09613, -2.66601, 0.35719, 1.94601, -1.87869, 0.57157, -0.24584, 0.89032, 0.20651, -0.81745, -0.11285, 0.17953, -0.63445, -0.17978, 0.04245, -0.67540)
+MIMIC_WEIGHTS = (
+    (8.61221, -5.07613, -1.98676, 3.99630, 4.01289, 1.78817, 3.06700, -1.31516, 0.08745, 1.70036, -0.61122, -0.07181, 0.34716, 1.12987, 0.95008, 0.52506, -2.00561, 1.59419, -2.41105, -3.45017, -0.02920, 0.54304, -0.66089, -0.31693, 0.03181, -0.53248, 0.15297, -0.47225, 0.15762, -0.23508, 0.02675, 0.12253, -0.70795, -0.01391, -1.03327, 0.88480, 0.85849, 0.07449, 0.27704, 0.38768, 0.74086, 0.20153, 0.17814, -0.79527, -0.75041, 0.10746, -0.11385, 1.14734, -0.81383, -0.61457, -0.03912, 0.40673, -0.18575, -0.06173, -0.25666, -0.35014, 0.19828, 0.52581, 0.11967, -0.00258, -0.07479),
+    (10.43283, -17.42318, 5.32299, -0.64834, 0.28829, 1.84489, 3.20190, -2.72215, -0.69850, 1.61429, -0.02497, 0.35840, 1.41261, 1.33884, 0.50350, 0.60750, 4.25605, 0.55637, -1.74414, -1.04767, 0.63341, 0.06492, -0.11167, 0.09412, 0.32266, -0.24212, 0.17572, -0.30606, 0.40294, 0.21267, 0.17682, 1.58093, -0.15997, 2.84467, -1.46373, 0.44146, 0.17615, 1.48587, -0.91453, 1.03625, -0.82996, -0.39532, -0.83822, -1.63276, -0.89951, -0.37211, -1.00370, 0.90383, -0.37822, -1.06977, 2.44717, -1.09781, 0.30568, 0.11684, 0.67336, -0.06839, 0.88867, 0.06315, 0.39375, 0.36633, -0.12432),
+    (34.91508, -14.84367, 5.02991, -3.24320, 0.00622, 2.92015, 2.09050, -3.83290, -1.24310, 0.12036, 1.22558, -0.21140, 3.02942, 2.61529, 1.27328, 0.79419, -1.73919, 2.35813, -2.59270, -0.02260, 1.30165, 0.10133, 0.19965, -0.00656, -0.16242, -0.08507, -0.02389, -0.26436, 0.33979, 0.26935, -0.12524, 0.01169, 0.43177, 0.69389, -0.03157, 0.47148, -0.02860, 0.41957, -0.87923, -0.16386, -0.71442, -0.27814, -0.44601, -2.14581, -1.26094, -2.06038, -4.31521, 1.36344, -0.01404, -0.02307, 2.71206, 0.00698, 0.30536, 0.09530, -0.26837, -0.17386, 0.07045, -0.47960, 0.24411, 0.32559, -0.07377),
+    (159.02458, 0.23249, 2.64811, -4.45286, -0.01611, 2.35415, -1.83566, -4.18628, -0.66587, -1.60228, 0.65452, 0.73027, 2.99727, 3.19663, 1.53407, 1.91747, -0.31011, 1.33352, -0.01792, 0.05856, 0.18448, -0.53889, -0.84916, -1.09950, 1.23715, 1.25128, 0.07650, 0.56354, -0.11492, -0.78910, 0.53013, -0.04117, -0.05243, -0.08018, 0.08182, 0.02278, -0.03103, 0.05825, 0.26371, 0.01250, 0.04114, -0.03399, -0.07112, -0.12350, -0.13339, -1.94289, -0.01700, 0.40935, 0.50802, 0.05980, 0.02567, 0.01644, 0.12260, 0.01239, 0.31764, 0.28625, -0.25951, -0.13708, 0.27888, 0.17839, -1.85377),
+)
 
 
 def mimic_features(rest, opened, available, tile, held):
@@ -145,16 +150,23 @@ def mimic_features(rest, opened, available, tile, held):
     return [dist, ukeire / 10, len(improving) / 5, wincp / 5, pairs, trips, isoh, isos, adj, edge, gap, kind == 0, kind == 1, kind == 2, seen]
 
 
-def mimic_shift(obs, tile, opened, available):
+def mimic_shifts(obs, tiles, opened, available):
+    """The distilled correction of each discard, by the weights of the decision's level."""
     held = _fast.counts(tuple(obs.hand))
-    rest = list(obs.hand)
-    rest.remove(tile)
-    base = mimic_features(tuple(sorted(rest)), opened, available, tile, held)
     w = 1.0 if held[WHITE] else 0.0
     late = max(0.0, (60 - obs.wall_remaining) / 40)
     op = min(opened, 2) / 2
-    x = base + [f * w for f in base] + [f * late for f in base] + [f * op for f in base]
-    return MIMIC * sum(b * f for b, f in zip(MIMIC_WEIGHTS[1:], x)) / (10 * MIMIC_WEIGHTS[0])
+    rows = []
+    for tile in tiles:
+        rest = list(obs.hand)
+        rest.remove(tile)
+        rows.append(mimic_features(tuple(sorted(rest)), opened, available, tile, held))
+    weights = MIMIC_WEIGHTS[min(3, min(r[0] for r in rows))]
+    out = []
+    for base in rows:
+        x = base + [f * w for f in base] + [f * late for f in base] + [f * op for f in base]
+        out.append(MIMIC * sum(b * f for b, f in zip(weights[1:], x)) / (10 * weights[0]))
+    return out
 
 
 def tenpai_hazard(draws, speed=1.0):
@@ -564,8 +576,11 @@ class Race:
             if a.action == "discard" and values[i] * OPTION_REACH >= top:
                 values[i] = self.value(obs, a, opened, available, True, speed, at_win)
         if not at_win and obs.phase == "draw" and not any(a.action == "gang" for a in obs.legal_actions):
-            values = [v + mimic_shift(obs, a.tile, opened, available) if a.action == "discard" else v
-                      for a, v in zip(obs.legal_actions, values)]
+            discards = [i for i, a in enumerate(obs.legal_actions) if a.action == "discard"]
+            if discards:
+                shifts = mimic_shifts(obs, [obs.legal_actions[i].tile for i in discards], opened, available)
+                for i, s in zip(discards, shifts):
+                    values[i] += s
         if at_win and WHITE in obs.hand:
             shift = self.continue_shift(obs, opened, speed)
             values = [v if a.action == "hu" else v + shift for a, v in zip(obs.legal_actions, values)]
