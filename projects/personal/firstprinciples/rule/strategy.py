@@ -59,7 +59,18 @@ SAVED = 0.467  # my win cancels the payment to another winner, in fan units (set
 # dealer, which the winner takes (measured: a hand as dealer is worth 1.0
 # point more than one as another player), except in the game's last hand.
 # By (dealer, last hand).
-SAVED_BY_ROLE = {(True, False): 0.54, (False, False): 0.63, (True, True): 0.50, (False, True): 0.53}
+# My win also hands me the deal next hand (or keeps it), worth DEALER_EDGE
+# points a hand over sitting out of it, again each time the dealer wins (KEEP),
+# while hands remain: on top of the payment my win cancels (PAYMENT), in fan
+# units of my own win (24 a fan as dealer, 10 otherwise); by (dealer, hands
+# left after this one, up to 3).
+DEALER_EDGE = 1.03
+KEEP = 0.27
+PAYMENT = {True: 0.499, False: 0.530}
+SAVED_BY_ROLE = {
+    (dealer, left): round(PAYMENT[dealer] + DEALER_EDGE * (1 - KEEP ** left) / (1 - KEEP) / (24 if dealer else 10), 3)
+    for dealer in (True, False) for left in range(4)
+}
 ONE_STEP = 0.22  # typical value of a hand one step from waiting
 FAR_STEP = 0.45  # discount for each further step
 KONG_TILES = {"concealed": 4, "exposed": 3, "added": 1}
@@ -492,8 +503,8 @@ class Race:
 
     def act(self, obs):
         global SAVED, PROFILE, NATIVE_PROFILE
-        last = obs.stage.round_no >= obs.stage.rounds_total
-        SAVED = SAVED_BY_ROLE[(obs.stage.dealer == obs.stage.seat, last)]
+        left = min(3, max(0, obs.stage.rounds_total - obs.stage.round_no))
+        SAVED = SAVED_BY_ROLE[(obs.stage.dealer == obs.stage.seat, left)]
         PROFILE, NATIVE_PROFILE = PROFILES[SAVED], NATIVE_PROFILES[SAVED]
         available = remaining_tiles(obs)
         opened = len(obs.melds[obs.stage.seat])
