@@ -111,6 +111,7 @@ WHITE_PENG = (0.06, 0.03, 0.02)
 SEVEN_PAIR_PENG = 0.05
 FISH_DEPTH = 8  # draws a baotou wait may let go while fishing for piao
 MIMIC = 0.5
+CALL_MIMIC = 0.75
 LONG = 16  # more draws of mine than any hand holds
 # At a win holding a white, what simulation says the valuation misses in the
 # gap between going on and winning now (ridge fit over 7916 such windows,
@@ -155,6 +156,24 @@ def mimic_shift(obs, tile, opened, available):
     op = min(opened, 2) / 2
     x = base + [f * w for f in base] + [f * late for f in base] + [f * op for f in base]
     return MIMIC * sum(b * f for b, f in zip(MIMIC_WEIGHTS[1:], x)) / (10 * MIMIC_WEIGHTS[0])
+
+
+# Distilled from RL fp-rl-112's responses: a small network (native.c: call_net)
+# fit to its chi/peng/pass choices over this line's own response windows reads
+# each option's hand next to this line's value; its weight on the value (x10) is
+# CALL_VALUE. An option's value gets CALL_MIMIC times its score, in value units.
+CALL_VALUE = 2.035599
+
+
+def call_shifts(obs, opened, available):
+    """The distilled correction of each response option (pass, chi, peng)."""
+    held = _fast.counts(tuple(obs.hand))
+    discarder = next((e.seat for e in reversed(obs.public_events) if e.kind == "discard"), obs.stage.seat)
+    options = [(0, -1, -1, -1) if a.action == "pass" else (1, *a.tiles, a.tile) if a.action == "chi" else (2, a.tile, a.tile, a.tile)
+               for a in obs.legal_actions]
+    scores = native.call_net(held, opened, available, options, obs.wall_remaining,
+                             obs.stage.dealer == obs.stage.seat, (obs.stage.seat - discarder - 1) % 4)
+    return [CALL_MIMIC * s / (10 * CALL_VALUE) for s in scores]
 
 
 def tenpai_hazard(draws, speed=1.0):
@@ -566,6 +585,8 @@ class Race:
         if not at_win and obs.phase == "draw" and not any(a.action == "gang" for a in obs.legal_actions):
             values = [v + mimic_shift(obs, a.tile, opened, available) if a.action == "discard" else v
                       for a, v in zip(obs.legal_actions, values)]
+        if obs.phase.startswith("response") and all(a.action in ("pass", "chi", "peng") for a in obs.legal_actions):
+            values = [v + s for v, s in zip(values, call_shifts(obs, opened, available))]
         if at_win and WHITE in obs.hand:
             shift = self.continue_shift(obs, opened, speed)
             values = [v if a.action == "hu" else v + shift for a, v in zip(obs.legal_actions, values)]
