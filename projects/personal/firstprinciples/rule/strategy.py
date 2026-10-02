@@ -110,6 +110,9 @@ WHITE_PENG = (0.06, 0.03, 0.02)
 # further back on the usual route is still worth more than the race sees.
 SEVEN_PAIR_PENG = 0.05
 FISH_DEPTH = 8  # draws a baotou wait may let go while fishing for piao
+# Margins (going on less winning now, with CONTINUE_SHIFT) within this reach
+# are decided by the fitted correction (native.c: fish_gbm).
+FISH_REACH = 0.8
 MIMIC = 0.5
 CALL_MIMIC = 0.75
 LONG = 16  # more draws of mine than any hand holds
@@ -166,6 +169,61 @@ def call_shifts(obs, opened, available):
     scores = native.call_net(held, opened, available, options, obs.wall_remaining,
                              obs.stage.dealer == obs.stage.seat, (obs.stage.seat - discarder - 1) % 4)
     return [CALL_MIMIC * s / (10 * CALL_VALUE) for s in scores]
+
+
+def fish_features(obs, opened, available, speed, cont, margin, v_hu, v_cont):
+    """The fitted correction's features at a win holding a white: the margin, the
+    window's kind (fishing with two whites or more, baotou with one, or not yet
+    baotou), whites, my draws left, the opponents' speed, the fan now, melds,
+    chain, seat, and for going on by a discard the kept hand's winning and
+    improving shares of the unseen tiles, the shares of draws that score piao,
+    a kong or an upgrade to baotou, the chance to piao by a call, both values
+    and the wall."""
+    seat = obs.stage.seat
+    whites = obs.hand.count(WHITE)
+    baotou = is_baotou(tuple(sorted(without(obs.hand, obs.drawn_tile))), opened)
+    kind = 0 if baotou and whites >= 2 else 1 if baotou else 2
+    draws = max(1, -(-(obs.wall_remaining - LAST_WALL) // 4))
+    win = uke = piao = kong = upgrade = callp = -1.0
+    if cont.action == "discard":
+        rest = without(list(obs.hand), cont.tile)
+        c = list(_fast.counts(tuple(rest)))
+        if sum(c) == 13 - 3 * opened:
+            row = _fast.analyze_counts(list(c), opened, available, 0, 0, 0)
+            unseen = max(1, sum(available))
+            win = sum(available[t] for t in row[2]) / unseen
+            uke = row[4] / unseen
+            bt = _fast.baotou(list(c), opened)
+            pi = kg = up = 0
+            pungs = [m.tiles[0] for m in obs.melds[seat] if m.kind == "peng"]
+            for t in range(34):
+                if not available[t] or c[t] >= 4:
+                    continue
+                c[t] += 1
+                if bt and c[WHITE] >= 2:
+                    c[WHITE] -= 1
+                    pi += available[t] * _fast.baotou(list(c), opened)
+                    c[WHITE] += 1
+                if bt and (c[t] == 4 or t in pungs):
+                    kg += available[t]
+                if not bt and c[WHITE]:
+                    ok = False
+                    for x in range(34):
+                        if c[x] and x != t:
+                            c[x] -= 1
+                            ok = ok or _fast.baotou(list(c), opened)
+                            c[x] += 1
+                        if ok:
+                            break
+                    up += available[t] * ok
+                c[t] -= 1
+            piao, kong, upgrade = pi / unseen, kg / unseen, up / unseen
+            stage = 0 if obs.wall_remaining >= 70 else 1 if obs.wall_remaining >= 45 else 2
+            chis = sum(1 for m in obs.melds[seat] if m.kind == "chi")
+            calls = piao_calls(tuple(sorted(rest)), opened, available, 0, 0, draws, speed, tuple(pungs), stage, chis) if bt and c[WHITE] >= 2 else ()
+            callp = sum(p for p, _ in calls)
+    return [margin, kind, whites, min(16, draws), speed, obs.hu_fan, opened, obs.chain_count, float(obs.stage.dealer == seat),
+            win, uke, piao, kong, upgrade, callp, v_hu, v_cont, obs.wall_remaining]
 
 
 def tenpai_hazard(draws, speed=1.0):
@@ -583,9 +641,28 @@ class Race:
         if obs.phase.startswith("response") and all(a.action in ("pass", "chi", "peng") for a in obs.legal_actions):
             values = [v + s for v, s in zip(values, call_shifts(obs, opened, available))]
         if at_win and WHITE in obs.hand:
+            fitted = self.fish_decision(obs, opened, available, speed)
+            if fitted is not None:
+                return fitted
             shift = self.continue_shift(obs, opened, speed)
             values = [v if a.action == "hu" else v + shift for a, v in zip(obs.legal_actions, values)]
         return obs.legal_actions[max(range(len(values)), key=values.__getitem__)]
+
+    def fish_decision(self, obs, opened, available, speed):
+        """At a win holding a white whose margin is within FISH_REACH, win now or
+        go on by the margin plus the fitted correction; None otherwise."""
+        legal = obs.legal_actions
+        values = {a: self.value(obs, a, opened, available, True, speed, True) for a in legal}
+        hu = next(a for a in legal if a.action == "hu")
+        rest_actions = [a for a in legal if a.action != "hu"]
+        if not rest_actions:
+            return None
+        cont = max(rest_actions, key=values.get)
+        margin = values[cont] - values[hu] + self.continue_shift(obs, opened, speed)
+        if abs(margin) > FISH_REACH:
+            return None
+        x = fish_features(obs, opened, available, speed, cont, margin, values[hu], values[cont])
+        return cont if margin + native.fish_gbm(x) > 0 else hu
 
     def continue_shift(self, obs, opened, speed):
         """The simulation-fitted correction to going on at a win holding a white."""
