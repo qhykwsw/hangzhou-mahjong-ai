@@ -171,6 +171,29 @@ def call_shifts(obs, opened, available):
     return [CALL_MIMIC * s / (10 * CALL_VALUE) for s in scores]
 
 
+def kong_features(obs, counts, opened, available, kong, keep, v_kong, v_keep):
+    """The kong-or-keep model's features: whites, the kong's kind, the wall,
+    melds, seat, both values and their gap, and for the hand kept by each choice
+    its steps, winning and improving shares of the unseen tiles, baotou and the
+    value-weighted winning share; chain, an honor kong and chis."""
+    seat = obs.stage.seat
+    unseen = max(1, sum(available))
+    kept = list(counts)
+    kept[keep.tile] -= 1
+    row_keep = _fast.analyze_counts(list(kept), opened, available, 0, 0, 0)
+    after = opened if kong.kind == "added" else opened + 1
+    melded = list(counts)
+    for _ in range(KONG_TILES[kong.kind]):
+        melded[kong.tile] -= 1
+    row_kong = _fast.analyze_counts(list(melded), after, available, 0, 0, 0)
+    return [counts[WHITE], {"added": 0, "concealed": 1, "exposed": 2}[kong.kind], obs.wall_remaining, opened,
+            float(obs.stage.dealer == seat), v_kong - v_keep, v_kong, v_keep,
+            row_keep[0], sum(available[t] for t in row_keep[2]) / unseen, row_keep[4] / unseen, float(_fast.baotou(list(kept), opened)),
+            row_kong[0], sum(available[t] for t in row_kong[2]) / unseen, row_kong[4] / unseen, float(_fast.baotou(list(melded), after)),
+            obs.chain_count, row_keep[6] / unseen, row_kong[6] / unseen, float(kong.tile >= 27),
+            sum(1 for m in obs.melds[seat] if m.kind == "chi")]
+
+
 def fish_features(obs, opened, available, speed, cont, margin, v_hu, v_cont):
     """The fitted correction's features at a win holding a white: the margin, the
     window's kind (fishing with two whites or more, baotou with one, or not yet
@@ -646,7 +669,28 @@ class Race:
                 return fitted
             shift = self.continue_shift(obs, opened, speed)
             values = [v if a.action == "hu" else v + shift for a, v in zip(obs.legal_actions, values)]
-        return obs.legal_actions[max(range(len(values)), key=values.__getitem__)]
+        choice = obs.legal_actions[max(range(len(values)), key=values.__getitem__)]
+        if choice.action == "gang" and not at_win and obs.phase == "draw" and WHITE in obs.hand:
+            kept = self.keep_kong(obs, choice, opened, available)
+            if kept is not None:
+                return kept
+        return choice
+
+    def keep_kong(self, obs, kong, opened, available):
+        """At a waiting hand holding a white, keep the kong tile (and throw the
+        best other tile) when the fitted gain of keeping it is positive: the kong
+        is worth more later, once the wait is baotou. None to meld it."""
+        counts = _fast.counts(tuple(obs.hand))
+        if _fast.shanten_raw(list(counts), opened) != 0:
+            return None
+        kong_tiles = {a.tile for a in obs.legal_actions if a.action == "gang"}
+        keeps = [a for a in obs.legal_actions if a.action == "discard" and a.tile not in kong_tiles]
+        if not keeps:
+            return None
+        values = {a: self.value(obs, a, opened, available, True, 1.0, False) for a in obs.legal_actions}
+        keep = max(keeps, key=values.get)
+        x = kong_features(obs, counts, opened, available, kong, keep, values[kong], values[keep])
+        return keep if native.kong_gbm(x) > 0 else None
 
     def fish_decision(self, obs, opened, available, speed):
         """At a win holding a white whose margin is within FISH_REACH, win now or
