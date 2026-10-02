@@ -684,11 +684,12 @@ class Race:
         return choice
 
     def keep_kong(self, obs, kong, opened, available):
-        """At a waiting hand holding a white, keep the kong tile (and throw the
-        best other tile) when the fitted gain of keeping it is positive: the kong
-        is worth more later, once the wait is baotou. None to meld it."""
+        """At a hand holding a white that waits or is one step away, keep the
+        kong tile (and throw the best other tile) when the fitted gain of keeping
+        it is positive: the kong is worth more later, once the wait is baotou.
+        None to meld it."""
         counts = _fast.counts(tuple(obs.hand))
-        if _fast.shanten_raw(list(counts), opened) != 0:
+        if _fast.shanten_raw(list(counts), opened) > 1:
             return None
         kong_tiles = {a.tile for a in obs.legal_actions if a.action == "gang"}
         keeps = [a for a in obs.legal_actions if a.action == "discard" and a.tile not in kong_tiles]
