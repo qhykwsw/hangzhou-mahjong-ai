@@ -519,7 +519,7 @@ class Race:
             row = analyze(rest, after, available, obs.chain_count + 1, obs.piao_count)
             shape = shape_bonus(rest, after, available, True)
             if row["shanten"] > 0:
-                return waiting_value(rest, after, available, draws=draws, speed=speed) + shape + call_option(
+                return reshaped_value(rest, after, available, draws, options, speed) + shape + call_option(
                     rest, after, available, draws, stage, chis, SAVED
                 )
             # The replacement draw comes at once and carries the kong's doubling.
@@ -572,7 +572,7 @@ class Race:
         values = [self.value(obs, a, opened, available, False, speed, at_win) for a in obs.legal_actions]
         top = max(values)
         for i, a in enumerate(obs.legal_actions):
-            if a.action == "discard" and values[i] * OPTION_REACH >= top:
+            if a.action in ("discard", "gang") and values[i] * OPTION_REACH >= top:
                 values[i] = self.value(obs, a, opened, available, True, speed, at_win)
         if not at_win and obs.phase == "draw" and not any(a.action == "gang" for a in obs.legal_actions):
             discards = [i for i, a in enumerate(obs.legal_actions) if a.action == "discard"]
