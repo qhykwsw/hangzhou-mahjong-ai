@@ -1,7 +1,7 @@
 {
   "rows": 600000,
   "smoke_rows": 3000,
-  "step_kl": 0.0075,
+  "step_kl": 0.015,
   "kl_rows": 20000,
   "microbatch": 256,
   "critic_batch": 256,
@@ -15,7 +15,6 @@
   "chunks_per_step": 3,
   "playout_baseline": true,
   "tail_average": 0.5,
-  "pg_top_layers": 1,
-  "sample_temperature": 1.5,
-  "step_kl_start": 0.03
+  "pg_top_layers": 0,
+  "sample_temperature": 1.0
 }
