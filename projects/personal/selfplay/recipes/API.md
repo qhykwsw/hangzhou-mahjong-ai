@@ -71,6 +71,40 @@
 
 局面集由维护者用 `harness.starts` 从最好规则版本的四家自打中生成，放进 `recipe/starts/`（不进 Git），用 `ctx.starts(name)` 读取。普通采集和残局采集的比例由方案自己调用两次 `collect` 来混合。
 
+## 关键窗口搜索（专家迭代）
+
+`cfg["search"] = {"kinds": ["kong", "fish"], "worlds": 8, "max_windows": 1, "deal_value": 0.0}` 时，每场里学习座位的前 `max_windows` 个关键窗口要先做一次搜索，用于专家迭代。
+
+**窗口**
+- `kong`：学习座位可以杠；
+- `fish`：持白且可以自摸胡（胡还是继续）。
+
+窗口按学习座位自己的合法观察判定。
+
+**候选动作**
+- 第一个候选是 Actor 的 argmax；
+- 另一类动作里，杠或胡数量少，逐个列为候选；
+- 其余动作由 Actor 在屏蔽了 argmax 那一类后再选一次，这次推理照常走采集父进程。
+
+**假想世界与续打**
+- 每个候选在同一批 `worlds` 个假想世界里各打一遍。假想世界由 `mahjong_ai.sdk.simulation.sample_world` 从合法观察和独立种子生成，未见牌均匀分配。
+- 之后学习座位走 argmax，其余座位照常，打到本局结束。
+- 价值是本局得分（底分为单位），学习座位坐下一局庄时再加 `deal_value`。
+
+**写回该行的字段**
+- `search_kind`、`search_actions`（argmax 在首位）；
+- `search_values`（世界 × 候选）、`search_q`（各候选均值）；
+- `search_worlds`（成功生成的世界数）。
+
+**执行**
+- 带搜索的采集走 Python 引擎；
+- 一场的搜索全部打完后才调用 `finish_game`；
+- 搜索只在训练采集里做，评估和上场时 Actor 照常直接出牌。
+
+**建议**
+- 和残局开局（`starts`）一起用：每场一开局就是窗口，算力集中在这些局面上。
+- 损失由方案决定，例如：只在最好候选与 argmax 的配对差显著时，把 Actor 拉向最好候选，其余行用 KL 锚住冻结副本。
+
 `hooks` 在主进程里对学习座位生效：
 
 - `hooks["values"](rows) -> 数组`：给出每行的价值估计，写入 `value`。采集时 Critic 为空，所以使用 PPO 的方案必须提供它。

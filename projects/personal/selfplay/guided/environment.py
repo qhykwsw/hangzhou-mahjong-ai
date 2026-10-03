@@ -95,6 +95,9 @@ class Game:
         # cfg["playout_baseline"]: every learner deviation from the argmax gets a
         # greedy continuation of its hand (Shadow); the game is finished once they are.
         self.playout = bool(cfg.get("playout_baseline")) and train
+        # cfg["search"] (guided.search): key windows of the learner get a search over worlds.
+        self.search = cfg.get("search") if train else None
+        self.searched, self.window = 0, None
         self.shadows = []
         self.unfinished = False
         self._next_hand()
@@ -210,7 +213,13 @@ class Game:
                         self.teacher_errors += 1
                         if action is not None:
                             _teacher_failed(self.teacher_id, f"illegal action {action}")
+            window = None
+            if self.search and self.train and seat == self.focal and self.searched < self.search.get("max_windows", 1):
+                from .search import window_kind
+
+                window = window_kind(obs, legal, self.search.get("kinds", ("kong", "fish")))
             self.pending = (row, legal, seat)
+            self.window = (obs, window) if window else None
             return {
                 "row": row,
                 "slot": self.specs[seat],
@@ -222,6 +231,8 @@ class Game:
         from selfplay_core.actions import action_index
 
         row, legal, seat = self.pending
+        obs, window = self.window or (None, None)
+        self.window = None
         # Collection answers (action, logprob, value, argmax), and after them a
         # model teacher's label on a learning decision; evaluation (action, logprob, value).
         index, logprob, value, *more = response
@@ -240,6 +251,13 @@ class Game:
                 if row["deviated"]:
                     move = next(a for a in legal if action_index(a) == greedy[0])
                     self.shadows.append(Shadow(self, fork(self.state), move, legal, row))
+            if window:
+                if not greedy:
+                    raise ValueError("a search needs the argmax with each collection answer")
+                from .search import Search
+
+                self.searched += 1
+                Search(self, obs, legal, row, greedy[0], window).start()
             self.rows.append(row)
         self.pending = None
         self.state.step(action, legal)
@@ -329,11 +347,15 @@ class Shadow:
             row["teacher"] = -1
             return {"row": row, "slot": GREEDY if seat == game.focal else game.specs[seat], "train": False, "bc": False}
         self.done, self.state = True, None
+        self.settle(state)
+        return None
+
+    def settle(self, state):
+        game = self.game
         # The winner deals next; after a draw the dealer stays.
         dealer = state.winner if state.winner is not None else self.dealer
         self.row["playout"] = state.delta[game.focal] / game.config.base_score
         self.row["playout_deals_next"] = float(dealer == game.focal)
-        return None
 
     def apply(self, response):
         from selfplay_core.actions import action_index
@@ -419,7 +441,7 @@ def worker(conn, cfg, bundle_path, panel_path, worker_index, command):
         openings = command.get("starts") or []
         is_eval = command["kind"] == "evaluate"
         # Training games whose rule seats the C engine can play run there.
-        if not is_eval and cfg.get("fast_game", True):
+        if not is_eval and cfg.get("fast_game", True) and not cfg.get("search"):
             from .fastgame import FastGame as Training
         else:
             Training = Game
