@@ -8,12 +8,19 @@ the argmax plays on (and, when it wins, the best move that does not). The
 best move of a category is the Actor's argmax over that category alone,
 asked from the collection parent like any greedy decision.
 
-Each candidate is then played in ``worlds`` hypothetical hands sampled from
-the learner's legal observation with an independent seed
-(mahjong_ai.sdk.simulation.sample_world: the hidden hands and the wall are a
-uniform draw of the unseen tiles), every candidate in the same worlds, the
-learner playing its argmax afterwards and the other seats as in the game, to
-the end of the hand. A world's value is the learner's hand score in base-score
+Each candidate is then played in ``worlds`` copies of the actual hand in
+which only the wall is reshuffled (seeded per world): the opponents keep their
+real hands, every candidate meets the same worlds, the learner plays its argmax
+afterwards and the other seats as in the game, to the end of the hand. Like the
+playout baseline (whose continuation plays the real hand), this reads hidden
+state only to value the learner's choices in the training process (ADR-0009);
+the Actor itself sees its legal observation alone. Uniformly re-dealt hidden
+hands (sample_world) were measured to bias the search: on 300 fish windows the
+opponents won 8% of the continuations instead of 34%, and playing on was
+overvalued by 9.6 points. Because the values carry the real hidden hands, a
+per-row choice of the best candidate partly imitates an oracle; average over
+rows (e.g. use the values as advantages) rather than trusting single rows.
+A world's value is the learner's hand score in base-score
 units, plus the value of the next hand's start: ``continuation`` ("module:function",
 resolved in the worker) is called with {"seat", "dealer" (who deals next: the
 winner, or the dealer again after a draw), "hand_no" and "rounds" of the next
@@ -23,8 +30,7 @@ learner deals next.
 
 The learning row gets ``search_kind``, ``search_actions`` (candidate action
 indices, the argmax first), ``search_values`` (worlds x candidates) and
-``search_q`` (the candidates' means). Worlds that cannot be sampled
-consistently are skipped (``search_worlds`` is how many were played). The
+``search_q`` (the candidates' means), ``search_worlds`` (how many were played). The
 game is finished (finish_game) only after its searches, like after the
 playout baseline's continuations. Searches run on the Python engine.
 
@@ -57,10 +63,11 @@ def _category(kind, action):
 
 
 class Search:
-    def __init__(self, game, obs, legal, row, greedy, kind):
+    def __init__(self, game, obs, legal, row, greedy, kind, real):
         from selfplay_core.actions import action_index
 
         self.game, self.obs, self.legal, self.row, self.kind = game, obs, legal, row, kind
+        self.real = real  # a copy of the actual hand at the window
         self.cfg = game.search
         # A recipe's value of the next hand's start (e.g. a fitted V(dealer, hands left, scores)) replaces deal_value.
         from .environment import hook
@@ -101,28 +108,24 @@ class Search:
             self.play()
 
     def play(self):
-        from mahjong_ai.sdk.simulation import sample_world
+        import random
+
+        from .environment import fork
         from .statistics import seed_for
 
         game = self.game
-        self.rollouts = 0
-        worlds = []
-        for m in range(int(self.cfg.get("worlds", 8))):
-            try:
-                worlds.append(sample_world(self.obs, seed_for(game.seed, "search", len(game.rows), m)))
-            except ValueError:
-                continue
-        self.worlds = len(worlds)
-        if not worlds:
-            self.finish()
-            return
-        for m, world in enumerate(worlds):
+        self.rollouts, self.worlds = 0, int(self.cfg.get("worlds", 8))
+        for m in range(self.worlds):
+            world = fork(self.real)
+            random.Random(seed_for(game.seed, "search", len(game.rows), m)).shuffle(world.wall)
             for index in self.candidates:
-                state = copy.deepcopy(world)
+                state = fork(world)
                 legal = state.legal_actions()
                 move = next(a for a in legal if a == self.index[index])
                 self.rollouts += 1
                 game.shadows.append(WorldRollout(self, state, move, legal, m, index))
+        if not self.rollouts:
+            self.finish()
 
     def settled(self, m, index, value):
         self.values[(m, index)] = value

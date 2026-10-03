@@ -257,7 +257,7 @@ class Game:
                 from .search import Search
 
                 self.searched += 1
-                Search(self, obs, legal, row, greedy[0], window).start()
+                Search(self, obs, legal, row, greedy[0], window, fork(self.state)).start()
             self.rows.append(row)
         self.pending = None
         self.state.step(action, legal)
