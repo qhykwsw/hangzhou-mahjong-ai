@@ -30,6 +30,7 @@ from .run import atomic_json
 GRACE_SECONDS = {"train": 120, "smoke": 60}
 DEFAULT_LIMITS = {"gpu_memory_fraction": 0.85, "ram_fraction": 0.75}
 # What a harness may fix per host through plan["execution"]: throughput only.
+OPENING_TABLES = 8
 EXECUTION_OPTIONS = {"workers", "tables", "gather_seconds", "inference_history_band", "fine_graph_batches"}
 
 
@@ -265,6 +266,10 @@ class Context:
         if set(execution) - EXECUTION_OPTIONS:
             raise ValueError("unknown collection execution option")
         run_cfg |= execution
+        if starts:
+            # Openings play on the Python engine, whose rule seats fill their
+            # caches and cost a core each: a few tables per worker suffice.
+            run_cfg["tables"] = min(int(run_cfg["tables"]), OPENING_TABLES)
         samples = int(samples)
         if self.hand_budget is not None:
             # Near the end of the budget, ask only for the rows the hands left

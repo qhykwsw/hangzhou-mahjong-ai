@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from guided.environment import GREEDY, Game
-from guided.starts import pack, replay
+from guided.starts import check, prefix, replay
 from test_guided_playout import CFG, Stubs
 
 
@@ -16,17 +16,17 @@ def record(seed, dealer, hand_no, stop, rng):
     from mahjong_ai.domain.types import RoundConfig
 
     state = HandState(RoundConfig(rounds=CFG["rounds"], allow_tiebreak=False), seed, dealer, hand_no, (5, -5, 0, 0))
-    trace, choices = [], 0
+    steps, choices = [], 0
     while not state.settled:
         legal = state.legal_actions()
         if len(legal) > 1:
             if choices == stop:
                 opening = {"seed": seed, "dealer": dealer, "hand_no": hand_no, "scores": [5, -5, 0, 0],
-                           "prefix": list(trace), "focal": state.turn}
+                           "prefix": prefix(steps), "focal": state.turn}
                 return opening, state
             choices += 1
         action = rng.choice(legal)
-        trace.append(pack(action))
+        steps.append(action)
         state.step(action, legal)
     return None, None
 
@@ -81,6 +81,11 @@ def test_an_opening_must_stop_at_its_learners_choice():
     with pytest.raises(ValueError):
         Game(CFG, None, {}, ["model:current", "stub", "stub", "stub"], 11, focal=(opening["focal"] + 1) % 4,
              train=True, external=Stubs(), opening=dict(opening, focal=(opening["focal"] + 1) % 4))
-    broken = dict(opening, prefix=opening["prefix"] + [["discard", 99, [], ""]])
+    from selfplay_core.actions import action_index
+
+    legal = {action_index(a) for a in original.legal_actions()}
+    illegal = next(i for i in range(231) if i not in legal)
     with pytest.raises(ValueError):
-        replay(original, broken["prefix"][len(opening["prefix"]):], opening["focal"])
+        replay(original, bytes([illegal]).hex(), opening["focal"])
+    with pytest.raises(ValueError):
+        check(dict(opening, prefix=[0, 1]))  # the prefix is the hex of action indices

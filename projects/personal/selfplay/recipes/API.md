@@ -61,11 +61,11 @@
 
 ## 残局开局
 
-`ctx.collect(..., starts=局面列表)` 时，每场只打一局，从随机抽到的局面开始：学习座位坐在局面的 `focal`，其余座位照常按 `cfg["opponents"]` 抽取。教师标签（`labels=True`）、`playout_baseline` 和钩子都照常可用；这种对局走 Python 引擎，每场计 1 局的局数预算（记录的 `hands` 为 1，`collection.jsonl` 的 `openings` 为真）。
+`ctx.collect(..., starts=局面列表)` 时，每场只打一局，从随机抽到的局面开始：学习座位坐在局面的 `focal`，其余座位照常按 `cfg["opponents"]` 抽取。教师标签（`labels=True`）、`playout_baseline` 和钩子都照常可用；这种对局走 Python 引擎，每个对局进程最多同时打 8 桌，每场计 1 局的局数预算（记录的 `hands` 为 1，`collection.jsonl` 的 `openings` 为真）。
 
 局面（`guided.starts`）是一个字典，内容如下：
 - 牌墙种子 `seed`、`dealer`、`hand_no`、`scores`；
-- `prefix`：从发牌起的每一步动作，在引擎里重放到该局面，所以事件和观察与真实对局一致，但没有之前各局的历史；
+- `prefix`：从发牌起的每一步动作，每步存成 1 字节的动作编号（十六进制串）。几万个局面在每个对局进程里也只占几十 MB。这些动作在引擎里重放到该局面，所以事件和观察与真实对局一致，但没有之前各局的历史；
 - 学习座位 `focal`，它接下来要做选择；
 - `kind` 等标签。
 

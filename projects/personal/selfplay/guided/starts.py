@@ -4,11 +4,13 @@ An opening is a dict with ``seed``, ``dealer``, ``hand_no``, ``scores``,
 ``prefix`` and ``focal`` (``kind`` and other keys are kept as labels). The
 wall comes from ``seed`` exactly as HandState shuffles it, and ``prefix`` is
 every engine step of the hand from the deal, single-legal steps included, as
-``[action, tile, tiles, kind]``. Replaying the prefix on the engine reaches the
-position with the events and observations of a real game; the learning seat
-``focal`` decides next. Hands before the opening are not part of its game, so
-the observations carry no earlier-hand history. The maintainer's harness
-(``harness.starts``) records openings from rule self-play.
+the hex of one byte per step: the step's Actor action index (231 < 256).
+Replaying the prefix on the engine reaches the position with the events and
+observations of a real game; the learning seat ``focal`` decides next. Hands
+before the opening are not part of its game, so the observations carry no
+earlier-hand history. The compact prefix keeps a set of tens of thousands of
+openings at tens of megabytes in every collection worker. The maintainer's
+harness (``harness.starts``) records openings from rule self-play.
 """
 
 from collections import Counter
@@ -21,34 +23,34 @@ import time
 KEYS = ("seed", "dealer", "hand_no", "scores", "prefix", "focal")
 
 
-def pack(action):
-    return [action.action, action.tile, list(action.tiles), action.kind]
+def prefix(steps):
+    """The compact prefix of a list of engine actions."""
+    from selfplay_core.actions import action_index
 
-
-def unpack(item):
-    from mahjong_ai.domain.types import Action
-
-    action, tile, tiles, kind = item
-    return Action(action, tile, tuple(tiles), kind)
+    return bytes(action_index(a) for a in steps).hex()
 
 
 def check(opening):
     missing = [k for k in KEYS if k not in opening]
     if missing:
         raise ValueError(f"opening lacks {missing}")
+    if not isinstance(opening["prefix"], str):
+        raise ValueError("an opening's prefix is the hex of its action indices")
     if not (0 <= opening["focal"] < 4 and 0 <= opening["dealer"] < 4 and opening["hand_no"] >= 1
             and len(opening["scores"]) == 4):
         raise ValueError("opening has an invalid seat, dealer, hand number or scores")
     return opening
 
 
-def replay(state, prefix, focal):
-    """Step ``state`` through ``prefix``; the learner ``focal`` must decide next."""
-    for item in prefix:
+def replay(state, steps, focal):
+    """Step ``state`` through the hex prefix ``steps``; the learner ``focal`` must decide next."""
+    from selfplay_core.actions import action_index
+
+    for index in bytes.fromhex(steps):
         legal = state.legal_actions()
-        action = unpack(item)
-        if action not in legal:
-            raise ValueError(f"opening step {action} is not legal at its position")
+        action = next((a for a in legal if action_index(a) == index), None)
+        if action is None:
+            raise ValueError(f"opening step {index} is not legal at its position")
         state.step(action, legal)
     if state.settled or state.turn != focal or len(state.legal_actions()) < 2:
         raise ValueError("an opening must stop where its learning seat has a choice")
@@ -90,6 +92,7 @@ def harvest(task):
     from .artifacts import bind_runtime, load_package
 
     bind_runtime({"runtime": task["runtime"], "runtime_hash": Path(task["runtime"]).name})
+    from selfplay_core.actions import action_index
     from mahjong_ai.domain.engine import HandState, derive_seed
     from mahjong_ai.domain.rules import WHITE, is_baotou
     from mahjong_ai.domain.types import RoundConfig
@@ -111,7 +114,7 @@ def harvest(task):
             if recorded[kind] < PER_HAND:
                 recorded[kind] += 1
                 out.append({"seed": seed, "dealer": dealer, "hand_no": hand_no, "scores": [0, 0, 0, 0],
-                            "prefix": list(trace), "focal": seat, "kind": kind,
+                            "prefix": bytes(trace).hex(), "focal": seat, "kind": kind,
                             "whites": state.hands[seat].count(WHITE), **labels})
 
         while not state.settled:
@@ -141,7 +144,7 @@ def harvest(task):
                             action = policies[seat].act(state.observation(tuple(keep)))
             if action is None:
                 action = legal[0] if len(legal) == 1 else policies[seat].act(state.observation(legal))
-            trace.append(pack(action))
+            trace.append(action_index(action))
             state.step(action, legal)
         played += 1
     return out, played
