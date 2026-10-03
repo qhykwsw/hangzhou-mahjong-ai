@@ -126,3 +126,29 @@ def test_collection_searches_openings_through_the_parents_inference(monkeypatch)
     assert records and all(r["hands"] == 1 for r in records)
     assert searched and all(r["search_worlds"] >= 1 and len(r["search_q"]) == len(r["search_actions"])
                             for r in searched)
+
+
+SEEN = []
+
+
+def after_hand(context):
+    """A continuation for the test: records what it is given, values dealing next at 1000."""
+    SEEN.append(context)
+    return 1000.0 * (context["dealer"] == context["seat"])
+
+
+def test_a_continuation_values_each_worlds_next_hand_start():
+    SEEN.clear()
+    opening = kong_openings(1)[0]
+    seats = ["stub"] * 4
+    seats[opening["focal"]] = "model:current"
+    cfg = dict(SEARCH_CFG, search=dict(SEARCH_CFG["search"], continuation="test_guided_search:after_hand"))
+    game = Game(cfg, None, {}, seats, 21, focal=opening["focal"], train=True, external=Stubs(), opening=opening)
+    drive(game, random.Random(4))
+    row = game.rows[0]
+    assert len(SEEN) == row["search_worlds"] * len(row["search_actions"])
+    for context in SEEN:
+        assert context["seat"] == opening["focal"] and context["rounds"] == CFG["rounds"]
+        assert context["hand_no"] == opening["hand_no"] + 1 and len(context["scores"]) == 4
+    dealt = [v for values in row["search_values"] for v in values if v >= 500]
+    assert len(dealt) == sum(c["dealer"] == c["seat"] for c in SEEN)

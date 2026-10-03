@@ -14,8 +14,12 @@ the learner's legal observation with an independent seed
 uniform draw of the unseen tiles), every candidate in the same worlds, the
 learner playing its argmax afterwards and the other seats as in the game, to
 the end of the hand. A world's value is the learner's hand score in base-score
-units, plus ``deal_value`` when the learner deals the next hand (the winner
-deals; after a draw the dealer stays).
+units, plus the value of the next hand's start: ``continuation`` ("module:function",
+resolved in the worker) is called with {"seat", "dealer" (who deals next: the
+winner, or the dealer again after a draw), "hand_no" and "rounds" of the next
+hand, "scores" (the game's scores after this hand, in base-score units), "last"
+(this was the game's last hand)}; without it, ``deal_value`` is added when the
+learner deals next.
 
 The learning row gets ``search_kind``, ``search_actions`` (candidate action
 indices, the argmax first), ``search_values`` (worlds x candidates) and
@@ -24,7 +28,7 @@ consistently are skipped (``search_worlds`` is how many were played). The
 game is finished (finish_game) only after its searches, like after the
 playout baseline's continuations. Searches run on the Python engine.
 
-    cfg["search"] = {"kinds": ["kong", "fish"], "worlds": 8, "max_windows": 1, "deal_value": 0.0}
+    cfg["search"] = {"kinds": ["kong", "fish"], "worlds": 8, "max_windows": 1, "continuation": "recipe.value:after_hand"}
 """
 
 import copy
@@ -58,6 +62,10 @@ class Search:
 
         self.game, self.obs, self.legal, self.row, self.kind = game, obs, legal, row, kind
         self.cfg = game.search
+        # A recipe's value of the next hand's start (e.g. a fitted V(dealer, hands left, scores)) replaces deal_value.
+        from .environment import hook
+
+        self.continuation = hook(self.cfg.get("continuation"), None)
         self.index = {action_index(a): a for a in legal}
         self.greedy = greedy
         categories = {}
@@ -169,5 +177,15 @@ class WorldRollout(Shadow):
         game, search = self.game, self.search
         dealer = final.winner if final.winner is not None else self.dealer
         value = final.delta[game.focal] / game.config.base_score
-        value += float(search.cfg.get("deal_value", 0.0)) * (dealer == game.focal)
+        if search.continuation is not None:
+            value += float(search.continuation(next_hand(final, dealer, game.focal, game.config)))
+        else:
+            value += float(search.cfg.get("deal_value", 0.0)) * (dealer == game.focal)
         search.settled(self.m, self.index, value)
+
+
+def next_hand(final, dealer, seat, config):
+    """What the game carries into the next hand after ``final``: the continuation's argument."""
+    return {"seat": seat, "dealer": dealer, "hand_no": final.hand_no + 1, "rounds": config.rounds,
+            "scores": [(s + d) / config.base_score for s, d in zip(final.scores, final.delta)],
+            "last": final.hand_no >= config.rounds}

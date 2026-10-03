@@ -73,7 +73,7 @@
 
 ## 关键窗口搜索（专家迭代）
 
-`cfg["search"] = {"kinds": ["kong", "fish"], "worlds": 8, "max_windows": 1, "deal_value": 0.0}` 时，每场里学习座位的前 `max_windows` 个关键窗口要先做一次搜索，用于专家迭代。
+`cfg["search"] = {"kinds": ["kong", "fish"], "worlds": 8, "max_windows": 1, "continuation": "recipe.value:after_hand"}` 时，每场里学习座位的前 `max_windows` 个关键窗口要先做一次搜索，用于专家迭代。
 
 **窗口**
 - `kong`：学习座位可以杠；
@@ -89,7 +89,11 @@
 **假想世界与续打**
 - 每个候选在同一批 `worlds` 个假想世界里各打一遍。假想世界由 `mahjong_ai.sdk.simulation.sample_world` 从合法观察和独立种子生成，未见牌均匀分配。
 - 之后学习座位走 argmax，其余座位照常，打到本局结束。
-- 价值是本局得分（底分为单位），学习座位坐下一局庄时再加 `deal_value`。
+- 价值是本局得分（底分为单位），再加下一局开局状态的价值。
+  - 价值由 `continuation`（`"模块:函数"`，在对局进程里解析）给出。
+  - 它收到一个字典：`seat`；`dealer`（谁坐下一局庄：胜者，流局时原庄）；下一局的 `hand_no` 和 `rounds`；`scores`（本局后的四家分数，底分为单位）；`last`（本局是否是本场最后一局）。
+  - 没有 `continuation` 时，学习座位坐下一局庄就加 `deal_value`。
+- playout 基线的续打行同样写入 `playout_dealer`（续打后谁坐下一局庄）和 `playout_scores`（续打后的四家分数），方案可以用同一个价值函数计算那一侧。
 
 **写回该行的字段**
 - `search_kind`、`search_actions`（argmax 在首位）；

@@ -173,6 +173,7 @@ class FastShadow:
     def __init__(self, game, state, move, row):
         self.game, self.state, self.row = game, state, row
         self.dealer, self.pending, self.done = game.dealer, None, False
+        self.start_scores = list(game.scores)  # the game's scores before this hand
         state.step(move)
 
     def advance(self):
@@ -188,6 +189,8 @@ class FastShadow:
         dealer = state.winner if state.winner is not None else self.dealer
         self.row["playout"] = state.delta[game.focal] / game.config.base_score
         self.row["playout_deals_next"] = float(dealer == game.focal)
+        self.row["playout_dealer"] = dealer
+        self.row["playout_scores"] = [(s + d) / game.config.base_score for s, d in zip(self.start_scores, state.delta)]
         return None
 
     def apply(self, response):

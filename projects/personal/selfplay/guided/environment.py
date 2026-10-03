@@ -356,6 +356,9 @@ class Shadow:
         dealer = state.winner if state.winner is not None else self.dealer
         self.row["playout"] = state.delta[game.focal] / game.config.base_score
         self.row["playout_deals_next"] = float(dealer == game.focal)
+        # The continuation's next-hand start, for a recipe's value of it.
+        self.row["playout_dealer"] = dealer
+        self.row["playout_scores"] = [(s + d) / game.config.base_score for s, d in zip(state.scores, state.delta)]
 
     def apply(self, response):
         from selfplay_core.actions import action_index
