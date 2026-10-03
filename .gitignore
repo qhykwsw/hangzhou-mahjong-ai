@@ -20,3 +20,6 @@ build/
 projects/personal/*/models/
 projects/personal/*/releases/
 projects/personal/*/runs/
+
+# Openings shipped with the RL line's recipe (harness.starts output; run data)
+projects/personal/firstprinciples/rl/recipe/starts/

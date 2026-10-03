@@ -30,7 +30,8 @@
 | `opponents` | 本次迭代冻结的评估对手 ID，也是默认训练对手（规则版本按各自运行时运行，其余是模型） |
 | `catalog` | harness 另外提供的冻结版本 ID，可以选作对手或教师（harness 标明只作对手的除外，例如平台代理）；没有时为空 |
 | `new_actor()` | 同结构的新 Actor，例如用作自身历史快照对手 |
-| `collect(actor, cfg, samples=, iteration=, labels=False, history=None, hooks=None, inference_session=None)` | 采集训练对局，见下文 |
+| `collect(actor, cfg, samples=, iteration=, labels=False, history=None, hooks=None, inference_session=None, starts=None)` | 采集训练对局，见下文 |
+| `starts(name)` | 读取随方案冻结的残局集 `recipe/starts/<name>.json.gz`，见「残局开局」 |
 | `log(**metrics)` | 写一行训练诊断，评估报告和下一轮交接都会引用 |
 | `save_actor(actor)` | 保存 Actor 检查点，防止超时丢失成果 |
 
@@ -57,6 +58,18 @@
 | `playout_baseline` | 为真时，学习座位每次采样动作与概率最大动作（argmax）不同（行的 `deviated` 为真），框架复制这一局，在该处改走 argmax，之后学习座位一律 argmax、其余座位照常，打到这一局结束，把学习座位这一局的桌面分（底分为单位）写入该行的 `playout`，下一局由学习座位坐庄时 `playout_deals_next` 为 1.0。所有学习决策都带 `deviated`。牌墙与种子固定、对手按观察确定地决策时，下一次偏离之前实际路径就是 argmax 路径，所以每个决策的 argmax 价值都可得：本局下一次偏离的 `playout`，其后没有偏离则是实际结果。对手有随机性时这个基线仍不依赖本步动作，只是更不准；开启后模型对手也改取 argmax。`finish_game` 在该场所有复制局打完后才调用。复制局不产生训练行、不计入 `samples` 和局数预算，但要多打：采集变慢，多出的推理请求约等于偏离次数乘以偏离后本局剩余的学习决策数 |
 
 训练计划的 `execution` 还可以固定按主机校准的推理调度：`inference_history_band` 按完整历史长度分组，`fine_graph_batches` 细化 CUDA Graph 的批次大小。它们覆盖同名 `cfg` 项，只减少 padding，不截断历史、缩减训练量或改变并发资源；`execution` 里出现其他键时训练直接报错。自定义采样／价值 hook 保持原有的批次组合。
+
+## 残局开局
+
+`ctx.collect(..., starts=局面列表)` 时，每场只打一局，从随机抽到的局面开始：学习座位坐在局面的 `focal`，其余座位照常按 `cfg["opponents"]` 抽取。教师标签（`labels=True`）、`playout_baseline` 和钩子都照常可用；这种对局走 Python 引擎，每场计 1 局的局数预算（记录的 `hands` 为 1，`collection.jsonl` 的 `openings` 为真）。
+
+局面（`guided.starts`）是一个字典，内容如下：
+- 牌墙种子 `seed`、`dealer`、`hand_no`、`scores`；
+- `prefix`：从发牌起的每一步动作，在引擎里重放到该局面，所以事件和观察与真实对局一致，但没有之前各局的历史；
+- 学习座位 `focal`，它接下来要做选择；
+- `kind` 等标签。
+
+局面集由维护者用 `harness.starts` 从最好规则版本的四家自打中生成，放进 `recipe/starts/`（不进 Git），用 `ctx.starts(name)` 读取。普通采集和残局采集的比例由方案自己调用两次 `collect` 来混合。
 
 `hooks` 在主进程里对学习座位生效：
 

@@ -47,11 +47,14 @@ class Game:
         bc=False,
         group=None,
         external=None,
+        opening=None,
     ):
         from mahjong_ai.domain.types import RoundConfig
         from .artifacts import build_policy
 
         self.cfg, self.seed, self.focal = cfg, seed, focal
+        # An opening (guided.starts) is a one-hand game from a recorded position.
+        self.opening = opening
         self.train, self.bc, self.group = train, bc, group
         self.config = RoundConfig(rounds=cfg["rounds"], allow_tiebreak=False)
         self.specs = seat_specs
@@ -83,6 +86,8 @@ class Game:
         self.teacher_id = teacher or ""
         self.teacher_errors = 0
         self.scores, self.dealer, self.hand_no = [0] * 4, seed % 4, 0
+        if opening is not None:
+            self.scores, self.dealer, self.hand_no = list(opening["scores"]), opening["dealer"], opening["hand_no"] - 1
         self.history, self.views, self.rows = [], None, []
         self.complete = False
         self.predecision_reward = 0.0
@@ -98,9 +103,10 @@ class Game:
         from mahjong_ai.domain.engine import HandState, derive_seed
 
         self.hand_no += 1
+        opening = self.opening
         self.state = HandState(
             self.config,
-            derive_seed(self.seed, "wall", self.hand_no),
+            opening["seed"] if opening else derive_seed(self.seed, "wall", self.hand_no),
             self.dealer,
             self.hand_no,
             self.scores,
@@ -109,6 +115,10 @@ class Game:
             previous_views=self.views,
         )
         self.state.rounds_total = self.config.rounds
+        if opening:
+            from .starts import replay
+
+            replay(self.state, opening["prefix"], self.focal)
 
     def advance(self):
         from mahjong_ai.domain.types import RoundResult
@@ -134,7 +144,7 @@ class Game:
                 self.history, self.views = state.events, state.public_views()
                 if state.winner is not None:
                     self.dealer = state.winner
-                if self.hand_no == self.config.rounds:
+                if self.hand_no == self.config.rounds or self.opening:
                     self.complete = True
                     result = RoundResult(
                         "guided",
@@ -406,6 +416,7 @@ def worker(conn, cfg, bundle_path, panel_path, worker_index, command):
         )
         deadline = command["deadline"]
         todo = list(command.get("jobs", []))
+        openings = command.get("starts") or []
         is_eval = command["kind"] == "evaluate"
         # Training games whose rule seats the C engine can play run there.
         if not is_eval and cfg.get("fast_game", True):
@@ -436,7 +447,10 @@ def worker(conn, cfg, bundle_path, panel_path, worker_index, command):
             else:
                 if completed_samples >= command["samples"]:
                     return False
-                focal = rng.randrange(4)
+                # With openings every game is one hand from a recorded position,
+                # on the Python engine (the C engine starts only from a deal).
+                opening = rng.choice(openings) if openings else None
+                focal = opening["focal"] if opening else rng.randrange(4)
                 slots = command.get("history", [])
                 seats = [
                     rng.choice(slots)
@@ -445,7 +459,7 @@ def worker(conn, cfg, bundle_path, panel_path, worker_index, command):
                     for _ in range(4)
                 ]
                 seats[focal] = "model:current"
-                game = Training(
+                game = (Game if opening else Training)(
                     cfg,
                     bundle,
                     entries,
@@ -462,6 +476,7 @@ def worker(conn, cfg, bundle_path, panel_path, worker_index, command):
                     train=True,
                     bc=cfg["bc_only"],
                     external=external,
+                    **({"opening": opening} if opening else {}),
                 )
             games[next_id] = game
             next_id += 1
@@ -502,6 +517,7 @@ def worker(conn, cfg, bundle_path, panel_path, worker_index, command):
                             "rows": game.rows,
                             "score": game.scores[game.focal],
                             "scores": game.scores,
+                            "hands": 1 if game.opening else game.config.rounds,
                             "seed": game.seed,
                             "focal": game.focal,
                             "group": game.group,

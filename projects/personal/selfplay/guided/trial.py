@@ -205,9 +205,15 @@ class Context:
         c = self.actor_config
         return Actor(c["dim"], c["layers"], c["heads"]).to(self.device)
 
+    def starts(self, name):
+        """A frozen set of openings shipped in the recipe package (recipe/starts/<name>.json.gz)."""
+        from .starts import load
+
+        return load(Path(self.plan["recipe"]) / "starts" / f"{name}.json.gz")
+
     def collect(
         self, actor, cfg, *, samples, iteration, labels=False, history=None, hooks=None,
-        inference_session=None
+        inference_session=None, starts=None
     ):
         """Play training games with ``actor`` in the learning seat.
 
@@ -223,7 +229,9 @@ class Context:
         the learning seat (behaviour cloning). Returns (rows, records, resources);
         rows carry the fixed Actor inputs, action/logprob/value, per-hand reward on
         the last decision of each hand, ``hand``, teacher labels when requested,
-        and whatever critic_features added.
+        and whatever critic_features added. With ``starts`` (openings, e.g. from
+        ctx.starts), every game is one hand from a randomly drawn opening, the
+        learner in its ``focal`` seat; such a game counts one hand of the budget.
         """
         from .collection import collect
         from .config import configuration
@@ -291,6 +299,10 @@ class Context:
             "pool": pool,
             "specs": {k: v for k, v in self._rule_specs.items() if k in chosen or (labels and k == teacher)},
         }
+        if starts:
+            from .starts import check
+
+            command["starts"] = [check(o) for o in starts]
         models = dict(history or {}) | {
             "model:opponent:" + k: m for k, m in self._opponent_models.items() if k in chosen
         }
@@ -308,12 +320,14 @@ class Context:
             inference_session=inference_session,
         )
         # Every game started is played out, so the last collection may overrun the budget.
-        self.hands += len(records) * run_cfg["rounds"]
+        played = sum(r.get("hands", run_cfg["rounds"]) for r in records)
+        self.hands += played
         if labels:
-            self.labeled_hands += len(records) * run_cfg["rounds"]
+            self.labeled_hands += played
         self._rows += len(rows)
         with open(self.root / "collection.jsonl", "a") as stream:
             stream.write(json.dumps({"time": time.time(), "iteration": int(iteration), "workers": run_cfg["workers"],
+                                     "hands": played, "openings": bool(starts),
                                      "tables": run_cfg["tables"], **{k: v for k, v in resources.items() if k != "workers"}},
                                     default=float) + "\n")
         return rows, records, resources
