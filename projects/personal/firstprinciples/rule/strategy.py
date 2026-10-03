@@ -675,11 +675,12 @@ class Race:
             if kept is not None:
                 return kept
         if choice.action == "gang" and not at_win and obs.phase != "draw" and WHITE in obs.hand:
-            # Holding a white at a waiting hand, peng the discard rather than
-            # meld all four: the copy kept in hand can be added later, once the
-            # wait is baotou (simulated: better by 0.18 fan with one white).
+            # Holding a white at a hand waiting or one step away, peng the
+            # discard rather than meld all four: the copy kept in hand can be
+            # added later, once the wait is baotou, and keep_kong may still add
+            # it at once (simulated: better by 0.2 fan with one white).
             peng = next((a for a in obs.legal_actions if a.action == "peng"), None)
-            if peng is not None and _fast.shanten_raw(list(_fast.counts(tuple(obs.hand))), opened) == 0:
+            if peng is not None and _fast.shanten_raw(list(_fast.counts(tuple(obs.hand))), opened) <= 1:
                 return peng
         return choice
 
