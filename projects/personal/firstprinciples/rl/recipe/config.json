@@ -15,6 +15,6 @@
   "chunks_per_step": 3,
   "playout_baseline": true,
   "tail_average": 0.5,
-  "pg_top_layers": 0,
+  "pg_top_layers": 4,
   "sample_temperature": 1.0
 }
