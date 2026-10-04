@@ -537,6 +537,13 @@ class Dispatcher:
                 weights |= model_weights(task)
             self.host.sync(inputs | {self.models_root / w for w in weights})
             self.host.build_native(sorted({p for p in inputs if (Path(p) / "mahjong_ai").is_dir()}))
+            # A rule candidate's own native.c is compiled once here, not by
+            # every worker of the job racing to compile it on first load.
+            self.host.build_packages([
+                dict(spec, runtime_path=spec.get("runtime_path") or task["runtime_path"])
+                for _, _, task, _, _ in batch for spec in task.get("policies", {}).values()
+                if spec.get("package_path") and (spec.get("runtime_path") or task.get("runtime_path"))
+            ])
             server = (
                 self.host.ensure_service(self.models_root, service_code_files())
                 if weights else None

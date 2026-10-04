@@ -560,3 +560,24 @@ def test_a_scale_run_chains_its_segments_on_a_host_it_holds(harness, monkeypatch
     (recipe / "config.json").write_text((recipe / "config.json").read_text().replace("0.02", "0.015"))
     third = scale.start(1)
     assert scale.run_state()["segments"] == [first, third] and E.running("rl")[0]["from"] == first
+
+
+def test_a_lent_host_runs_the_rule_line_after_the_attempt_it_has(harness):
+    E, rl, line = harness
+    for host in rl.HOSTS:
+        (rl.RL / f"setup-{host}.json").write_text("{}")
+    record(E, id="fp-rl-000")
+    record(E, id="fp-rule-000", line="rule")
+    E.reserve_attempt("rl", "4070", "still training", stage="training")
+    line.hosts("lend", "4070", line="rule")
+    assert line.line_hosts("rule") == ("local", "4070")
+    assert "4070" not in line.line_hosts("rl")
+    # The RL attempt keeps the host until it finishes; meanwhile the rule line has the Mac.
+    assert line.free_hosts("rule") == ["local"]
+    E.release_attempt(next(s["id"] for s in E.running("rl")))
+    assert line.free_hosts("rule") == ["local", "4070"]
+    line.hosts("off", "4070")
+    assert line.free_hosts("rule") == ["local"] and line.line_hosts("rule") == ("local", "4070")
+    line.hosts("on", "4070")
+    line.hosts("lend", "4070", line="rl")
+    assert line.line_hosts("rule") == ("local",) and "4070" in line.line_hosts("rl")

@@ -8,7 +8,7 @@
 
 ## 评估
 
-`harness/evaluate.py` 让一次尝试面对固定对手池（7 个版本，现役成员见 `.local/pool.json`，组成的取舍见 ADR-0016）：每场被评估版本坐一个座位，其余三座取对手池的三个，35 种阵容循环、四座轮换，牌墙与各方种子只由局组编号决定，所以开发集对每次尝试都是同一批牌局。规则线在 Mac 本机评估，RL 线在训练它的 GPU 主机上就地评估，每台机器同一时间只跑一个评估；复用研究的对局执行器与冻结运行时，时限为出牌 2.0 秒、应答 0.6 秒，超时按平台默认动作代打。
+`harness/evaluate.py` 让一次尝试面对固定对手池（7 个版本，现役成员见 `.local/pool.json`，组成的取舍见 ADR-0016）：每场被评估版本坐一个座位，其余三座取对手池的三个，35 种阵容循环、四座轮换，牌墙与各方种子只由局组编号决定，所以开发集对每次尝试都是同一批牌局。规则线在 Mac 本机评估（GPU 主机借给规则线时也可在那台主机上评估，`hosts lend <主机> --line rule`），RL 线在训练它的 GPU 主机上就地评估，每台机器同一时间只跑一个评估；复用研究的对局执行器与冻结运行时，时限为出牌 2.0 秒、应答 0.6 秒，超时按平台默认动作代打。
 
 对局不用沙箱：对手池的代码包是维护者自己的，对局进程直接在进程内运行它们（`InlinePolicy`），每个进程打一桌或几桌（一桌一个线程），模型座位共用主机的推理服务。对手池全是规则时一个进程只打一桌：规则座位吃满一个核，多一桌只会让座位互相等解释器锁、超时翻倍。规则包的缓存要小，一个进程里所有座位共用垃圾回收，大缓存让全量回收停顿一秒以上。并发数属于按主机设置的执行参数（`EVAL_WORKERS`、`EVAL_TABLES`），不进对手池 id；运行时用 `harness.evaluate runtime` 从 `src/mahjong_ai` 冻结，换运行时就要重建对手池并重跑参照。对局任务目录按池 id 隔离（`.local/jobs/<池 id>/<尝试>/`）：中断后续跑会复用已完成的任务，换池后绝不会把旧池的结果当成新结果。模型座位的线性层以 fp16 推理，归一化与残差保留 fp32。接近同分的动作可能受设备、后端或批次形状的浮点舍入影响，不能保证跨配置逐场得分完全一致；更换推理实现也要冻结新版本并重跑参照。
 
@@ -59,6 +59,7 @@ cd projects/personal/firstprinciples
 - 给引擎加速器新增或改进函数（例如对手池成员的 C 实现）：先改 `src/mahjong_ai/_fast.c` 并通过全量测试，再 `drain on "<原因>"`，等在途评估和 `implement` 结束后 `upgrade-runtime`：以现役运行时为底换上仓库的 `_fast.c`。竞速部分（C 成员的函数，从 race valuation 横幅到方法表）以外的原有代码逐行保留、只许新增；竞速部分可以改，这时每个已登记的成员实现都要在新运行时下按 `implement` 的手数重新比对，逐决策与冻结成员相同。规则线最好版本在新旧运行时下重放同一批开发集、逐组成绩相同才切换；池编号、开发集和成绩都不变，远端主机在下次同步时自动编译。之后 `seal`，用 `implement` 登记用到新函数的成员实现，`drain off`。改动竞速部分以外的原有 C 代码时不能原池升级，要换新的对手池。
 - 修改 `projects/personal/selfplay/guided/` 后：把 `.local/rl/source` 按其 `source-manifest.json` 的 id 归档到 `.local/rl/sources/<id>`，再对每台主机重新 `setup <起点 sha>`，最后 `seal`。`setup` 从当前工作区冻结框架（`guided/` 与 `src/`）：工作区里有其他会话未提交的改动时，先用 `git worktree` 取一份干净的 HEAD，把 `recipe_jobs.REPO` 指向它冻结到 `.local/rl/source`，再 `setup`。
 - 往 4070 上传教师包时，清单里登记的文件要全部带上，包括 Mac 的 `.so`，否则 `read_bundle` 会拒绝；每个运行时目录都要在主机上单独编译 `_fast` 扩展。对手池里有模型成员时，评估由对局执行器从 Mac 的模型库自动同步，不要手动往主机拷贝模型。
+- 借主机给规则线：`harness.line hosts lend <主机> --line rule`（还回 `--line rl`），这台主机跑完手上的尝试后只接规则线的尝试；规则线自己的研究脚本（续打采数、联合调参）用 `python -m harness.hostrun push|run|status|fetch|stop --host <主机>` 在那台主机上跑（用法见 `harness/hostrun.py` 文件头）。
 - 流程检查：把 `.local/pool.json`、`.local/seal.json` 和 `.local/rl/setup-*.json` 复制到仓库内一个单独的目录，设 `FP_LOCAL` 指向它，再用 `FP_DEV`（开发集局组数，每组 4 场）、`FP_CONFIRM`、`FP_EQUIVALENCE_HANDS`、`FP_RL_HANDS`、`FP_RL_BUDGET` 缩短场数与训练预算，跑一遍 wait/start。这些缩短的设置只在 `FP_LOCAL` 下被接受，流程检查不提交 Git、不改动自由对战，跑完删掉这个目录。
 
 ## 运行数据

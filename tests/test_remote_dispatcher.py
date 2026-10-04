@@ -30,6 +30,9 @@ class Host:
     def build_native(self, runtimes):
         pass
 
+    def build_packages(self, specs):
+        self.packages = getattr(self, "packages", []) + [s["package_path"] for s in specs]
+
     def launch_many(self, jobs):
         if not self.up:
             raise RuntimeError("unreachable")
@@ -141,3 +144,13 @@ def test_a_host_last_known_offline_starts_offline_until_reached(tmp_path, monkey
     assert d.offline()
     host.up = True
     assert wait(lambda: not d.offline())
+
+
+def test_rule_packages_are_built_once_before_the_job_starts(tmp_path, monkeypatch):
+    host, d = dispatcher(tmp_path, monkeypatch)
+    (tmp_path / "g").mkdir()
+    task = {"scope": "paired", "runtime_path": "/rt",
+            "policies": {"rule": {"family": "code", "package_path": "/pkg"}, "model": {"family": "model"}}}
+    d.submit("g", tmp_path / "g", task, None, {})
+    assert wait(lambda: "g" in d.running)
+    assert host.packages == ["/pkg"]

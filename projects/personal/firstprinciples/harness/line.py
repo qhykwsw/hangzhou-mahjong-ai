@@ -5,6 +5,7 @@ on the conversation that started an attempt:
 
   python -m harness.line wait rule|rl [--minutes 9]   # results, notices, and the next step
   python -m harness.line start rule|rl "<change>" --why "<hypothesis>" --design-start <epoch> [--host <free host>]
+      (the rule line evaluates on the Mac, or on a GPU host lent to it)
       RL also [--hands <training hands, default 1M; at most 5M on small hosts, 105M on large>] [--from start|best|<RL version>]
   python -m harness.line start rule "<change>" --why "<why faster>" --design-start <epoch> --equivalent
   python -m harness.line checkout rule <rule version>   # a new framework's line: put that version in rule/
@@ -15,6 +16,7 @@ on the conversation that started an attempt:
 Only on the user's explicit word:
   python -m harness.line takeover rule|rl
   python -m harness.line hosts [on|off <host> [--now | --at "YYYY-MM-DD HH:MM"]]
+  python -m harness.line hosts lend <host> --line rule|rl   # which line's attempts the GPU host runs
   python -m harness.line cancel <attempt>
   python -m harness.line promote <attempt>
 
@@ -47,7 +49,6 @@ from . import rl
 from . import scale
 from guided import recipe_jobs, remote  # noqa: E402  (rl puts guided on the path)
 
-LINE_HOSTS = {"rule": ("local",), "rl": rl.HOSTS}
 RUNNING = E.LOCAL / "running"
 LEASE_SECONDS = 20 * 60  # a lease not renewed this long is free for another session
 PROBE_SECONDS = 120  # host answers are reused this long
@@ -115,6 +116,13 @@ def settings():
     return E.read_json(path) if path.exists() else {}
 
 
+def line_hosts(line):
+    """The hosts a line runs attempts on: the rule line has the Mac plus any GPU host
+    lent to it (hosts lend <host> rule), the RL line every other GPU host."""
+    lent = [h for h in rl.HOSTS if settings().get(h, {}).get("line") == "rule"]
+    return ("local", *lent) if line == "rule" else tuple(h for h in rl.HOSTS if h not in lent)
+
+
 def enabled(host):
     """The user's switch for a host (hosts on|off); every host starts switched on.
 
@@ -139,7 +147,7 @@ def when(epoch):
 def take_away(host):
     """Stop the attempts on ``host`` and queue them for another free host to redo."""
     moved = []
-    for state in E.running("rl"):
+    for state in E.running():  # an RL attempt, or a rule attempt evaluating on a lent host
         if state.get("host") == host:
             stage = "training" if state["stage"] == "training" else "evaluating"
             with handover(state["id"]):
@@ -197,9 +205,11 @@ def free_hosts(line, probe=True, reserved=None):
     A host a scale run holds is free only to that run's segments (``reserved``),
     whether or not it is switched on for the line.
     """
-    busy = {s.get("host") for s in E.running(line)}
+    # Any line's attempt keeps its host busy: a host just lent to the other line
+    # finishes the attempt it has before taking the new line's.
+    busy = {s.get("host") for s in E.running()}
     held = scale.reserved_hosts()
-    hosts = [h for h in LINE_HOSTS[line] if ready(h) and h not in busy
+    hosts = [h for h in line_hosts(line) if ready(h) and h not in busy
              and (h == reserved if h in held else enabled(h))]
     up = online(hosts, probe)
     return [h for h in hosts if up[h]]
@@ -235,7 +245,7 @@ def design_hosts(line, probe=True):
 
 def host_states(line):
     busy = {s["host"]: s["id"] for s in E.running(line) if s.get("host")}
-    hosts = LINE_HOSTS[line]
+    hosts = line_hosts(line)
     up = online([h for h in hosts if enabled(h) and h not in scale.reserved_hosts()])
     states = {}
     held = scale.reserved_hosts()
@@ -568,7 +578,7 @@ def drop_evaluation(attempt_id):
 def claim_host(state):
     """Wait in the queue (oldest first) for a free host, then take it."""
     while True:
-        online(LINE_HOSTS[state["line"]])
+        online(line_hosts(state["line"]))
         with E.attempts_lock():
             current = load(state["id"])
             if current is None or current["stage"] != "queued":
@@ -741,6 +751,9 @@ def wait(line, minutes):
                 base = (f"本线目录已恢复为最好版本 {champion['id']}" if champion
                         else "还没有最好版本，第一次尝试用本线目录原样（v0）")
                 where, command = "", "start"
+                if line == "rule" and free != ["local"]:
+                    where = f"可用主机 {'、'.join(free)}（local 是 Mac，其余是借给规则线的 GPU 主机）；"
+                    command = "start（默认 Mac；要在借来的主机上评估就加 --host 指定，等价检查只在 Mac）"
                 if line == "rl":
                     where = (f"空闲主机 {free[0]}，按它的资源设计" if len(free) == 1
                              else f"空闲主机 {'、'.join(free)}，选一台按它的资源设计") + "（见 status 的主机资源）；"
@@ -800,12 +813,15 @@ def start(line, change, why, design_start, host=None, equivalent=False, hands=No
     error = E.build_native(source) if line == "rule" else None
     if error:
         raise E.Refused("native.c 编译不过，没有开跑：\n" + error)
-    online(LINE_HOSTS[line])
+    online(line_hosts(line))
     with E.attempts_lock():
         free, why_not = design_hosts(line, probe=False)
         if not free:
             raise E.Refused(f"现在不能开新尝试：{why_not}")
-        host = host or free[0]
+        # An equivalence check runs on the Mac (its timings are the Mac's).
+        host = host or ("local" if equivalent else free[0])
+        if equivalent and host != "local":
+            raise E.Refused("等价检查只在 Mac 上做（耗时口径是 Mac 单进程），不能用 --host 指定其他主机。")
         if host not in free:
             raise E.Refused(f"{host} 现在不能开新尝试（可用：{'、'.join(free)}）。运行 wait，按可用的主机调整设计。")
         if line == "rl":
@@ -850,29 +866,40 @@ def status(line):
     print(f"迭代笔记：{notes_path(line)}" + ("" if notes_path(line).exists() else "（还没有，第一次拿到结果后新建）"))
 
 
-def hosts(action=None, host=None, now=False, at=None):
+def hosts(action=None, host=None, now=False, at=None, line=None):
     if action:
         if host not in rl.HOSTS:
             raise E.Refused(f"主机只能是 {'、'.join(rl.HOSTS)}")
         if at and (action != "off" or now):
             raise E.Refused("--at 只用于 off，不和 --now 一起用")
+        if action == "lend" and line not in ("rule", "rl"):
+            raise E.Refused("lend 要用 --line rule|rl 指定这台主机归哪条线")
         off_at = time.mktime(time.strptime(at, "%Y-%m-%d %H:%M")) if at else None
         if off_at is not None and off_at <= time.time():
             raise E.Refused(f"{at} 已经过去；立即关闭用 --now")
         with E.attempts_lock():
             values = settings()
-            if off_at is not None:
+            entry = values.get(host, {})
+            if action == "lend":
+                # The attempt the host has finishes there; the new line's attempts start after it.
+                entry = {k: v for k, v in entry.items() if k != "line"} | ({"line": "rule"} if line == "rule" else {})
+            elif off_at is not None:
                 # Lent until then: attempts may still start on it; any wait after that time closes it.
-                values[host] = values.get(host, {}) | {"enabled": True, "off_at": off_at}
+                entry = entry | {"enabled": True, "off_at": off_at}
             else:
-                values[host] = {"enabled": action == "on"}
+                entry = {k: v for k, v in entry.items() if k != "off_at"} | {"enabled": action == "on"}
+            values[host] = entry
             E.atomic_json(E.LOCAL / "hosts.json", values)
         if action == "off" and now:
             for attempt_id, stage in take_away(host):
                 print(f"{attempt_id} 已从 {host} 撤下，排队到其他空闲主机重做{'训练' if stage == 'training' else '评估'}")
-    states, busy = host_states("rl")
-    for h, v in states.items():
-        print(f"{h}：{v}" + (f"，在途 {busy[h]}" if h in busy else "") + (f"，{when(closing(h))} 关闭" if closing(h) else ""))
+    busy = {s["host"]: s["id"] for s in E.running() if s.get("host")}
+    for name in ("rl", "rule"):
+        states, _ = host_states(name)
+        for h, v in states.items():
+            if h != "local":
+                print(f"{h}（{E.LINE_NAMES[name]}）：{v}" + (f"，在途 {busy[h]}" if h in busy else "")
+                      + (f"，{when(closing(h))} 关闭" if closing(h) else ""))
 
 
 def cancel(attempt_id):
@@ -956,8 +983,9 @@ def main():
     c.add_argument("line", choices=lines)
     c.add_argument("version")
     h = sub.add_parser("hosts")
-    h.add_argument("action", nargs="?", choices=("on", "off"))
+    h.add_argument("action", nargs="?", choices=("on", "off", "lend"))
     h.add_argument("host", nargs="?")
+    h.add_argument("--line", choices=lines, help="with lend: the line the host runs attempts for (the RL line by default)")
     h.add_argument("--now", action="store_true", help="with off: take the attempt away from the host at once")
     h.add_argument("--at", help='with off: keep using the host until this local time ("YYYY-MM-DD HH:MM"), '
                                 "then switch it off and take its attempt away")
@@ -981,7 +1009,7 @@ def main():
             claim(args.line, force=True)
             print(f"{E.LINE_NAMES[args.line]}：本会话已接管；原会话下次调用时会停下")
         elif args.command == "hosts":
-            hosts(args.action, args.host, args.now, args.at)
+            hosts(args.action, args.host, args.now, args.at, args.line)
         elif args.command == "cancel":
             cancel(args.attempt)
         elif args.command == "promote":
