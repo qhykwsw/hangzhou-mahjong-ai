@@ -23,7 +23,7 @@ import time
 import numpy as np
 import torch
 
-from selfplay_core.actions import HU
+from selfplay_core.actions import GANG_EXPOSED, HU
 from guided.collection_session import InferenceSession
 
 from .batch import actor_args, make_batch, masked_log_probs, resident_rows
@@ -80,6 +80,38 @@ def tempered(temperature):
     return sample
 
 
+def search_rows(rows):
+    """Rows for every searched window's other candidates, their Q gain over the argmax, and summary stats."""
+    extra, gains = [], []
+    windows, best_alt, gain_sum, fish, fish_hu = 0, 0, 0.0, 0, 0
+    # The policy's own choice at the windows (the first candidate is its
+    # argmax), to watch it drift against the rule's (131: kong 244/1500 at
+    # kong windows, win 996/1500 at fish windows).
+    kong, kong_kong, fish_argmax_hu = 0, 0, 0
+    for row in rows:
+        actions, q = row.get("search_actions"), row.get("search_q")
+        if not actions or not q or len(actions) < 2 or not row.get("search_worlds"):
+            continue
+        windows += 1
+        best = int(np.argmax(q))
+        best_alt += best != 0
+        gain_sum += q[best] - q[0]
+        if row.get("search_kind") == "fish":
+            fish += 1
+            fish_hu += actions[best] == HU
+            fish_argmax_hu += actions[0] == HU
+        elif row.get("search_kind") == "kong":
+            kong += 1
+            kong_kong += GANG_EXPOSED <= actions[0] < HU
+        for action, value in zip(actions[1:], q[1:]):
+            extra.append(dict(row, action=int(action)))
+            gains.append(float(value) - float(q[0]))
+    stats = {"search_windows": windows, "search_best_alt": best_alt / max(1, windows),
+             "search_gain": gain_sum / max(1, windows), "search_fish_hu": fish_hu / max(1, fish),
+             "argmax_fish_hu": fish_argmax_hu / max(1, fish), "argmax_kong_kong": kong_kong / max(1, kong)}
+    return extra, np.asarray(gains, dtype=np.float64), stats
+
+
 def kl_step(actor, params, direction, batches, goal):
     """Move params to start + eta * direction with KL(start || new) ~= goal."""
     start = [p.detach().clone() for p in params]
@@ -119,7 +151,8 @@ def kl_step(actor, params, direction, batches, goal):
     return {"kl": kl, "step_norm": eta * norm, "hu_before": before, "hu_after": after}
 
 
-def distill(actor, rows, opt, size, device, rng, epochs, *, batch_source=None, permuter=None):
+def distill(actor, rows, opt, size, device, rng, epochs, *, batch_source=None, permuter=None,
+            hard=0.0, window=1.0):
     """Epochs of cross entropy toward the teacher's label on the learner's own states.
 
     DAgger: the learner played these rows with its own policy, so its mistakes
@@ -127,11 +160,18 @@ def distill(actor, rows, opt, size, device, rng, epochs, *, batch_source=None, p
     The first epoch's loss is taken before each batch is trained on (fresh rows).
     Later epochs relabel the suits of each batch at random (symmetry.py): the
     data, not the optimisation, limits imitation, and the suits are symmetric.
+
+    A near-converged student already agrees on ~97% of rows, so a uniform loss
+    spends almost everything on rows it has right. A row whose current argmax
+    differs from the label weighs 1 + `hard`, and a decision where a kong or a
+    win is legal weighs `window` times more: those windows are rare but carry
+    the multipliers (the teacher's kong-burst options live there).
     """
     teacher = np.array([r["teacher"] for r in rows])
     labeled = np.flatnonzero(teacher >= 0)
     actor.eval()
     total_ce, agree = 0.0, 0.0
+    windows = {"kong": [0, 0], "hu": [0, 0], "white": [0, 0]}
     # Each later epoch reshuffles; only the first one reports fresh metrics.
     for epoch in range(epochs):
         order = rng.permutation(labeled)
@@ -145,17 +185,31 @@ def distill(actor, rows, opt, size, device, rng, epochs, *, batch_source=None, p
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 logits = actor(*actor_args(mb))
             logp = masked_log_probs(logits, mb["mask"])
-            loss = -logp.gather(1, label[:, None]).mean()
+            nll = -logp.gather(1, label[:, None]).squeeze(1)
+            right = logp.argmax(-1) == label
+            kong = mb["mask"][:, GANG_EXPOSED:HU].any(1)
+            hu = mb["mask"][:, HU]
+            weight = 1.0 + hard * (~right).float()
+            weight = torch.where(kong | hu, weight * window, weight)
+            loss = (weight * nll).sum() / weight.sum()
             opt.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(actor.parameters(), 1.0)
             opt.step()
             if epoch == 0:
-                total_ce += float(loss) * len(idx)
-                agree += float((logp.argmax(-1) == label).sum())
+                total_ce += float(nll.detach().sum())
+                agree += float(right.sum())
+                # White in hand: the white discard is legal (white is never claimed).
+                for key, sel in (("kong", kong), ("hu", hu), ("white", mb["mask"][:, 33])):
+                    windows[key][0] += int(sel.sum())
+                    windows[key][1] += int((sel & right).sum())
     opt.zero_grad(set_to_none=True)
     n = max(1, len(labeled))
-    return {"labeled": len(labeled), "fresh_ce": total_ce / n, "fresh_agreement": agree / n}
+    stats = {"labeled": len(labeled), "fresh_ce": total_ce / n, "fresh_agreement": agree / n}
+    for key, (count, hits) in windows.items():
+        stats[f"{key}_rows"] = count
+        stats[f"{key}_agreement"] = hits / max(1, count)
+    return stats
 
 
 def train(ctx):
@@ -177,7 +231,9 @@ def train(ctx):
     microbatch = int(cfg["microbatch"])
     reserve = 5 if ctx.smoke else 60
     rng = np.random.default_rng(ctx.seed)
-    actor = ctx.actor
+    # `fresh_actor` starts from a randomly initialised Actor of the same shape,
+    # so nothing of an earlier imitation or teacher carries over.
+    actor = ctx.new_actor().to(ctx.device) if cfg.get("fresh_actor") else ctx.actor
     # The first distill_steps rollouts only distil the teacher on the learner's
     # own states (DAgger, where imitation gains fastest); the rest only take
     # policy-gradient steps. Interleaving the two made each undo the other.
@@ -196,20 +252,55 @@ def train(ctx):
     tail = float(cfg.get("tail_average", 0.0))
     average, averaged, budget, last_batches = None, 0, None, None
 
-    def rollout(distilling):
+    # Openings (ctx.starts): one-hand games from recorded rare windows (a kong
+    # the teacher keeps, a self-drawn win it may pass up), where ordinary play
+    # reaches one decision in hundreds. `starts_share` of each rollout's rows
+    # come from them, the sets taken in turn so each gets an equal share. Each
+    # collection gets a random `starts_per_call` of the set: every worker holds
+    # its own copy, and a whole decoded set is about 1 GB.
+    openings = [ctx.starts(name) for name in cfg.get("starts", [])]
+    per_call = int(cfg.get("starts_per_call", 1000))
+    share = float(cfg.get("starts_share", 0.0)) if openings else 0.0
+    turn = 0
+    if cfg.get("expert"):
+        from .expert import train as expert_train
+
+        return expert_train(ctx, actor, cfg, collect_cfg, openings, rng, hands, reserve)
+
+    # The first `bc_steps` distillation rollouts let the teacher play the
+    # learning seat (behaviour cloning): a random Actor's own games reach few
+    # of the states the teacher needs labelled. DAgger takes over after them.
+    bc_cfg = dict(collect_cfg, teacher_plays=True)
+
+    def rollout(distilling, bc=False):
         """One rollout of target_rows decisions, or None when time or hands ran short."""
-        nonlocal iteration
-        rows = []
+        nonlocal iteration, turn
+        rows, opened = [], []
+        ordinary = int(round(target_rows * (1.0 - share)))
+        hooks = None if distilling or sampler is None else {"sample": sampler}
+        play_cfg = (bc_cfg if bc else collect_cfg) if distilling else pg_cfg
+        open_cfg = dict(pg_cfg, search=dict(cfg["search"])) if cfg.get("search") else pg_cfg
         with InferenceSession(actor) as session:
-            while len(rows) < target_rows and hands() and ctx.time_left() > reserve:
+            while len(rows) < ordinary and hands() and ctx.time_left() > reserve:
                 iteration += 1
                 got, _, _ = ctx.collect(
-                    actor, collect_cfg if distilling else pg_cfg, samples=min(40000, target_rows),
+                    actor, play_cfg, samples=min(40000, ordinary),
                     iteration=iteration,
-                    labels=distilling, inference_session=session,
-                    hooks=None if distilling or sampler is None else {"sample": sampler},
+                    labels=distilling, inference_session=session, hooks=hooks,
                 )
                 rows += got
+            while share and len(rows) + len(opened) < target_rows and hands() and ctx.time_left() > reserve:
+                iteration += 1
+                pool = openings[turn % len(openings)]
+                got, _, _ = ctx.collect(
+                    actor, open_cfg if not distilling else play_cfg,
+                    samples=min(20000, target_rows - len(rows) - len(opened)),
+                    iteration=iteration, labels=distilling, inference_session=session, hooks=hooks,
+                    starts=[pool[i] for i in rng.choice(len(pool), min(len(pool), per_call), replace=False)],
+                )
+                turn += 1
+                opened += got
+        rows += opened
         if not rows or (len(rows) < target_rows and hands()):
             return None
         return rows
@@ -218,7 +309,7 @@ def train(ctx):
         began = time.time()
         distilling = step < int(cfg["distill_steps"])
         if distilling:
-            rows = rollout(True)
+            rows = rollout(True, bc=step < int(cfg.get("bc_steps", 0)))
             if rows is None:
                 break
             step += 1
@@ -228,6 +319,7 @@ def train(ctx):
                             if cfg.get("resident_rows", False) else None)
             packing_seconds = time.time() - packing_started
             stats = distill(actor, rows, opt, microbatch, ctx.device, rng, int(cfg["distill_epochs"]),
+                            hard=float(cfg.get("distill_hard", 0.0)), window=float(cfg.get("distill_window", 1.0)),
                             batch_source=batch_source, permuter=permuter)
             count = len(rows)
             del rows, batch_source
@@ -271,27 +363,54 @@ def train(ctx):
                                           oracle=not cfg.get("playout_baseline"))
                             if cfg.get("resident_rows", False) else None)
             rollouts += 1
+            # Searched windows (cfg["search"]): each other candidate becomes a
+            # row with its advantage over the argmax, the mean over worlds that
+            # keep the opponents' real hands. These worlds know the hidden
+            # tiles, so no single row decides: across rows with the same
+            # public information the advantages average to its expectation,
+            # the way a playout deviation's single wall does.
+            extra, gains, searched = search_rows(rows) if cfg.get("search") else ([], np.zeros(0), {})
+            if extra:
+                batch_source = (resident_rows(rows + extra, ctx.device, ctx.resources["gpu_limit_bytes"],
+                                              oracle=not cfg.get("playout_baseline"))
+                                if cfg.get("resident_rows", False) else None)
             if cfg.get("playout_baseline"):
                 weights, stats = playout_advantages(rows, cfg)
+                if cfg.get("search"):
+                    # Same units as the playout advantages, so the same scale;
+                    # `search_weight` keeps tens of thousands of searched
+                    # windows a step from swamping the ordinary rows.
+                    scale = stats["adv_scale"] if stats["adv_scale"] > 1e-6 else 1.0
+                    scale /= float(cfg.get("search_weight", 1.0))
+                    weights = np.concatenate([weights, (gains / scale).astype(np.float32)])
+                    stats |= searched
             else:
                 weights, stats = advantages(
                     rows, cfg, rng, ctx.device, ctx.seed + 7919 * rollouts, batch_source=batch_source,
                 )
             fitted += time.time() - started
             params, grad = gradient(
-                actor, rows, weights, microbatch, ctx.device, batch_source=batch_source,
-                capture=cfg.get("gradient_graphs", False),
+                actor, rows + extra if cfg.get("search") else rows, weights, microbatch, ctx.device,
+                batch_source=batch_source, capture=cfg.get("gradient_graphs", False),
             )
             direction = grad if direction is None else [d + g for d, g in zip(direction, grad)]
             # The KL check uses a subset of the latest rollout (same policy).
             subset = rng.choice(len(rows), size=min(len(rows), int(cfg["kl_rows"])), replace=False)
+            # Kong and win decisions share their heads across rare windows and
+            # ordinary play but are rare in a random subset, so the KL budget
+            # would not see them move: `kl_window_rows` of them join it.
+            if cfg.get("kl_window_rows"):
+                special = np.flatnonzero([bool(np.asarray(r["mask"])[GANG_EXPOSED:HU + 1].any()) for r in rows])
+                if len(special):
+                    picked = rng.choice(special, size=min(len(special), int(cfg["kl_window_rows"])), replace=False)
+                    subset = np.unique(np.concatenate([subset, picked]))
             del batches
             batches = [batch_source.batch(subset[s : s + 512]) if batch_source is not None
                        else make_batch([rows[i] for i in subset[s : s + 512]], ctx.device)
                        for s in range(0, len(subset), 512)]
             parts.append(stats)
             count += len(rows)
-            del rows, batch_source, weights, grad
+            del rows, extra, batch_source, weights, grad
             torch.cuda.empty_cache()
         if direction is None:
             break

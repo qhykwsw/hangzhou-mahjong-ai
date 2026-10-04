@@ -21,8 +21,20 @@ def critic_features(state, seat):
             if len(tiles) in (13 - 3 * opened, 14 - 3 * opened):
                 scalars[i] = (8 - shanten(tuple(sorted(tiles)), opened)) / 9
     scalars[3] = len(state.wall) / 136
+    # Where the hand starts (dealer, scores in base units, game length): the
+    # next hand's first row gives the game-value target its state (targets.py).
+    # The C engine's view keeps them in its snapshot; reading `scores` off the
+    # view itself would replay the whole game in Python.
+    snap = getattr(state, "_snap", None)
+    game = getattr(state, "_game", None)
+    config = game.config if game is not None else state.config
+    scores = snap["scores"] if snap is not None else state.scores
     return {
         "oracle_planes": planes,
         "oracle_scalars": scalars,
         "is_dealer": float(state.dealer == seat),
+        "dealer_rel": float((state.dealer - seat) % 4),
+        "seat": float(seat),
+        "hand_scores": np.asarray(scores, dtype=np.float32) / config.base_score,
+        "rounds": float(config.rounds),
     }

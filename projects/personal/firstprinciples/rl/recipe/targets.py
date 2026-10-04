@@ -72,15 +72,23 @@ def playout_advantages(rows, cfg):
     count = len(rows)
     hand = np.array([r["hand"] for r in rows])
     reward = np.array([float(r["reward"]) for r in rows])
-    game = np.cumsum(np.r_[1, (np.diff(hand) < 0).astype(int)]) - 1
+    if "game_mark" in rows[0]:
+        mark = np.array([r["game_mark"] for r in rows])
+        game = np.cumsum(np.r_[1, (np.diff(mark) != 0).astype(int)]) - 1
+    else:
+        game = np.cumsum(np.r_[1, (np.diff(hand) < 0).astype(int)]) - 1
     new_hand = np.r_[True, (np.diff(hand) != 0) | (np.diff(game) != 0)]
     hand_id = np.cumsum(new_hand) - 1
     first = np.flatnonzero(new_hand)
     outcome = np.bincount(hand_id, weights=reward)
     dealer = np.array([float(r["is_dealer"]) for r in rows])
-    dealt = dealer[first] > 0.5
-    premium = (float(outcome[dealt].mean() - outcome[~dealt].mean())
-               if dealt.any() and (~dealt).any() else 0.0)
+    # The premium comes from whole games only: an opening's one hand starts
+    # from a rare window, not from an ordinary deal.
+    whole = (np.bincount(game[first]) > 1)[game[first]]
+    dealt = (dealer[first] > 0.5) & whole
+    undealt = (dealer[first] <= 0.5) & whole
+    premium = (float(outcome[dealt].mean() - outcome[undealt].mean())
+               if dealt.any() and undealt.any() else 0.0)
     # Whether the learner deals the hand after each hand (the game's last has none).
     same_game_next = np.r_[game[first[1:]] == game[first[:-1]], False]
     deals_next = np.where(same_game_next, np.r_[dealer[first[1:]], 0.0], 0.0)
@@ -88,11 +96,34 @@ def playout_advantages(rows, cfg):
     deviated = np.array([bool(r.get("deviated", False)) for r in rows])
     playout = np.array([float(r.get("playout", 0.0)) for r in rows])
     playout_next = np.array([float(r.get("playout_deals_next", 0.0)) for r in rows])
-    greedy_value = playout + premium * np.where(last_hand[hand_id], 0.0, playout_next)
+    if cfg.get("game_value"):
+        # The value of the next hand's starting state (who deals, hands left,
+        # scores; value.start_value, the rule line's fit) replaces the constant
+        # dealer premium: a hand is credited with what the rest of the game is
+        # worth from where it leaves the table.
+        # The actual path reads it off the next hand's first row, a greedy
+        # continuation off its own end; the game's last hand, and an opening's
+        # one hand, add nothing on either side.
+        from .value import start_value as value
+        after = np.zeros(len(first))
+        for h in np.flatnonzero(same_game_next):
+            r = rows[first[h + 1]]
+            after[h] = value(int(r["dealer_rel"]), int(r["rounds"]) - int(r["hand"]) + 1, int(r["rounds"]),
+                             list(r["hand_scores"]), int(r["seat"]))
+        greedy_value = playout.copy()
+        for i in np.flatnonzero(deviated & ~last_hand[hand_id]):
+            r = rows[i]
+            if "playout_dealer" in r and int(r["hand"]) < int(r["rounds"]):
+                greedy_value[i] += value((int(r["playout_dealer"]) - int(r["seat"])) % 4, int(r["rounds"]) - int(r["hand"]),
+                                         int(r["rounds"]), list(r["playout_scores"]), int(r["seat"]))
+        ends = outcome + after
+    else:
+        greedy_value = playout + premium * np.where(last_hand[hand_id], 0.0, playout_next)
+        ends = outcome + premium * deals_next
     adv = np.zeros(count)
     for h in np.unique(hand_id[deviated]):
         points = np.flatnonzero(deviated & (hand_id == h))
-        taken = np.r_[greedy_value[points[1:]], outcome[h] + premium * deals_next[h]]
+        taken = np.r_[greedy_value[points[1:]], ends[h]]
         adv[points] = taken - greedy_value[points]
     moved = adv[deviated]
     stats = {
@@ -102,4 +133,5 @@ def playout_advantages(rows, cfg):
         "deviation_zero": float((moved == 0).mean()) if len(moved) else 0.0,
         "games": int(game.max() + 1),
     }
+    stats["adv_scale"] = float(max(adv.std(), 1e-9))
     return (adv / max(adv.std(), 1e-9)).astype(np.float32), stats
