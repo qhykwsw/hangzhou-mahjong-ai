@@ -200,8 +200,10 @@ def application(project, tailscale_url=None):
         value = json.loads(path.read_text()) if path.exists() else {"panels": {}, "results": []}
         for records in latest.values():
             for r in records.values():
-                if r.get("proxy"):
+                if (r.get("proxy") or {}).get("score") is not None:
                     value["results"].append(dict(r["proxy"], version=r["id"], at=r.get("finished_at")))
+        active = lines_root / "proxy" / "panel.json"
+        value["active"] = json.loads(active.read_text())["panel"] if active.exists() else None
         return value
 
     async def lines(request):

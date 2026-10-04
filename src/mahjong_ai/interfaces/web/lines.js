@@ -110,12 +110,27 @@
   // Proxy tables (the tournament crowd's stand-in): each version's latest whole-game
   // paired difference against the reference it was played with, with a 95% interval.
   function proxyChart(proxy) {
-    const results = (proxy?.results || []).filter((r) => r.against);
-    if (!results.length) return '<p class="muted">还没有代理桌成绩。</p>';
+    const all = proxy?.results || [];
+    if (!all.some((r) => r.against)) return '<p class="muted">还没有代理桌成绩。</p>';
+    // One chart per panel (pairs exist only within a panel): the active one first, then by latest result.
+    const last = new Map();
+    for (const r of all) last.set(r.panel, Math.max(last.get(r.panel) || 0, r.at || 0));
+    const panels = [...last.keys()].filter((id) => all.some((r) => r.panel === id && r.against))
+      .sort((a, b) => (b === proxy.active) - (a === proxy.active) || last.get(b) - last.get(a));
+    $("proxyNote").textContent = "各版本对参照的整场配对差（桌面分/场），横线为 95% 区间";
+    return panels.map((id) => {
+      const info = proxy.panels?.[id];
+      const head = `${info?.name || id}${id === proxy.active ? "（当前，新版本默认加跑）" : ""}`
+        + (info?.proxies ? `：${info.proxies} 个代理` : "") + (info?.check ? `；${info.check}` : "");
+      return `<div class="proxypanel"><div class="muted">${esc(head)}</div>${panelChart(proxy, all.filter((r) => r.panel === id))}</div>`;
+    }).join("");
+  }
+
+  function panelChart(proxy, results) {
     const latest = new Map();
-    for (const r of results) if (!latest.has(r.version) || (r.at || 0) >= (latest.get(r.version).at || 0)) latest.set(r.version, r);
+    for (const r of results.filter((r) => r.against)) if (!latest.has(r.version) || (r.at || 0) >= (latest.get(r.version).at || 0)) latest.set(r.version, r);
     const refs = [...new Set([...latest.values()].map((r) => r.against.version))];
-    const rows = [...latest.values()].sort((a, b) => b.against.diff - a.against.diff);
+    const rows = [...latest.values()].filter((r) => !refs.includes(r.version)).sort((a, b) => b.against.diff - a.against.diff);
     const W = Math.max(300, Math.round($("proxyChart").clientWidth - 16));
     const narrow = W < 600;
     const L = narrow ? 92 : 120, R = 16, T = 10, B = 26, row = 26;
@@ -135,8 +150,8 @@
     const draw = (r, i, diff, se, label) => {
       const y = T + row * (i + 0.5);
       const color = r.version.startsWith("fp-rl-") ? "var(--blue)" : "var(--teal)";
-      const panel = proxy.panels?.[r.panel]?.name || r.panel;
-      const tip = `${r.version} 对 ${r.against?.version ?? "—"}：${signed(diff)} ± ${se.toFixed(2)}\n代理桌 ${signed(r.score)} ± ${r.se?.toFixed(2)}（${r.games} 场，${panel}，${r.batch || ""}）`;
+      const where = r.host ? `，${r.host}` : "";
+      const tip = `${r.version} 对 ${r.against?.version ?? "—"}：${signed(diff)} ± ${se.toFixed(2)}\n代理桌 ${signed(r.score)} ± ${r.se?.toFixed(2)}（${r.games} 场${where}，${r.batch || ""}）`;
       parts.push(`<text x="${L - 8}" y="${y + 4}" class="label" text-anchor="end">${esc(label)}</text>`);
       if (se) parts.push(`<line x1="${X(diff - 1.96 * se)}" x2="${X(diff + 1.96 * se)}" y1="${y}" y2="${y}" stroke="${color}" stroke-width="2"><title>${esc(tip)}</title></line>`);
       parts.push(`<circle cx="${X(diff)}" cy="${y}" r="5" fill="${color}"><title>${esc(tip)}</title></circle>`);
@@ -144,10 +159,8 @@
     };
     rows.forEach((r, i) => draw(r, i, r.against.diff, r.against.se, r.version.replace(/^fp-/, "")));
     // The reference itself sits on zero.
-    const ref = (proxy.results || []).filter((r) => !r.against && refs.includes(r.version)).sort((a, b) => (b.at || 0) - (a.at || 0))[0];
+    const ref = results.filter((r) => !r.against && refs.includes(r.version)).sort((a, b) => (b.at || 0) - (a.at || 0))[0];
     if (ref) draw({ ...ref, against: null }, rows.length, 0, 0, `${ref.version.replace(/^fp-/, "")}（参照）`);
-    const panels = [...new Set(rows.map((r) => r.panel))].map((id) => proxy.panels?.[id]?.name || id).join("、");
-    $("proxyNote").textContent = `各版本对参照的整场配对差（桌面分/场），横线为 95% 区间；${panels}`;
     return `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="代理桌成绩">${parts.join("")}</svg>`;
   }
 

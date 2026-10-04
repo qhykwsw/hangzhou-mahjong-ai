@@ -542,6 +542,8 @@ def equivalent(state):
                   stats=stats, spec=state["spec"], dev_blocks=blocks,
                   design_seconds=state.get("design_seconds"), equivalent=summary) | extra(state)
     record["reference"] = E.against_platform(record)
+    if champion.get("proxy") and summary["carried"]:
+        record["proxy"] = champion["proxy"]  # the same moves at the proxy tables too
     E.append_record(record)
 
 

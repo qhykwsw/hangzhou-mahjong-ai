@@ -992,6 +992,13 @@ select:disabled {
 .proxyhead {
   margin-top: 8px;
 }
+.proxypanel + .proxypanel {
+  margin-top: 14px;
+}
+.proxypanel > .muted {
+  font-size: 12px;
+  margin: 4px 0 2px;
+}
 .lines-chart .label {
   font-size: 12px;
   fill: var(--ink, #23343a);

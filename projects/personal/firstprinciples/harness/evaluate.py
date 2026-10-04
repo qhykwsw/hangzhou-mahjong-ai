@@ -397,6 +397,8 @@ def conditions():
     for path in sorted((LOCAL / "rl").glob("setup-*.json")):
         s = read_json(path)
         h.update(json.dumps([path.name, s.get("source_id"), s.get("weights"), s.get("start_actor")]).encode())
+    if (LOCAL / "proxy" / "panel.json").exists():  # harness.proxy: the active proxy tables
+        h.update((LOCAL / "proxy" / "panel.json").read_bytes())
     return h.hexdigest()
 
 
@@ -417,7 +419,8 @@ def check_seal():
 
 
 def lineups(pool):
-    return list(itertools.combinations(sorted(pool["members"]), 3))
+    """Block b's opponents are lineups[b % len]: every triple of the pool, or the proxy tables' drawn ones."""
+    return pool.get("lineups") or list(itertools.combinations(sorted(pool["members"]), 3))
 
 
 def assignments(pool, attempt_id, blocks):
@@ -1014,8 +1017,25 @@ def evaluate(line, spec, description, attempt_id=None, design_seconds=None, host
     ) | (extra or {})
     if verdict == "keep":
         record["reference"] = against_platform(record)
+    if not reference:
+        record["proxy"] = proxy_tables(attempt_id, spec, host)
     append_record(record)
     return record
+
+
+def proxy_tables(attempt_id, spec, host):
+    """The version's whole games on the proxy panel (harness.proxy), when one is active.
+
+    Evidence beside the pool, not part of the verdict: a failure is recorded
+    in its place and the attempt's record stands.
+    """
+    from . import proxy
+
+    try:
+        return proxy.score(attempt_id, spec, host)
+    except Exception as exc:  # noqa: BLE001
+        log(f"{attempt_id} proxy tables failed: {exc}")
+        return {"error": str(exc)[-500:]}
 
 
 def append_record(record):
@@ -1136,6 +1156,13 @@ def report(record):
         verdict = "高于参照线，可以上场" if ref["above"] else "未确定高于参照线"
         lines.append(f"对照上场版本 {ref['against']}：{ref['games']} 场配对差 {ref['diff']:+.2f} ± {ref['se']:.2f}，"
                      f"90% 下界 {ref['lower90']:+.2f}，{verdict}")
+    proxy = record.get("proxy")
+    if proxy and proxy.get("error"):
+        lines.append(f"代理桌：没有打完（{proxy['error'][-200:]}），不影响结论")
+    elif proxy:
+        a = proxy["against"]
+        lines.append(f"代理桌：{proxy['games']} 场 {proxy['score']:+.2f} ± {proxy['se']:.2f}，"
+                     f"对 {a['version']} 配对差 {a['diff']:+.2f} ± {a['se']:.2f}（比赛人群的旁证，不进判定）")
     lines.append(f"排名：{ranking(record)}")
     return "\n".join(lines)
 
