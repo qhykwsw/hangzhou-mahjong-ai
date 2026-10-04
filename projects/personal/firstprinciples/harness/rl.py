@@ -51,10 +51,15 @@ BUDGET = E.override("FP_RL_BUDGET", 2 * 86400)
 # an attempt there trains only from versions of the same size. The large size
 # trains in segments: up to 10M hands an attempt (5M of them teacher-labelled),
 # each one evaluated, the next continuing from it (--from); the hands add up
-# along the path without a cap, as for the small size.
-SIZES = {"small": {"dim": 128, "layers": 4, "heads": 4}, "large": {"dim": 384, "layers": 8, "heads": 8}}
-HOST_SIZE = {"4070": "small", "4090": "large", "5070ti": "small"}
+# along the path without a cap, as for the small size. Since 2026-10-04 the 4090
+# runs the medium size (about 4.8M parameters, between small 0.84M and large
+# 14.3M) from a randomly initialized start, budgeted like the small size; the
+# large versions stay comparable on the development set but no host trains them.
+SIZES = {"small": {"dim": 128, "layers": 4, "heads": 4}, "medium": {"dim": 256, "layers": 6, "heads": 8},
+         "large": {"dim": 384, "layers": 8, "heads": 8}}
+HOST_SIZE = {"4070": "small", "4090": "medium", "5070ti": "small"}
 BUDGETS = {"small": {"max_hands": 5_000_000, "max_labeled": None},
+           "medium": {"max_hands": 5_000_000, "max_labeled": None},
            "large": {"max_hands": 10_000_000, "max_labeled": 5_000_000}}
 MAX_HANDS = BUDGETS["small"]["max_hands"]
 # A collection plays out every game it started, so the last one may pass the

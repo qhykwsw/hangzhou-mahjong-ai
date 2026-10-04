@@ -84,9 +84,9 @@ def test_requeued_attempts_take_free_hosts_before_new_designs(harness):
     record(E, id="fp-rl-000")
     E.reserve_attempt("rl", "4070", "busy", stage="training")
     E.reserve_attempt("rl", None, "small, lost", stage="queued", next="training")
-    # A small attempt is redone only on a small host: the free large host stays open.
+    # A small attempt is redone only on a small host: the free 4090 (another size) stays open.
     assert line.design_hosts("rl") == (["4090"], None)
-    E.reserve_attempt("rl", None, "lost on a restart", stage="queued", next="training", size="large")
+    E.reserve_attempt("rl", None, "lost on a restart", stage="queued", next="training", size=rl.size("4090"))
     hosts, why = line.design_hosts("rl")
     assert hosts == [] and "排队" in why
     line.hosts("off", "4090")
@@ -523,6 +523,7 @@ def test_a_scale_run_chains_its_segments_on_a_host_it_holds(harness, monkeypatch
     monkeypatch.setattr(scale, "RECIPE", recipe)
     monkeypatch.setattr(scale, "SCALE", E.LOCAL / "scale")
     monkeypatch.setattr(line, "spawn", lambda attempt_id: None)
+    monkeypatch.setitem(rl.HOST_SIZE, "4090", "large")  # the scale run (ended 2026-10-03) ran the large size there
     for host in rl.HOSTS:
         (rl.RL / f"setup-{host}.json").write_text("{}")
     E.seal()
