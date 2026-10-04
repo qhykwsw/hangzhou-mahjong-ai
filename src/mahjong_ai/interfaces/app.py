@@ -190,7 +190,19 @@ def application(project, tailscale_url=None):
         # "attempts" stays the current pool's, as a page loaded before older pools were served expects.
         return {"enabled": True, "pool": {"id": pool["id"], "members": sorted(pool["members"])},
                 "pools": pools, "attempts": [r for r in rows if r["pool"] == pool["id"]],
-                "older": [r for r in rows if r["pool"] != pool["id"]]}
+                "older": [r for r in rows if r["pool"] != pool["id"]],
+                "proxy": proxy_tables(latest)}
+
+    def proxy_tables(latest):
+        """Whole-game results against the proxy panel (the tournament crowd's stand-in):
+        batches appended to proxy-results.json, and any attempt record carrying ``proxy``."""
+        path = lines_root / "proxy-results.json"
+        value = json.loads(path.read_text()) if path.exists() else {"panels": {}, "results": []}
+        for records in latest.values():
+            for r in records.values():
+                if r.get("proxy"):
+                    value["results"].append(dict(r["proxy"], version=r["id"], at=r.get("finished_at")))
+        return value
 
     async def lines(request):
         return JSONResponse(await asyncio.to_thread(iteration_lines))

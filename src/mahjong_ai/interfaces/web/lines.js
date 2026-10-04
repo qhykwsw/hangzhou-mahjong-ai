@@ -107,6 +107,50 @@
     return `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="迭代线得分">${parts.join("")}</svg>`;
   }
 
+  // Proxy tables (the tournament crowd's stand-in): each version's latest whole-game
+  // paired difference against the reference it was played with, with a 95% interval.
+  function proxyChart(proxy) {
+    const results = (proxy?.results || []).filter((r) => r.against);
+    if (!results.length) return '<p class="muted">还没有代理桌成绩。</p>';
+    const latest = new Map();
+    for (const r of results) if (!latest.has(r.version) || (r.at || 0) >= (latest.get(r.version).at || 0)) latest.set(r.version, r);
+    const refs = [...new Set([...latest.values()].map((r) => r.against.version))];
+    const rows = [...latest.values()].sort((a, b) => b.against.diff - a.against.diff);
+    const W = Math.max(300, Math.round($("proxyChart").clientWidth - 16));
+    const narrow = W < 600;
+    const L = narrow ? 92 : 120, R = 16, T = 10, B = 26, row = 26;
+    const H = T + B + row * (rows.length + 1);
+    const lo = Math.min(0, ...rows.map((r) => r.against.diff - 1.96 * r.against.se));
+    const hi = Math.max(0, ...rows.map((r) => r.against.diff + 1.96 * r.against.se));
+    const pad = Math.max(0.2, (hi - lo) * 0.06);
+    const x0 = lo - pad, x1 = hi + pad;
+    const X = (v) => L + ((v - x0) / (x1 - x0)) * (W - L - R);
+    const parts = [];
+    const step = niceStep((x1 - x0) / (narrow ? 4 : 8));
+    for (let v = Math.ceil(x0 / step) * step; v <= x1; v += step) {
+      parts.push(`<line x1="${X(v)}" x2="${X(v)}" y1="${T}" y2="${H - B}" class="grid"/>`);
+      parts.push(`<text x="${X(v)}" y="${H - 8}" class="axis" text-anchor="middle">${signed(v, step < 1 ? 1 : 0)}</text>`);
+    }
+    parts.push(`<line x1="${X(0)}" x2="${X(0)}" y1="${T}" y2="${H - B}" class="zero"><title>参照 ${esc(refs.join("、"))}</title></line>`);
+    const draw = (r, i, diff, se, label) => {
+      const y = T + row * (i + 0.5);
+      const color = r.version.startsWith("fp-rl-") ? "var(--blue)" : "var(--teal)";
+      const panel = proxy.panels?.[r.panel]?.name || r.panel;
+      const tip = `${r.version} 对 ${r.against?.version ?? "—"}：${signed(diff)} ± ${se.toFixed(2)}\n代理桌 ${signed(r.score)} ± ${r.se?.toFixed(2)}（${r.games} 场，${panel}，${r.batch || ""}）`;
+      parts.push(`<text x="${L - 8}" y="${y + 4}" class="label" text-anchor="end">${esc(label)}</text>`);
+      if (se) parts.push(`<line x1="${X(diff - 1.96 * se)}" x2="${X(diff + 1.96 * se)}" y1="${y}" y2="${y}" stroke="${color}" stroke-width="2"><title>${esc(tip)}</title></line>`);
+      parts.push(`<circle cx="${X(diff)}" cy="${y}" r="5" fill="${color}"><title>${esc(tip)}</title></circle>`);
+      if (se) parts.push(`<text x="${X(diff)}" y="${y - 8}" class="axis" text-anchor="middle">${signed(diff)}</text>`);
+    };
+    rows.forEach((r, i) => draw(r, i, r.against.diff, r.against.se, r.version.replace(/^fp-/, "")));
+    // The reference itself sits on zero.
+    const ref = (proxy.results || []).filter((r) => !r.against && refs.includes(r.version)).sort((a, b) => (b.at || 0) - (a.at || 0))[0];
+    if (ref) draw({ ...ref, against: null }, rows.length, 0, 0, `${ref.version.replace(/^fp-/, "")}（参照）`);
+    const panels = [...new Set(rows.map((r) => r.panel))].map((id) => proxy.panels?.[id]?.name || id).join("、");
+    $("proxyNote").textContent = `各版本对参照的整场配对差（桌面分/场），横线为 95% 区间；${panels}`;
+    return `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="代理桌成绩">${parts.join("")}</svg>`;
+  }
+
   function niceStep(raw) {
     const p = 10 ** Math.floor(Math.log10(raw || 1));
     return [1, 2, 5, 10].map((m) => m * p).find((s) => s >= raw) || p * 10;
@@ -156,7 +200,10 @@
   let pick = null; // the pool shown: the current one unless the viewer picked another
   const picked = () => [...data.attempts, ...(data.older || [])].filter((a) => a.pool === pick);
   window.addEventListener("resize", () => {
-    if (data && !$("linesView").hidden) $("linesChart").innerHTML = chart(picked());
+    if (data && !$("linesView").hidden) {
+      $("linesChart").innerHTML = chart(picked());
+      $("proxyChart").innerHTML = proxyChart(data.proxy);
+    }
   });
 
   function draw() {
@@ -172,6 +219,7 @@
     const rows = picked();
     $("linesLegend").innerHTML = legend(rows);
     $("linesChart").innerHTML = chart(rows);
+    $("proxyChart").innerHTML = proxyChart(data.proxy);
     $("linesTable").innerHTML = table(rows);
   }
 

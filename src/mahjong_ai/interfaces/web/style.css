@@ -989,3 +989,15 @@ select:disabled {
   font-weight: 400;
   vertical-align: 2px;
 }
+.proxyhead {
+  margin-top: 8px;
+}
+.lines-chart .label {
+  font-size: 12px;
+  fill: var(--ink, #23343a);
+}
+.lines-chart .zero {
+  stroke: var(--red);
+  stroke-width: 1.5;
+  stroke-dasharray: 6 4;
+}
