@@ -98,6 +98,18 @@ def test_a_crash_without_reboot_is_a_failure_and_offline_needs_time(tmp_path, mo
     assert d.offline()
 
 
+def test_an_empty_poll_reply_is_asked_again(tmp_path, monkeypatch):
+    host, d = dispatcher(tmp_path, monkeypatch)
+    (tmp_path / "f").mkdir()
+    d.submit("f", tmp_path / "f", {"scope": "paired"}, None, {})
+    assert wait(lambda: "f" in d.running)
+    poll, replies = host.poll, []
+    host.poll = lambda jobs: replies.append(1) or (None if len(replies) == 1 else poll(jobs))
+    host.alive = False
+    assert wait(lambda: receipt(tmp_path / "f"))
+    assert receipt(tmp_path / "f")["status"] == "failed" and len(replies) >= 2
+
+
 def test_adopted_job_is_polled_and_a_moved_job_is_ignored(tmp_path, monkeypatch):
     host, d = dispatcher(tmp_path, monkeypatch)
     root = tmp_path / "d"

@@ -576,9 +576,13 @@ class Dispatcher:
             return
         try:
             states = self.host.poll(jobs)
-            self.last_ok = time.monotonic()
         except Exception:
             return  # Unreachable: jobs keep running there; ask again later.
+        if not isinstance(states, dict):
+            # An empty reply (wsl.exe can exit 0 without output) says nothing
+            # about the jobs: ask again later instead of ending this thread.
+            return
+        self.last_ok = time.monotonic()
         for job_id, state in states.items():
             root, _ = jobs[job_id]
             with self.lock:
