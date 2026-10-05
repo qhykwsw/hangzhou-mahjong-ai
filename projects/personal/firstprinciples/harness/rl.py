@@ -19,7 +19,9 @@ collection execution (workers, tables, batching), and which modules a recipe
 may import. The catalog also offers the platform proxies the maintainer
 registered (harness.rl proxies), as training opponents only, and the rule
 packages registered as training opponents (harness.rl training-rules), which
-run under the pool's runtime but are never evaluated against.
+run under the pool's runtime but are never evaluated against, and RL versions
+that never became a line's best but the maintainer registered (harness.rl
+unconfirmed), e.g. to average their weights.
 """
 import argparse
 import json
@@ -216,7 +218,37 @@ def catalog(pool=None):
             if spec.get("family") != "model":
                 spec["runtime_path"] = pool["runtime_path"]
             offered[r["id"]] = {"spec": spec, "record": r}
-    return offered | training_rules(pool) | proxies()
+    return offered | unconfirmed_versions() | training_rules(pool) | proxies()
+
+
+def unconfirmed_path():
+    return RL / "unconfirmed-versions.json"
+
+
+def unconfirmed_versions():
+    """RL versions the maintainer registered although never a line's best (e.g. for weight averaging).
+
+    Like the line's best versions they may be opponents or teachers; the
+    evaluation stays on the fixed pool.
+    """
+    if not unconfirmed_path().exists():
+        return {}
+    out = {}
+    for attempt_id in E.read_json(unconfirmed_path())["versions"]:
+        record = version(attempt_id)
+        out[attempt_id] = {"spec": dict(record["spec"]), "record": dict(
+            record, description=f"未成为最好版本（{E.STATUS.get(record['status'], record['status'])}），维护者登记：{record['description']}")}
+    return out
+
+
+def register_unconfirmed(attempt_ids):
+    """Offer these RL versions in the catalog; replaces the previous registration (none clears it)."""
+    for attempt_id in attempt_ids:
+        record = version(attempt_id)
+        if not (E.MODELS / record["spec"]["parameters"]["weights"]).is_dir():
+            raise SystemExit(f"{attempt_id}: 模型不在模型库")
+    E.atomic_json(unconfirmed_path(), {"versions": list(attempt_ids)})
+    return len(attempt_ids)
 
 
 def training_rules_path():
@@ -614,6 +646,8 @@ def main():
     t.add_argument("--scores", help="JSON {name: {score, se}} of the packages on the pool's development set")
     q = sub.add_parser("proxies", help="offer a proxy panel's members in the catalog (training opponents only)")
     q.add_argument("panel", help="panel.json of the online calibration")
+    u = sub.add_parser("unconfirmed", help="offer RL versions that never became a line's best in the catalog")
+    u.add_argument("versions", nargs="*", help="attempt ids; none clears the registration")
     b = sub.add_parser("baseline", help="score the start Actor as the RL line's first best version (once per pool)")
     b.add_argument("--host", default="4070", choices=HOSTS)
     args = parser.parse_args()
@@ -624,6 +658,8 @@ def main():
         print(f"已登记 {register_training_rules(args.packages, scores)} 个训练对手")
     elif args.command == "proxies":
         print(f"已登记 {register_proxies(args.panel)} 个平台代理")
+    elif args.command == "unconfirmed":
+        print(f"已登记 {register_unconfirmed(args.versions)} 个未成为最好的 RL 版本")
     elif args.command == "baseline":
         try:
             print(E.report(baseline(args.host)))
