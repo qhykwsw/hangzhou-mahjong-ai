@@ -586,7 +586,7 @@ def test_a_lent_host_runs_the_rule_line_after_the_attempt_it_has(harness):
     assert line.line_hosts("rule") == ("local",) and "4070" in line.line_hosts("rl")
 
 
-def proxy_panel(E, proxy, tmp_path, monkeypatch, reference="fp-rule-131"):
+def proxy_panel(E, proxy, tmp_path, monkeypatch, kind, reference="fp-rule-131"):
     monkeypatch.setattr(proxy, "BLOCKS", 40)
     monkeypatch.setattr(E, "DEV_BLOCKS", 2)
     monkeypatch.setattr(E, "CONFIRM_BLOCKS", 2)
@@ -596,22 +596,24 @@ def proxy_panel(E, proxy, tmp_path, monkeypatch, reference="fp-rule-131"):
     (E.LOCAL / "pool.json").write_text(json.dumps(pool))
     record(E, id="fp-rule-131", line="rule", games=8, finished_at=1, spec={"family": "code", "package_hash": "r"},
            dev_blocks={"0": 0.0, "1": 1.0})
-    panel = tmp_path / "panel.json"
-    panel.write_text(json.dumps({"name": "v2", "members": {
-        "p01": {"weights": "w1", "share": 0.3}, "p02": {"weights": "w2", "share": 0.2},
+    panel = tmp_path / f"panel-{kind}.json"
+    panel.write_text(json.dumps({"name": kind, "members": {
+        "p01": {"weights": f"w1-{kind}", "share": 0.3}, "p02": {"weights": "w2", "share": 0.2},
         "tail": {"weights": "wt", "share": 0.5}}}))
     E.seal()
-    proxy.activate(panel, reference)
+    proxy.activate(panel, reference, kind)
     with pytest.raises(E.Refused):
-        E.check_seal()  # the active panel is a sealed condition
+        E.check_seal()  # the active panels are sealed conditions
     E.seal()
-    return proxy.load()
+    return proxy.load(kind)
 
 
-def test_a_new_best_version_plays_the_proxy_tables_for_the_record_only(harness, monkeypatch, tmp_path):
+def test_a_version_above_the_best_also_plays_the_tournament_proxy_tables_which_count_half(
+        harness, monkeypatch, tmp_path):
     E, _, _ = harness
     proxy = importlib.import_module("harness.proxy")
-    tables = proxy_panel(E, proxy, tmp_path, monkeypatch)
+    tables = proxy_panel(E, proxy, tmp_path, monkeypatch, "tournament")
+    proxy_panel(E, proxy, tmp_path, monkeypatch, "qualifier")  # the qualifier lines' tables, never the lines'
     for seats in tables["lineups"]:
         named = [s for s in seats if not s.startswith("tail")]
         assert len(seats) == 3 and len(set(named)) == len(named)
@@ -632,19 +634,21 @@ def test_a_new_best_version_plays_the_proxy_tables_for_the_record_only(harness, 
         return [c[1:] for c in calls if c[0] == tables["id"]]
 
     monkeypatch.setattr(E, "play", play)
-    # A new best version (strong opponents decide) plays the proxy tables, paired with the one it replaces.
+    # Above the best: confirmation and tournament proxy tables, each paired with it, decide half and half.
     r = E.evaluate("rule", {"family": "code", "package_hash": "n"}, "x", "fp-rule-132", host="local", confirm_seed=5)
     assert r["status"] == "keep" and r["proxy"]["best"] == {"version": "fp-rule-131", "diff": 1.0, "se": 0.0}
-    assert r["proxy"]["against"]["diff"] == 1.0 and "combined" not in r["confirm"]
+    assert r["confirm"]["combined"]["diff"] == 1.0 and r["proxy"]["against"]["diff"] == 1.0
     assert proxied() == [("fp-rule-131", "proxy-local"), ("fp-rule-132", "proxy-local")]  # the best is the reference
-    assert "对 fp-rule-131 配对差 +1.00" in E.report(r)
+    assert len(calls) == len(proxied()) + 3  # dev, confirm, the best's confirm: nothing at the qualifier tables
+    assert "确认集与代理桌各占一半：配对差 +1.00" in E.report(r)
     # Below the best on the development set: no proxy tables at all.
     calls.clear()
     r = E.evaluate("rule", {"family": "code", "package_hash": "o"}, "x", "fp-rule-133", host="local", confirm_seed=5)
     assert r["status"] == "discard" and "proxy" not in r and proxied() == []
-    # Far behind at the proxy tables does not undo a confirmed win against the pool.
+    # Confirmed on the pool but far behind at the proxy tables: the halves together are not above the best.
     r = E.evaluate("rule", {"family": "code", "package_hash": "p"}, "x", "fp-rule-134", host="local", confirm_seed=5)
-    assert r["status"] == "keep" and r["proxy"]["best"]["diff"] == -4.0
+    assert r["confirm"]["diff"] == 1.0 and r["proxy"]["best"]["diff"] == -4.0
+    assert r["confirm"]["combined"]["diff"] == -1.5 and r["status"] == "unconfirmed"
     assert proxied() == [("fp-rule-134", "proxy-local"), ("fp-rule-132", "proxy-local")]
     # A line's first version is on record at the proxy tables; another host plays the reference again.
     calls.clear()
@@ -654,13 +658,13 @@ def test_a_new_best_version_plays_the_proxy_tables_for_the_record_only(harness, 
     assert proxied() == [("fp-rule-131", "proxy-4070"), ("fp-rl-140", "proxy-4070")]
     rows = E.read_json(E.LOCAL / "proxy-results.json")
     assert [(x["version"], x["host"]) for x in rows["results"]] == [("fp-rule-131", "local"), ("fp-rule-131", "4070")]
-    assert rows["panels"][tables["panel"]]["proxies"] == 3
-    # A failure at the proxy tables is recorded in their place.
+    assert rows["panels"][tables["panel"]]["proxies"] == 3 and rows["panels"][tables["panel"]]["kind"] == "tournament"
+    # A failure at the proxy tables is recorded in their place; the confirmation set decides alone.
     monkeypatch.setattr(E, "play", lambda pool, cid, spec, blocks, seed, label, host: (_ for _ in ()).throw(
         RuntimeError("down")) if label.startswith("proxy") else play(pool, cid, spec, blocks, seed, label, host))
     r = E.evaluate("rl", {"family": "model", "parameters": {"weights": "m2"}}, "x", "fp-rl-141", host="5070ti",
                    confirm_seed=5)
-    assert "down" in r["proxy"]["error"] and r["status"] == "keep"
+    assert "down" in r["proxy"]["error"] and r["status"] == "keep" and "combined" not in r["confirm"]
 
 
 def test_the_qualifier_version_may_lose_a_little_to_strong_opponents_to_win_more_against_the_crowd(
@@ -668,7 +672,7 @@ def test_the_qualifier_version_may_lose_a_little_to_strong_opponents_to_win_more
     E, _, _ = harness
     proxy = importlib.import_module("harness.proxy")
     Q = importlib.import_module("harness.qualifier")
-    tables = proxy_panel(E, proxy, tmp_path, monkeypatch)
+    tables = proxy_panel(E, proxy, tmp_path, monkeypatch, "qualifier")
     record(E, id="fp-rl-172", line="rl", games=8, finished_at=2, score=1.5, spec={"family": "model"},
            dev_blocks={"0": 1.0, "1": 2.0})
     # Per candidate: fixed proxy tables, development set, fresh proxy walls.
