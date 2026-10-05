@@ -260,11 +260,13 @@ def opponent_speed(obs, draws):
     """The opponents' chance to win before my next draw, read from their melds
     and discards, as a multiple of the generic tenpai_hazard, in steps of 0.05
     within 0.1-3."""
-    hand_no = obs.public_events[-1].hand_no if obs.public_events else 0
+    events = obs.public_events
+    hand_no = events[-1].hand_no if events else 0
+    start = len(events)
+    while start and events[start - 1].hand_no == hand_no:  # this hand's events close the game's list
+        start -= 1
     since = {}
-    for event in obs.public_events:
-        if event.hand_no != hand_no:
-            continue
+    for event in events[start:]:
         if event.kind in ("chi", "peng", "gang"):
             since[event.seat] = 0
         elif event.kind == "discard" and event.seat in since:
