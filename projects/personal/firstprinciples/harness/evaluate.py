@@ -972,7 +972,7 @@ def evaluate(line, spec, description, attempt_id=None, design_seconds=None, host
     reference = line == "reference"
     host = host or EVAL_HOST[line]
     started = time.time()
-    confirm = None
+    confirm = proxy = None
     scores, stats = play(pool, attempt_id, spec, range(DEV_BLOCKS), pool["dev_seed"], "dev", host)
     champion = None if reference else best(pool["id"], line)
     if champion is None:
@@ -1006,6 +1006,17 @@ def evaluate(line, spec, description, attempt_id=None, design_seconds=None, host
             confirm = {"seed": seed, "games": CONFIRM_BLOCKS * 4, "diff": diff, "se": se,
                        "lower90": diff - CONFIRM_Z * se, "against": champion["id"]}
             verdict = "keep" if diff - CONFIRM_Z * se > 0 else "unconfirmed"
+            # Above the best on the development set, the proxy tables (the tournament
+            # crowd) join the verdict half and half with the confirmation set (user, 10-05).
+            proxy = proxy_tables(attempt_id, spec, host, champion)
+            vs = (proxy or {}).get("best")
+            if vs:
+                d = (diff + vs["diff"]) / 2
+                s = math.sqrt(se ** 2 + vs["se"] ** 2) / 2
+                confirm["combined"] = {"diff": d, "se": s, "lower90": d - CONFIRM_Z * s}
+                verdict = "keep" if d - CONFIRM_Z * s > 0 else "unconfirmed"
+    elif champion is None and not reference:
+        proxy = proxy_tables(attempt_id, spec, host)  # a line's first version: on record, nothing to pair with
     score, se = mean_se(scores[k] for k in range(DEV_BLOCKS))
     record = dict(
         id=attempt_id, line=line, pool=pool["id"], status=verdict, description=description, host=host,
@@ -1017,22 +1028,23 @@ def evaluate(line, spec, description, attempt_id=None, design_seconds=None, host
     ) | (extra or {})
     if verdict == "keep":
         record["reference"] = against_platform(record)
-    if not reference:
-        record["proxy"] = proxy_tables(attempt_id, spec, host)
+    if proxy is not None:
+        record["proxy"] = proxy
     append_record(record)
     return record
 
 
-def proxy_tables(attempt_id, spec, host):
+def proxy_tables(attempt_id, spec, host, champion=None):
     """The version's whole games on the proxy panel (harness.proxy), when one is active.
 
-    Evidence beside the pool, not part of the verdict: a failure is recorded
-    in its place and the attempt's record stands.
+    Paired with the champion when given (its tables on this host are played
+    once and reused). A failure is recorded in its place; the verdict then
+    rests on the confirmation set alone.
     """
     from . import proxy
 
     try:
-        return proxy.score(attempt_id, spec, host)
+        return proxy.score(attempt_id, spec, host, champion)
     except Exception as exc:  # noqa: BLE001
         log(f"{attempt_id} proxy tables failed: {exc}")
         return {"error": str(exc)[-500:]}
@@ -1144,6 +1156,9 @@ def report(record):
     if record["confirm"]:
         c = record["confirm"]
         lines.append(f"确认集：{c['games']} 场配对差 {c['diff']:+.2f} ± {c['se']:.2f}，90% 下界 {c['lower90']:+.2f}")
+        if c.get("combined"):
+            m = c["combined"]
+            lines.append(f"确认集与代理桌各占一半：配对差 {m['diff']:+.2f} ± {m['se']:.2f}，90% 下界 {m['lower90']:+.2f}（判定依据）")
     if cost:
         lines.append(cost)
     s = record["stats"]
@@ -1160,9 +1175,10 @@ def report(record):
     if proxy and proxy.get("error"):
         lines.append(f"代理桌：没有打完（{proxy['error'][-200:]}），不影响结论")
     elif proxy:
-        a = proxy["against"]
+        a, b = proxy["against"], proxy.get("best")
         lines.append(f"代理桌：{proxy['games']} 场 {proxy['score']:+.2f} ± {proxy['se']:.2f}，"
-                     f"对 {a['version']} 配对差 {a['diff']:+.2f} ± {a['se']:.2f}（比赛人群的旁证，不进判定）")
+                     + (f"对 {b['version']} 配对差 {b['diff']:+.2f} ± {b['se']:.2f}，" if b else "")
+                     + f"对 {a['version']} {a['diff']:+.2f} ± {a['se']:.2f}")
     lines.append(f"排名：{ranking(record)}")
     return "\n".join(lines)
 

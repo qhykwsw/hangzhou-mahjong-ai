@@ -1,12 +1,12 @@
-"""Proxy tables: every version also plays whole games against the tournament crowd's stand-in.
+"""Proxy tables: a version above its line's best also plays whole games against the tournament crowd's stand-in.
 
 The proxy panel imitates the platform players we meet (Actors cloned from
 their own replays, ADR-0015); the long tail of rarer players is one more
-proxy. Since 2026-10-05 (user decision) every evaluated version plays the
-active panel after its development and confirmation sets, on the same host;
-the result joins its record as ``proxy`` and shows on the lines page. It is
-evidence beside the fixed pool, never a gate: keep, discard and a line's best
-are decided on the pool alone.
+proxy. Since 2026-10-05 (user decisions) a version whose development set beats
+its line's best plays the active panel too, beside the confirmation set, on
+the same host; its paired difference with the best version there and the
+confirmation set's count half each in the verdict (harness.evaluate). The
+result joins the record as ``proxy`` and shows on the lines page.
 
   python -m harness.proxy register <actors dir> --job <job.json> --name "代理面板 v2" [--built 2026-10-05] [--check "..."]
   python -m harness.proxy activate <panel.json> [--reference fp-rule-131] [--name ...]   # maintainer; reseal afterwards
@@ -16,10 +16,11 @@ Activation freezes the panel as a set of tables: one lineup of three proxies
 per block, drawn by each player's share of our recent tables (a named proxy
 sits at most once at a table, the tail may fill several seats), with the
 fixed pool's runtime, game format and limits. Every version plays the same
-games and is paired block by block with the reference version on them. The
-reference is played once per host, because a model's near-tie argmax may
-differ between inference backends; pairs are formed on one host only.
-A new panel is a new activation; results stay with their panel id.
+games and is paired block by block with the reference version (shown on the
+lines page) and, in a verdict, with its line's best version. Each version
+plays once per host, because a model's near-tie argmax may differ between
+inference backends; pairs are formed on one host only. A new panel is a new
+activation; results stay with their panel id.
 """
 import argparse
 import hashlib
@@ -119,8 +120,9 @@ def reference_blocks(t, host):
     return scores
 
 
-def score(version, spec, host):
-    """The record's ``proxy``: whole games on the active panel, paired with its reference on the same host."""
+def score(version, spec, host, champion=None):
+    """The record's ``proxy``: whole games on the active panel, paired with its reference on the same host,
+    and with the line's best version (``champion``, a record) when given."""
     t = load()
     if t is None:
         return None
@@ -132,9 +134,15 @@ def score(version, spec, host):
     blocks = range(t["blocks"])
     mean, se = E.mean_se(mine[b] for b in blocks)
     diff, dse = E.paired(mine, theirs, blocks) if version != t["reference"]["id"] else (0.0, 0.0)
-    return {"panel": t["panel"], "games": t["blocks"] * 4, "score": mean, "se": se, "seed": t["seed"],
-            "host": host, "batch": "默认代理桌评估", "stats": stats,
-            "against": {"version": t["reference"]["id"], "diff": diff, "se": dse}}
+    out = {"panel": t["panel"], "games": t["blocks"] * 4, "score": mean, "se": se, "seed": t["seed"],
+           "host": host, "batch": "开发集过线后的代理桌", "stats": stats,
+           "against": {"version": t["reference"]["id"], "diff": diff, "se": dse}}
+    if champion is not None:
+        # The best version's tables on this host: played once, then its jobs are reused.
+        theirs_best = theirs if champion["id"] == t["reference"]["id"] else play(t, champion["id"], champion["spec"], host)[0]
+        d, s = E.paired(mine, theirs_best, blocks)
+        out["best"] = {"version": champion["id"], "diff": d, "se": s}
+    return out
 
 
 def append_result(entry):

@@ -583,17 +583,18 @@ def test_a_lent_host_runs_the_rule_line_after_the_attempt_it_has(harness):
     assert line.line_hosts("rule") == ("local",) and "4070" in line.line_hosts("rl")
 
 
-def test_every_version_plays_the_proxy_tables_paired_on_its_own_host(harness, monkeypatch, tmp_path):
+def test_a_version_above_the_best_also_plays_the_proxy_tables_which_count_half(harness, monkeypatch, tmp_path):
     E, _, _ = harness
     proxy = importlib.import_module("harness.proxy")
     monkeypatch.setattr(proxy, "BLOCKS", 40)
     monkeypatch.setattr(E, "DEV_BLOCKS", 2)
+    monkeypatch.setattr(E, "CONFIRM_BLOCKS", 2)
     monkeypatch.setattr(E, "platform_entrant", lambda: None)
     pool = {"id": "pool-a", "members": {}, "dev_seed": 3, "runtime_path": "/rt", "config": {"rounds": 16},
             "timeouts": {}, "resources": {}}
     (E.LOCAL / "pool.json").write_text(json.dumps(pool))
     record(E, id="fp-rule-131", line="rule", games=8, finished_at=1, spec={"family": "code", "package_hash": "r"},
-           dev_blocks={"0": 0.0, "1": 0.0})
+           dev_blocks={"0": 0.0, "1": 1.0})
     panel = tmp_path / "panel.json"
     panel.write_text(json.dumps({"name": "v2", "members": {
         "p01": {"weights": "w1", "share": 0.3}, "p02": {"weights": "w2", "share": 0.2},
@@ -608,33 +609,49 @@ def test_every_version_plays_the_proxy_tables_paired_on_its_own_host(harness, mo
         named = [s for s in seats if not s.startswith("tail")]
         assert len(seats) == 3 and len(set(named)) == len(named)
         assert [s for s in seats if s.startswith("tail")] == list(proxy.TAIL_SEATS[:3 - len(named)])
+    pool_score = {"fp-rule-131": 0.0, "fp-rule-132": 1.0, "fp-rule-133": 0.5, "fp-rule-134": 2.0,
+                  "fp-rl-140": 0.0, "fp-rl-141": 1.0}
+    proxy_score = {"fp-rule-131": 0.0, "fp-rule-132": 1.0, "fp-rule-134": -3.0, "fp-rl-140": 0.5}
     calls = []
 
     def play(pool, attempt_id, spec, blocks, seed, label, host):
         calls.append((pool["id"], attempt_id, label))
         if label.startswith("proxy"):
             assert E.lineups(pool) == tables["lineups"] and pool["members"]["tail-2"]["parameters"] == {"weights": "wt"}
-        score = {"fp-rule-131": 0.0, "fp-rule-132": 1.0, "fp-rl-133": 2.0}[attempt_id]
+        score = (proxy_score if label.startswith("proxy") else pool_score)[attempt_id]
         return {b: score + (b % 2) for b in blocks}, {"timeouts": 0, "fallback_actions": 0, "errors": 0}
 
+    def proxied():
+        return [c[1:] for c in calls if c[0] == tables["id"]]
+
     monkeypatch.setattr(E, "play", play)
+    # Above the best: confirmation and proxy tables, each paired with it, decide half and half.
     r = E.evaluate("rule", {"family": "code", "package_hash": "n"}, "x", "fp-rule-132", host="local", confirm_seed=5)
-    assert r["proxy"]["against"] == {"version": "fp-rule-131", "diff": 1.0, "se": 0.0} and r["proxy"]["games"] == 160
-    assert [c[1:] for c in calls if c[0] == tables["id"]] == [("fp-rule-131", "proxy-local"), ("fp-rule-132", "proxy-local")]
-    assert "代理桌：160 场 +1.50 ± 0.08，对 fp-rule-131 配对差 +1.00 ± 0.00" in E.report(r)
-    # Another host plays the reference again (another inference backend); the first host's is kept.
+    assert r["status"] == "keep" and r["proxy"]["best"] == {"version": "fp-rule-131", "diff": 1.0, "se": 0.0}
+    assert r["confirm"]["combined"]["diff"] == 1.0 and r["proxy"]["against"]["diff"] == 1.0
+    assert proxied() == [("fp-rule-131", "proxy-local"), ("fp-rule-132", "proxy-local")]  # the best is the reference
+    assert "确认集与代理桌各占一半：配对差 +1.00" in E.report(r)
+    # Below the best on the development set: no proxy tables at all.
     calls.clear()
-    r = E.evaluate("rl", {"family": "model", "parameters": {"weights": "m"}}, "x", "fp-rl-133", host="4070",
+    r = E.evaluate("rule", {"family": "code", "package_hash": "o"}, "x", "fp-rule-133", host="local", confirm_seed=5)
+    assert r["status"] == "discard" and "proxy" not in r and proxied() == []
+    # Confirmed on the pool but far behind at the proxy tables: the halves together are not above the best.
+    r = E.evaluate("rule", {"family": "code", "package_hash": "p"}, "x", "fp-rule-134", host="local", confirm_seed=5)
+    assert r["confirm"]["diff"] == 1.0 and r["proxy"]["best"]["diff"] == -4.0
+    assert r["confirm"]["combined"]["diff"] == -1.5 and r["status"] == "unconfirmed"
+    assert proxied() == [("fp-rule-134", "proxy-local"), ("fp-rule-132", "proxy-local")]
+    # A line's first version is on record at the proxy tables; another host plays the reference again.
+    calls.clear()
+    r = E.evaluate("rl", {"family": "model", "parameters": {"weights": "m"}}, "x", "fp-rl-140", host="4070",
                    confirm_seed=5)
-    assert r["proxy"]["against"]["diff"] == 2.0
-    assert [c[1:] for c in calls if c[0] == tables["id"]] == [("fp-rule-131", "proxy-4070"), ("fp-rl-133", "proxy-4070")]
+    assert r["status"] == "keep" and r["proxy"]["against"]["diff"] == 0.5 and "best" not in r["proxy"]
+    assert proxied() == [("fp-rule-131", "proxy-4070"), ("fp-rl-140", "proxy-4070")]
     rows = E.read_json(E.LOCAL / "proxy-results.json")
     assert [(x["version"], x["host"]) for x in rows["results"]] == [("fp-rule-131", "local"), ("fp-rule-131", "4070")]
     assert rows["panels"][tables["panel"]]["proxies"] == 3
-    # A failure at the proxy tables is recorded in their place; the verdict stands.
+    # A failure at the proxy tables is recorded in their place; the confirmation set decides alone.
     monkeypatch.setattr(E, "play", lambda pool, cid, spec, blocks, seed, label, host: (_ for _ in ()).throw(
         RuntimeError("down")) if label.startswith("proxy") else play(pool, cid, spec, blocks, seed, label, host))
-    (E.LOCAL / "proxy" / f"reference-{tables['id']}-5070ti.json").unlink(missing_ok=True)
-    r = E.evaluate("rl", {"family": "model", "parameters": {"weights": "m2"}}, "x", "fp-rl-133", host="5070ti",
+    r = E.evaluate("rl", {"family": "model", "parameters": {"weights": "m2"}}, "x", "fp-rl-141", host="5070ti",
                    confirm_seed=5)
-    assert "down" in r["proxy"]["error"] and r["status"] in ("keep", "discard", "unconfirmed")
+    assert "down" in r["proxy"]["error"] and r["status"] == "keep" and "combined" not in r["confirm"]
