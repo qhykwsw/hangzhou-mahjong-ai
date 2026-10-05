@@ -80,6 +80,34 @@ def tempered(temperature):
     return sample
 
 
+def dense_deviations(rate):
+    """A sample hook that deviates at a fixed share of the decisions.
+
+    Sampling the policy deviates at ~3.7% of decisions, ~0.4 per hand, and a
+    step's three rollouts then agree on a direction at cosine ~0.01 (183): the
+    step is almost all noise. Each deviation's advantage is the exact paired
+    difference against the argmax continuation on its wall whatever drew it,
+    so deviating at `rate` of the decisions with a choice (the alternative
+    drawn among the non-argmax actions by the policy's own preference) gets
+    several times the paired samples from the same hands; every other decision
+    plays the argmax. A state's rows weigh rate / (1 - pi(argmax)) times their
+    on-policy weight: a positive rescaling per state, like the tempered hook's.
+    """
+    def sample(logits, mask):
+        logp = torch.log_softmax(logits.float().masked_fill(~mask, -1e9), dim=-1)
+        probs = logp.exp()
+        best = probs.argmax(-1)
+        others = probs.scatter(1, best[:, None], 0.0)
+        others = others / others.sum(-1, keepdim=True).clamp_min(1e-12)
+        onehot = torch.zeros_like(probs).scatter(1, best[:, None], 1.0)
+        choice = (mask.sum(-1) > 1)[:, None]
+        mixed = torch.where(choice, (1 - rate) * onehot + rate * others, onehot)
+        actions = torch.multinomial(mixed, 1).squeeze(1)
+        return actions, mixed.gather(1, actions[:, None]).squeeze(1).clamp_min(1e-12).log()
+
+    return sample
+
+
 def search_rows(rows):
     """Rows for every searched window's other candidates, their Q gain over the argmax, and summary stats."""
     extra, gains = [], []
@@ -112,8 +140,93 @@ def search_rows(rows):
     return extra, np.asarray(gains, dtype=np.float64), stats
 
 
-def kl_step(actor, params, direction, batches, goal):
-    """Move params to start + eta * direction with KL(start || new) ~= goal."""
+def fisher_product(actor, params, batches, vector):
+    """Mean Fisher-vector product of the policy over the KL rows, J^T (diag(pi) - pi pi^T) J v.
+
+    J v is a central difference of the logits (the fused attention has no double
+    backward); J^T u is one backward pass. Illegal actions have pi = 0 and drop out.
+    """
+    start = [p.detach().clone() for p in params]
+    norm = float(torch.sqrt(sum((v.float() * v.float()).sum() for v in vector)))
+    eps = 1e-3 / max(norm, 1e-12)
+    total = [torch.zeros_like(p, dtype=torch.float32) for p in params]
+    rows = sum(len(mb["mask"]) for mb in batches)
+    for mb in batches:
+        args = actor_args(mb)
+        with torch.no_grad():
+            for p, p0, v in zip(params, start, vector):
+                p.copy_(p0 + eps * v)
+            plus = actor(*args).float()
+            for p, p0, v in zip(params, start, vector):
+                p.copy_(p0 - eps * v)
+            minus = actor(*args).float()
+            for p, p0 in zip(params, start):
+                p.copy_(p0)
+            jv = ((plus - minus) / (2 * eps)).masked_fill(~mb["mask"], 0)
+        logits = actor(*args).float()
+        with torch.no_grad():
+            pi = masked_log_probs(logits.detach(), mb["mask"]).exp().masked_fill(~mb["mask"], 0)
+            u = pi * (jv - (pi * jv).sum(-1, keepdim=True))
+        for acc, g in zip(total, torch.autograd.grad((logits * u).sum() / rows, params, allow_unused=True)):
+            if g is not None:
+                acc += g.float()
+    return total
+
+
+def natural_direction(actor, params, direction, batches, damping, iterations):
+    """F^-1 g by conjugate gradient, F the policy's Fisher on the KL rows.
+
+    The KL step measures the move in the policy's own metric, but the plain
+    gradient moves a logit in proportion to its action's probability: where the
+    policy is nearly sure, a rarely played action that the playouts find better
+    barely moves, and the argmax the Actor is deployed with never changes. The
+    natural direction (TRPO) moves each decision by its advantage instead and
+    spends the same KL where the argmax can still change. Damping is relative to
+    the curvature along the plain gradient, so no direction is stretched more
+    than 1 / damping times past it.
+    """
+    shapes = [p.shape for p in params]
+    sizes = [p.numel() for p in params]
+
+    def flat(xs):
+        return torch.cat([x.float().reshape(-1) for x in xs])
+
+    def unflat(v):
+        return [part.reshape(shape) for part, shape in zip(torch.split(v, sizes), shapes)]
+
+    g = flat(direction)
+    gg = float(g @ g)
+    fg = flat(fisher_product(actor, params, batches, direction))
+    curvature = float(g @ fg) / max(gg, 1e-30)
+    lam = damping * curvature
+    x = torch.zeros_like(g)
+    r = g.clone()
+    p = r.clone()
+    ap = fg + lam * g
+    rr = gg
+    done = 0
+    for done in range(1, iterations + 1):
+        alpha = rr / max(float(p @ ap), 1e-30)
+        x += alpha * p
+        r -= alpha * ap
+        new = float(r @ r)
+        if new < 1e-8 * gg or done == iterations:
+            rr = new
+            break
+        p = r + (new / rr) * p
+        rr = new
+        ap = flat(fisher_product(actor, params, batches, unflat(p))) + lam * p
+    cosine = float(x @ g) / max(float(torch.sqrt((x @ x) * gg)), 1e-30)
+    stats = {"natural_curvature": curvature, "natural_residual": (rr / max(gg, 1e-30)) ** 0.5,
+             "natural_cosine": cosine, "natural_iterations": done}
+    return [d.to(q.dtype) for d, q in zip(unflat(x), direction)], stats
+
+
+def kl_step(actor, params, direction, batches, goal, restore=False):
+    """Move params to start + eta * direction with KL(start || new) ~= goal.
+
+    `restore` puts the start back afterwards (to measure a direction only).
+    """
     start = [p.detach().clone() for p in params]
 
     def logps():
@@ -148,7 +261,20 @@ def kl_step(actor, params, direction, batches, goal):
     legal = max(1, sum(len(h) for h in hu))
     before = int(torch.stack([(lp[h].argmax(-1) == HU).sum() for h, lp in zip(hu, reference)]).sum()) / legal
     after = int(torch.stack([(lp[h].argmax(-1) == HU).sum() for h, lp in zip(hu, latest)]).sum()) / legal
-    return {"kl": kl, "step_norm": eta * norm, "hu_before": before, "hu_after": after}
+    # Decisions whose argmax (the deployed choice) the step changed, overall and
+    # where a kong or a win is legal.
+    rows = sum(len(lp) for lp in reference)
+    flips = [lp.argmax(-1) != new.argmax(-1) for lp, new in zip(reference, latest)]
+    windows = [mb["mask"][:, GANG_EXPOSED:HU + 1].any(1) for mb in batches]
+    flip = int(torch.stack([f.sum() for f in flips]).sum()) / max(1, rows)
+    flip_window = (int(torch.stack([(f & w).sum() for f, w in zip(flips, windows)]).sum())
+                   / max(1, int(torch.stack([w.sum() for w in windows]).sum())))
+    if restore:
+        with torch.no_grad():
+            for p, p0 in zip(params, start):
+                p.copy_(p0)
+    return {"kl": kl, "step_norm": eta * norm, "hu_before": before, "hu_after": after,
+            "flip": flip, "flip_window": flip_window}
 
 
 def distill(actor, rows, opt, size, device, rng, epochs, *, batch_source=None, permuter=None,
@@ -222,6 +348,13 @@ def train(ctx):
         # The strongest rule on the fixed pool labels the distillation.
         "teacher": cfg["teacher"],
     }
+    # The framework's variance reducers (guided.walls): a stable wall keeps each
+    # seat's draws when a branch calls, the draw luck is subtracted from the
+    # paired differences (targets.playout_advantages), and openings reshuffle
+    # the wall past their recorded position.
+    for key in ("stable_wall", "luck", "starts_reshuffle"):
+        if cfg.get(key):
+            collect_cfg[key] = True
     # Policy-gradient rollouts ask for the greedy playout of every deviation.
     pg_cfg = dict(collect_cfg, playout_baseline=bool(cfg.get("playout_baseline")))
     if cfg["teacher"] not in ctx.teachers:
@@ -242,6 +375,8 @@ def train(ctx):
     chunks = max(1, int(cfg["chunks_per_step"]))
     temperature = float(cfg.get("sample_temperature", 1.0))
     sampler = tempered(temperature) if temperature != 1.0 else None
+    if cfg.get("deviation_share"):
+        sampler = dense_deviations(float(cfg["deviation_share"]))
     step, iteration, rollouts, last = 0, 0, 0, 0.0
     hands = lambda: ctx.hands_left() is None or ctx.hands_left() > 0  # noqa: E731
     # Near the optimum each KL step moves the policy along its noise as much as
@@ -251,6 +386,7 @@ def train(ctx):
     # iterate; only the saved result is the mean.
     tail = float(cfg.get("tail_average", 0.0))
     average, averaged, budget, last_batches = None, 0, None, None
+    improver = None
 
     # Openings (ctx.starts): one-hand games from recorded rare windows (a kong
     # the teacher keeps, a self-drawn win it may pass up), where ordinary play
@@ -348,7 +484,14 @@ def train(ctx):
                 trainable += ("encoder.norm.", "discard_head.", "claim_head.", "state_head.")
                 for name, parameter in actor.named_parameters():
                     parameter.requires_grad_(name.startswith(trainable))
+            # cfg["mpo"] (mpo.py): a Q network fitted to the kept deviations
+            # replaces the gradient step after `mpo_warmup` steps.
+            if cfg.get("mpo"):
+                from .mpo import Improver
+
+                improver = Improver(ctx, actor, cfg, rng)
         params, direction, batches, parts, count = None, None, None, [], 0
+        chunk_grads = []
         collected = fitted = 0.0
         for part in range(chunks):
             if part and not hands():
@@ -376,6 +519,8 @@ def train(ctx):
                                 if cfg.get("resident_rows", False) else None)
             if cfg.get("playout_baseline"):
                 weights, stats = playout_advantages(rows, cfg)
+                if improver is not None:
+                    improver.add_chunk(actor, rows, weights * stats["adv_scale"])
                 if cfg.get("search"):
                     # Same units as the playout advantages, so the same scale;
                     # `search_weight` keeps tens of thousands of searched
@@ -394,6 +539,9 @@ def train(ctx):
                 batch_source=batch_source, capture=cfg.get("gradient_graphs", False),
             )
             direction = grad if direction is None else [d + g for d, g in zip(direction, grad)]
+            # Each rollout's own gradient, flattened: how far the rollouts agree
+            # on a direction says how much of it is signal rather than noise.
+            chunk_grads.append(torch.cat([g.float().reshape(-1) for g in grad]))
             # The KL check uses a subset of the latest rollout (same policy).
             subset = rng.choice(len(rows), size=min(len(rows), int(cfg["kl_rows"])), replace=False)
             # Kong and win decisions share their heads across rare windows and
@@ -425,6 +573,29 @@ def train(ctx):
         if cfg.get("step_kl_start"):
             done = min(1.0, max(0.0, 1.0 - left / budget))
             goal = float(cfg["step_kl_start"]) + (goal - float(cfg["step_kl_start"])) * done
+        if len(chunk_grads) > 1:
+            cosines = [float(a @ b) / max(float(torch.sqrt((a @ a) * (b @ b))), 1e-30)
+                       for i, a in enumerate(chunk_grads) for b in chunk_grads[i + 1:]]
+            stats["chunk_cosine"] = float(np.mean(cosines))
+        del chunk_grads
+        if improver is not None:
+            stats |= improver.fit()
+            if step > int(cfg.get("mpo_warmup", 2)):
+                improved, more = improver.direction(actor, params, batches, goal)
+                a = torch.cat([d.float().reshape(-1) for d in improved])
+                b = torch.cat([d.float().reshape(-1) for d in direction])
+                more["mpo_pg_cosine"] = float(a @ b) / max(float(torch.sqrt((a @ a) * (b @ b))), 1e-30)
+                stats |= more
+                direction = improved
+            else:
+                improver.states = []
+        if cfg.get("natural_damping"):
+            # The plain direction at the same KL, measured and undone, for comparison.
+            plain = kl_step(actor, params, direction, batches, goal, restore=True)
+            stats |= {"plain_kl": plain["kl"], "plain_flip": plain["flip"], "plain_flip_window": plain["flip_window"]}
+            direction, natural = natural_direction(actor, params, direction, batches, float(cfg["natural_damping"]),
+                                                   int(cfg.get("natural_iterations", 10)))
+            stats |= natural
         stats |= kl_step(actor, params, direction, batches, goal)
         stats["kl_goal"] = goal
         if tail > 0 and left <= tail * budget:

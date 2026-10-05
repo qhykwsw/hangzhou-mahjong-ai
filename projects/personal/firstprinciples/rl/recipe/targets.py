@@ -125,8 +125,32 @@ def playout_advantages(rows, cfg):
         points = np.flatnonzero(deviated & (hand_id == h))
         taken = np.r_[greedy_value[points[1:]], ends[h]]
         adv[points] = taken - greedy_value[points]
+    luck_stats = {}
+    if cfg.get("luck"):
+        # The framework's draw luck (cfg["luck"], guided.walls): each branch's
+        # value minus the luck it met since the deviation. Both branches share
+        # the luck before it, so the difference subtracts the luck at the end
+        # of the taken branch (the next deviation's playout, or the hand's end)
+        # less the luck at the end of the argmax branch. The dealer part
+        # counts as the premium does (nothing after a game's last hand).
+        def luck(pay, deal):
+            return (np.array([float(r.get(pay, 0.0)) for r in rows])
+                    + premium * np.where(last_hand[hand_id], 0.0, 1.0) * np.array([float(r.get(deal, 0.0)) for r in rows]))
+
+        greedy_luck = luck("playout_luck_pay", "playout_luck_deal")
+        row_end = luck("end_luck_pay", "end_luck_deal")
+        has_end = np.array(["end_luck_pay" in r for r in rows])
+        end_luck = np.zeros(len(first))
+        end_luck[hand_id[has_end]] = row_end[has_end]
+        raw = adv[deviated].copy()
+        for h in np.unique(hand_id[deviated]):
+            points = np.flatnonzero(deviated & (hand_id == h))
+            taken_luck = np.r_[greedy_luck[points[1:]], end_luck[h]]
+            adv[points] -= taken_luck - greedy_luck[points]
+        luck_stats = {"raw_adv_sd": float(raw.std()) if len(raw) else 0.0,
+                      "raw_adv_zero": float((raw == 0).mean()) if len(raw) else 0.0}
     moved = adv[deviated]
-    stats = {
+    stats = luck_stats | {
         "premium": premium, "deviation_rate": float(deviated.mean()),
         "deviation_adv_mean": float(moved.mean()) if len(moved) else 0.0,
         "deviation_adv_sd": float(moved.std()) if len(moved) else 0.0,

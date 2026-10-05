@@ -22,5 +22,8 @@
     "kong5k",
     "fish30k"
   ],
-  "starts_share": 0.25
+  "starts_share": 0.25,
+  "stable_wall": true,
+  "luck": true,
+  "starts_reshuffle": true
 }
