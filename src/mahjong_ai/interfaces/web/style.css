@@ -939,8 +939,38 @@ select:disabled {
   font-size: 11px;
 }
 .lines-chart .reference {
-  stroke-width: 1.5;
-  stroke-dasharray: 6 4;
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+  stroke-opacity: 0.45;
+}
+.lines-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px 16px;
+}
+.lines-range {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.lines-range button {
+  border: 0;
+  background: var(--white);
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.lines-range button + button {
+  border-left: 1px solid var(--line);
+}
+.lines-range button[aria-pressed="true"] {
+  background: var(--teal);
+  color: var(--white);
 }
 .lines-legend {
   display: flex;

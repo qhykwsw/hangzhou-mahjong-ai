@@ -24,9 +24,16 @@
     <section id="linesView" class="lines-view" hidden>
       <div class="sectionhead">
         <h2>迭代线 <span id="linesPool" class="count"></span> <select id="linesPoolPick" class="lines-pool" aria-label="对手池" hidden></select></h2>
-        <span class="muted">每个点是一次尝试；纵轴是对固定对手池的场均桌面分</span>
+        <span class="muted">每个点是一次尝试；纵轴是对固定对手池的场均桌面分；远低于最好版本的尝试画在底边（▼），悬停看分数</span>
       </div>
-      <div id="linesLegend" class="lines-legend"></div>
+      <div class="lines-toolbar">
+        <div id="linesLegend" class="lines-legend"></div>
+        <div id="linesRange" class="lines-range" role="group" aria-label="图的时间范围">
+          <button type="button" data-days="1">最近 1 天</button>
+          <button type="button" data-days="3">最近 3 天</button>
+          <button type="button" data-days="0">全部</button>
+        </div>
+      </div>
       <div id="linesChart" class="lines-chart"></div>
       <div class="sectionhead proxyhead">
         <h2>代理桌（比赛人群）</h2>

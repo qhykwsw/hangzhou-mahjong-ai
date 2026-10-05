@@ -42,6 +42,12 @@
     return steps;
   }
 
+  let days = 3; // the chart's time window in days (0: everything); the table lists every attempt
+  try {
+    const saved = localStorage.getItem("linesDays");
+    if (saved !== null && ["0", "1", "3"].includes(saved)) days = Number(saved);
+  } catch {}
+
   function chart(attempts) {
     // Reference levels: the pool's own members only (other references stay in the table).
     const shown = attempts.filter((a) => a.score != null && (a.line !== "reference" || a.member));
@@ -49,19 +55,36 @@
     const at = placed(shown);
     // Drawn at the container's own width so labels keep their size on phones.
     const W = Math.max(300, Math.round($("linesChart").clientWidth - 16));
-    const H = W < 600 ? 240 : 360, L = 44, R = 12, T = 12, B = 30;
+    const H = W < 600 ? 260 : 380, L = 44, R = 12, T = 12, B = 30;
     const ticks = W < 600 ? 3 : 5;
-    const xs = shown.map((a) => at.get(a));
-    const ys = shown.map((a) => a.score);
-    let x0 = Math.min(...xs), x1 = Math.max(...xs);
+    const tries = shown.filter((a) => a.line !== "reference");
+    const refs = shown.filter((a) => a.line === "reference");
+    const times = tries.map((a) => at.get(a));
+    const now = times.length ? Math.max(...times) : Math.max(...refs.map((a) => at.get(a)));
+    const from = days && times.length ? now - days * 86400 : Math.min(now, ...times);
+    const inside = (a) => at.get(a) >= from;
+    // Each line's best-so-far over its whole history; the window shows the part inside it,
+    // entering at the level the line had when the window starts.
+    const lines = Object.keys(LINES).filter((key) => key !== "reference").map((key) => {
+      const rows = tries.filter((a) => a.line === key).sort((a, b) => at.get(a) - at.get(b));
+      const steps = raised(rows, at);
+      const kept = rows.filter((a) => steps.has(a));
+      return { key, steps, rows: rows.filter(inside), kept: kept.filter(inside), before: kept.filter((a) => !inside(a)).pop() };
+    });
+    let x0 = from, x1 = now;
     if (x1 - x0 < 600) { x0 -= 300; x1 += 300; }
-    let y0 = Math.min(...ys), y1 = Math.max(...ys);
-    const pad = Math.max(0.5, (y1 - y0) * 0.08);
+    // The vertical range follows the best-so-far levels and the pool's references; an attempt far
+    // below them is drawn on the bottom edge (▼, its tooltip has the score) instead of squeezing the rest.
+    const levels = [...refs.map((a) => a.score), ...lines.flatMap((l) => [...l.kept, ...(l.before ? [l.before] : [])].map((a) => a.score))];
+    const visible = lines.flatMap((l) => l.rows.map((a) => a.score));
+    let y0 = Math.min(...levels, ...visible.filter((v) => v >= Math.min(...levels) - 1)) - 0.3;
+    let y1 = Math.max(...levels, ...visible);
+    const pad = Math.max(0.3, (y1 - y0) * 0.06);
     y0 -= pad; y1 += pad;
     const X = (t) => L + ((t - x0) / (x1 - x0)) * (W - L - R);
     const Y = (v) => T + ((y1 - v) / (y1 - y0)) * (H - T - B);
     const parts = [];
-    const step = niceStep((y1 - y0) / 6);
+    const step = niceStep((y1 - y0) / 7);
     for (let v = Math.ceil(y0 / step) * step; v <= y1; v += step) {
       parts.push(`<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" class="grid"/>`);
       parts.push(`<text x="${L - 6}" y="${Y(v) + 4}" class="axis" text-anchor="end">${signed(v, step < 1 ? 1 : 0)}</text>`);
@@ -71,37 +94,39 @@
       const anchor = i === 0 ? "start" : i === ticks ? "end" : "middle";
       parts.push(`<text x="${X(t)}" y="${H - 10}" class="axis" text-anchor="${anchor}">${esc(time(t))}</text>`);
     }
-    for (const [key, meta] of Object.entries(LINES)) {
-      const rows = shown.filter((a) => a.line === key).sort((a, b) => at.get(a) - at.get(b));
-      if (key === "reference") {
-        // Every reference version is its own dashed level, labelled at the right edge
-        // unless the label would overlap one already drawn (the line keeps its tooltip).
-        let labelled = -Infinity;
-        for (const ref of rows.slice().sort((a, b) => b.score - a.score)) {
-          const name = ref.id.replace(/^ref-/, "").replace(/^heuristic-[a-z]+--\d+--/, "");
-          parts.push(`<line x1="${L}" x2="${W - R}" y1="${Y(ref.score)}" y2="${Y(ref.score)}" stroke="${meta.color}" class="reference"><title>${esc(name)} ${signed(ref.score)}</title></line>`);
-          if (Y(ref.score) - labelled < 12) continue;
-          labelled = Y(ref.score);
-          parts.push(`<text x="${W - R - 2}" y="${Y(ref.score) - 4}" class="axis" text-anchor="end" fill="${meta.color}">${esc(name)} ${signed(ref.score)}</text>`);
-        }
-        continue;
-      }
-      // The best-so-far staircase through the attempts that raised it.
-      const steps = raised(rows, at);
-      const kept = rows.filter((a) => steps.has(a));
-      if (kept.length) {
-        let d = `M${X(at.get(kept[0]))},${Y(kept[0].score)}`;
-        for (const a of kept.slice(1)) d += ` H${X(at.get(a))} V${Y(a.score)}`;
+    // Every reference version is its own faint dashed level, labelled at the right edge
+    // unless the label would overlap one already drawn (the line keeps its tooltip).
+    const refColor = LINES.reference.color;
+    let labelled = -Infinity;
+    for (const ref of refs.slice().sort((a, b) => b.score - a.score)) {
+      const name = ref.id.replace(/^ref-/, "").replace(/^heuristic-[a-z]+--\d+--/, "");
+      parts.push(`<line x1="${L}" x2="${W - R}" y1="${Y(ref.score)}" y2="${Y(ref.score)}" stroke="${refColor}" class="reference"><title>${esc(name)} ${signed(ref.score)}</title></line>`);
+      if (Y(ref.score) - labelled < 12) continue;
+      labelled = Y(ref.score);
+      parts.push(`<text x="${W - R - 2}" y="${Y(ref.score) - 4}" class="axis" text-anchor="end" fill="${refColor}">${esc(name)} ${signed(ref.score)}</text>`);
+    }
+    const bottom = H - B;
+    for (const l of lines) {
+      const meta = LINES[l.key];
+      const path = [...(l.before ? [[x0, l.before.score]] : []), ...l.kept.map((a) => [at.get(a), a.score])];
+      if (path.length) {
+        let d = `M${X(path[0][0])},${Y(path[0][1])}`;
+        for (const [t, v] of path.slice(1)) d += ` H${X(t)} V${Y(v)}`;
         d += ` H${X(x1)}`;
         parts.push(`<path d="${d}" fill="none" stroke="${meta.color}" stroke-width="2"/>`);
       }
-      for (const a of rows) {
-        const note = a.rebased ? `\n换池重算（旧池 ${signed(a.rebased.old_score)}）` + (steps.has(a) ? "" : "：没有高过此前最好版本")
+      for (const a of l.rows) {
+        const note = a.rebased ? `\n换池重算（旧池 ${signed(a.rebased.old_score)}）` + (l.steps.has(a) ? "" : "：没有高过此前最好版本")
           + (a.shown_only ? "\n仅供展示，未记入迭代记录" : "") : "";
         const redone = a.refreshed ? `\n当前条件下重测开发集（原 ${signed(a.refreshed.old_score)}）` : "";
         const tip = `${a.id} ${STATUS[a.status] || a.status} ${signed(a.score)} ± ${a.se?.toFixed(2)}（${a.games} 场）${note}${redone}\n${a.description}`;
-        const cls = steps.has(a) ? `fill="${meta.color}"` : a.status === "unconfirmed" ? 'fill="none" stroke="#c9822b" stroke-width="2"' : 'fill="#b8c4c9"';
-        parts.push(`<circle cx="${X(at.get(a))}" cy="${Y(a.score)}" r="5" ${cls}><title>${esc(tip)}</title></circle>`);
+        const cls = l.steps.has(a) ? `fill="${meta.color}"` : a.status === "unconfirmed" ? 'fill="none" stroke="#c9822b" stroke-width="2"' : 'fill="#b8c4c9"';
+        const x = X(at.get(a));
+        if (a.score < y0) {
+          parts.push(`<path d="M${x - 5},${bottom - 9} L${x + 5},${bottom - 9} L${x},${bottom - 1} Z" ${cls}><title>${esc(tip)}</title></path>`);
+        } else {
+          parts.push(`<circle cx="${x}" cy="${Y(a.score)}" r="5" ${cls}><title>${esc(tip)}</title></circle>`);
+        }
       }
     }
     return `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="迭代线得分">${parts.join("")}</svg>`;
@@ -115,12 +140,13 @@
     // One chart per panel (pairs exist only within a panel): the active one first, then by latest result.
     const last = new Map();
     for (const r of all) last.set(r.panel, Math.max(last.get(r.panel) || 0, r.at || 0));
-    const panels = [...last.keys()].filter((id) => all.some((r) => r.panel === id && r.against))
+    // A retired panel (superseded by a newer one with the same versions scored) keeps its rows in the file but is not drawn.
+    const panels = [...last.keys()].filter((id) => !proxy.panels?.[id]?.retired && all.some((r) => r.panel === id && r.against))
       .sort((a, b) => (b === proxy.active) - (a === proxy.active) || last.get(b) - last.get(a));
     $("proxyNote").textContent = "各版本对参照的整场配对差（桌面分/场），横线为 95% 区间";
     return panels.map((id) => {
       const info = proxy.panels?.[id];
-      const head = `${info?.name || id}${id === proxy.active ? "（当前，新版本默认加跑）" : ""}`
+      const head = `${info?.name || id}${id === proxy.active ? "（当前）" : ""}`
         + (info?.proxies ? `：${info.proxies} 个代理` : "") + (info?.check ? `；${info.check}` : "");
       return `<div class="proxypanel"><div class="muted">${esc(head)}</div>${panelChart(proxy, all.filter((r) => r.panel === id))}</div>`;
     }).join("");
@@ -230,6 +256,7 @@
       .join("");
     select.hidden = data.pools.length < 2;
     const rows = picked();
+    for (const b of $("linesRange").querySelectorAll("button")) b.setAttribute("aria-pressed", String(Number(b.dataset.days) === days));
     $("linesLegend").innerHTML = legend(rows);
     $("linesChart").innerHTML = chart(rows);
     $("proxyChart").innerHTML = proxyChart(data.proxy);
@@ -251,6 +278,15 @@
     }
   }
 
+  for (const b of $("linesRange").querySelectorAll("button")) {
+    b.addEventListener("click", () => {
+      days = Number(b.dataset.days);
+      try {
+        localStorage.setItem("linesDays", String(days));
+      } catch {}
+      if (data) draw();
+    });
+  }
   $("linesPoolPick").addEventListener("change", (event) => {
     pick = event.target.value;
     draw();
