@@ -89,10 +89,12 @@ def export_actor(weights, config, output, source=None):
     """Write an Actor artifact after a strict load into the fixed architecture."""
     import torch
     from .deployment import FORMAT, load_actor
-    from .encoding import ENCODING
+    from .encoding import ENCODING, INPUTS
     from .networks import Actor
 
-    actor = Actor(config["dim"], config["layers"], config["heads"])
+    encoding = config.get("encoding", ENCODING)
+    planes, scalars = INPUTS[encoding]
+    actor = Actor(config["dim"], config["layers"], config["heads"], planes=planes, scalars=scalars)
     actor.load_state_dict(weights, strict=True)
     for value in actor.state_dict().values():
         if not bool(torch.isfinite(value).all()):
@@ -102,7 +104,7 @@ def export_actor(weights, config, output, source=None):
     torch.save(actor.state_dict(), output / "actor.pt")
     meta = {
         "format": FORMAT,
-        "encoding": ENCODING,
+        "encoding": encoding,
         "config": {k: config[k] for k in ("dim", "layers", "heads", "lookahead")},
         "weights_sha256": _sha256(output / "actor.pt"),
         "source_checkpoint_sha256": source or _sha256(output / "actor.pt"),
@@ -121,6 +123,7 @@ class Context:
         import torch
         from .artifacts import read_bundle
         from .deployment import load_actor
+        from .encoding import ENCODING
         from .inference import prepare_frozen
         from .resources import evaluation_resources
 
@@ -139,11 +142,12 @@ class Context:
         self.opponents = list(plan.get("opponents") or {})
         self.catalog = list(plan.get("catalog") or {})
         self._rule_specs = {k: v for k, v in specs.items() if v.get("family") != "model"}
-        self._opponent_models = {
-            k: prepare_frozen(load_actor(v["path"], "cuda")[0].eval(), "cuda")
-            for k, v in specs.items()
-            if v.get("family") == "model"
-        }
+        self._opponent_models, self._model_encodings = {}, {}
+        for k, v in specs.items():
+            if v.get("family") == "model":
+                actor, meta = load_actor(v["path"], "cuda")
+                self._opponent_models[k] = prepare_frozen(actor.eval(), "cuda")
+                self._model_encodings[k] = meta.get("encoding", ENCODING)
         # Policies whose actions can label the learning seat's decisions: rule
         # versions (in the game workers) and the catalog's Actors (their argmax
         # over the legal actions, in the collection parent), except those the
@@ -155,7 +159,7 @@ class Context:
             + [k for k in self.catalog if k in self._opponent_models and k not in only]
         )
         self.actor, meta = load_actor(plan["start_actor"], "cuda")
-        self.actor_config = meta["config"]
+        self.actor_config = dict(meta["config"], encoding=meta.get("encoding", ENCODING))
         self.resources = (
             evaluation_resources()
             | {
@@ -201,10 +205,12 @@ class Context:
 
     def new_actor(self):
         """A fresh Actor with the fixed architecture (e.g. for opponent snapshots)."""
+        from .encoding import INPUTS
         from .networks import Actor
 
         c = self.actor_config
-        return Actor(c["dim"], c["layers"], c["heads"]).to(self.device)
+        planes, scalars = INPUTS[c["encoding"]]
+        return Actor(c["dim"], c["layers"], c["heads"], planes=planes, scalars=scalars).to(self.device)
 
     def starts(self, name):
         """A frozen set of openings shipped in the recipe package (recipe/starts/<name>.json.gz)."""
@@ -279,11 +285,22 @@ class Context:
             samples = max(1, min(samples, int(self.hands_left() * per_hand) + 1))
             if labels and self.label_hand_budget is not None:
                 samples = max(1, min(samples, int(self.labeled_hands_left() * per_hand) + 1))
+        # Workers encode every model seat for the widest encoding at the table:
+        # later encodings append planes, and each Actor reads the prefix it was
+        # built for (guided.encoding).
+        from .encoding import INPUTS
+
+        encodings = [self.actor_config["encoding"]] + [
+            self._model_encodings[k] for k in chosen if k in self._model_encodings
+        ]
+        if taught:
+            encodings.append(self._model_encodings[teacher])
         run_cfg |= {
             # More worker processes than cores only adds memory and contention.
             "workers": max(1, min(int(run_cfg["workers"]), os.cpu_count())),
             "rounds": 16,
             "lookahead": self.actor_config["lookahead"],
+            "encoding": max(encodings, key=lambda e: INPUTS[e][0]),
             "samples": samples,
             "seed": self.seed,
             "bc_only": teacher_plays,

@@ -51,8 +51,12 @@ class Game:
     ):
         from mahjong_ai.domain.types import RoundConfig
         from .artifacts import build_policy
+        from .encoding import ENCODING
 
         self.cfg, self.seed, self.focal = cfg, seed, focal
+        # Model seats' inputs, for the widest encoding at the table (cfg["encoding"],
+        # set by the trial): each Actor reads the prefix of the planes it was built for.
+        self.encoding = cfg.get("encoding") or ENCODING
         # An opening (guided.starts) is a one-hand game from a recorded position.
         self.opening = opening
         self.train, self.bc, self.group = train, bc, group
@@ -141,8 +145,9 @@ class Game:
         from mahjong_ai.domain.types import RoundResult
         from mahjong_ai.domain.settlement import score_ranks
         from selfplay_core.actions import action_index
-        from .encoding import encode, oracle
+        from .encoding import encoder, oracle
 
+        encode = encoder(self.encoding)
         while not self.complete:
             state = self.state
             if state.settled:
@@ -351,9 +356,10 @@ class Shadow:
         state.step(action, legal)
 
     def advance(self):
-        from .encoding import encode
+        from .encoding import encoder
 
         game, state = self.game, self.state
+        encode = encoder(game.encoding)
         while not state.settled:
             if state.steps >= game.config.max_actions_per_hand:
                 raise RuntimeError("hand action budget exceeded")

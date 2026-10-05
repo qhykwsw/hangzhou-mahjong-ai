@@ -92,12 +92,13 @@ class FastGame(Game):
         return tuple(profiles), tuple(fallbacks)
 
     def encode(self, state, seat):
+        from .encoding import augment, encode
+
         row = state.encode(self.cfg["lookahead"])
         if row is None:  # a hand past the winning boundary: the Python encoder's analysis
-            from .encoding import encode
-
             row = encode(observation(state.snapshot(), seat, self.config), self.cfg["lookahead"])
-        return row
+        # The C engine encodes v1; a wider encoding extends the row (guided.encoding).
+        return augment(row, self.encoding)
 
     def advance(self):
         if self.seats is None:

@@ -161,10 +161,10 @@ class Slot:
     batch stays valid.
     """
 
-    def __init__(self, size, width, device):
+    def __init__(self, size, width, device, planes):
         import torch
         from selfplay_core.actions import N_ACTIONS
-        from selfplay_core.encoding import N_PLANES, N_SCALARS
+        from selfplay_core.encoding import N_SCALARS
 
         pin = device.type in ("cuda", "mps")
 
@@ -174,7 +174,7 @@ class Slot:
 
         self.size, self.width = size, width
         self.inputs = (
-            host((size, N_PLANES, 34), torch.float16),
+            host((size, planes, 34), torch.float16),
             host((size, N_SCALARS), torch.float16),
             host((size, width, 5), torch.int64),
             host((size, N_ACTIONS), torch.bool),
@@ -268,16 +268,16 @@ class Runner:
                 target=self._wait, name="device-waiter", daemon=True
             ).start()
 
-    def slot(self, count, length):
+    def slot(self, count, length, planes):
         """A free slot of the shape for these rows; None while all are in flight."""
-        shape = bucket(count, length)
+        shape = (*bucket(count, length), planes)
         ring = self.slots.get(shape)
         if ring is None:
             ring = self.slots[shape] = [self.new_slot(*shape) for _ in range(IN_FLIGHT)]
         return next((s for s in ring if s.event is None), None)
 
-    def new_slot(self, size, width):
-        return Slot(size, width, self.device)
+    def new_slot(self, size, width, planes):
+        return Slot(size, width, self.device, planes)
 
     def launch(self, name, actor, slot):
         import torch
@@ -405,7 +405,9 @@ class Service:
             rows, parsed = self._rows(
                 [request for _, request in items], meta, pre_encoded
             )
-            slot = self.runner.slot(len(rows), max(len(r["events"]) for r in rows))
+            slot = self.runner.slot(
+                len(rows), max(len(r["events"]) for r in rows), len(rows[0]["planes"])
+            )
             if slot is None:
                 raise RuntimeError("no free staging slot")
             slot.fill(rows)
@@ -419,13 +421,21 @@ class Service:
         self.inflight.append((items, parsed, slot, started))
 
     def _rows(self, requests, meta, pre_encoded):
+        from .encoding import ENCODING, augment, encoder
+
+        encoding = meta.get("encoding", ENCODING)
         if pre_encoded:
             if any(p.get("lookahead") != meta["config"]["lookahead"] for p in requests):
                 raise ValueError("encoding does not match the model's lookahead")
-            return [p["encoded"] if p.get("_binary") else decode(p["encoded"]) for p in requests], None
+            # Match workers send v1 rows (selfplay_core.wire); a model of a
+            # wider encoding gets them extended here (guided.encoding.augment).
+            return [
+                augment(p["encoded"] if p.get("_binary") else decode(p["encoded"]), encoding)
+                for p in requests
+            ], None
         from .deployment import parse_observation
-        from .encoding import encode
 
+        encode = encoder(encoding)
         parsed = [parse_observation(p["observation"]) for p in requests]
         return [
             encode(obs, lookahead=meta["config"]["lookahead"]) for obs in parsed
@@ -496,15 +506,18 @@ class Service:
 
     def load(self, model):
         """Load a model and run every padded shape once, so play never pays for it."""
-        actor, _ = self.models.get(model)
+        from .encoding import ENCODING, INPUTS
+
+        actor, meta = self.models.get(model)
         if model in self.warmed:
             return {"ok": True}
+        planes = INPUTS[meta.get("encoding", ENCODING)][0]
         for size in BATCH_BUCKETS[:5]:
             for length in WARM_EVENTS:
-                row = blank()
+                row = blank(planes)
                 row["events"] = row["events"].repeat(length, axis=0)
                 # A slot of its own: the ring's may be in flight for another worker.
-                slot = self.runner.new_slot(*bucket(size, length))
+                slot = self.runner.new_slot(*bucket(size, length), planes)
                 slot.fill([row] * size)
                 self.runner.launch(model, actor, slot)
                 while not self.runner.ready(slot):
@@ -514,7 +527,7 @@ class Service:
         return {"ok": True}
 
 
-def blank():
+def blank(planes=None):
     """A minimal valid Actor input, for loading a model and its kernels ahead of play."""
     import numpy as np
     from selfplay_core.actions import N_ACTIONS
@@ -523,7 +536,7 @@ def blank():
     mask = np.zeros(N_ACTIONS, dtype=bool)
     mask[0] = True
     return {
-        "planes": np.zeros((N_PLANES, 34), np.float16),
+        "planes": np.zeros((planes or N_PLANES, 34), np.float16),
         "scalars": np.zeros(N_SCALARS, np.float16),
         "events": np.zeros((1, 5), np.int16),
         "mask": mask,
@@ -535,11 +548,11 @@ def decode(data):
     import base64
     import numpy as np
     from selfplay_core.actions import N_ACTIONS
-    from selfplay_core.encoding import N_PLANES, N_SCALARS
+    from selfplay_core.encoding import N_SCALARS
 
     raw = {k: base64.b64decode(v) for k, v in data.items()}
     return {
-        "planes": np.frombuffer(raw["planes"], dtype=np.float16).reshape(N_PLANES, 34),
+        "planes": np.frombuffer(raw["planes"], dtype=np.float16).reshape(-1, 34),
         "scalars": np.frombuffer(raw["scalars"], dtype=np.float16).reshape(N_SCALARS),
         "events": np.frombuffer(raw["events"], dtype=np.int16).reshape(-1, 5),
         "mask": np.frombuffer(raw["mask"], dtype=bool).reshape(N_ACTIONS),

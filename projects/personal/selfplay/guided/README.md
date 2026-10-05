@@ -44,6 +44,7 @@
 | `evaluation` / `statistics` / `inference` | 共同牌墙、四座轮换的配对评估，指导强度函数，评估专用的 Actor 批量推理 |
 | `artifacts` / `sync` | 教师包的导出、校验与跨机发布 |
 | `deployment` | Actor 导出、基准测试与独立 HTTP 推理服务 |
+| `expand` | 把导出的 Actor 扩成更宽的观察编码：新输入列置零、其余参数照抄，决策逐位不变，产物按权重 SHA-256 写进模型库 |
 | `resources` / `tune_evaluation` | 按 CPU 亲和性、cgroup 配额与可用显存给出初始并发，再在固定赛程上实测校准 |
 | `brawl` / `brawl_pipeline` | 5、8、10 或 11 个冻结策略的均衡大乱斗；流水线按校准、混合对局冒烟、计分比赛顺序执行，遇错停止 |
 | `trial` / `recipe_jobs` | 训练方案迭代：远端框架在固定时限和显存、内存上限内调用 `recipe.train(ctx)`，对手取研究冻结的评估对手（规则版本按各自运行时隔离运行）；训练出的 Actor 拉回 Mac 交给研究框架评估。Mac 侧任务负责部署、上传方案、脱离运行与轮询，主机不可达时无限期等待，主机重启时记为主机故障、从头重跑 |
@@ -113,6 +114,7 @@ PYTHONPATH=../../../src:src:. ../../../.venv/bin/python -m guided.platform_datas
 - 奖励是每局本人收支除以底分，整场之和等于桌面分，不做塑形和裁剪。Critic 读取三家手牌与牌墙构成，只在训练进程内使用，不随 Actor 发布。
 - 评估面板在一个实验内固定：同组牌墙四座轮换，按完整四座组计算配对均值差与区间。区间跨零只表示没分出高下，不等于持平或已到学习上限；多组比较未做多重校正。
 - 大乱斗每组内各策略的出场与座位次数一致：5 方覆盖全部 5 种四人阵容，8 方覆盖全部 70 种，10 方覆盖全部 210 种，11 方按循环移位的 30 个轨道排程。自动研究的共同大乱斗由研究框架执行；本模块的大乱斗用于研究框架之外的临时比赛，赛程、身份、回执和报告放仓库根 `.local/competition/runs/`。
+- 观察编码有名字，导出的 Actor 在 `meta.json` 的 `encoding` 里记着自己的编码。`guided-current-hand-v2` 在 v1 的平面后追加 16 个鸣牌、杠前瞻平面（`encoding.call_planes`）：碰、吃、明杠、暗杠或补杠之后的手牌，取 v1 逐张出牌平面同样的向听、进张、胡牌张数和番值；不合法的动作为 0。新平面只由 v1 行算出，所以 worker 的 Python 与 C 编码、模型服务收到的二进制请求都用同一个 `encoding.augment` 扩成 v2，match worker 照旧只发 v1 行。v2 行的前 57 个平面就是 v1 行，每个 Actor 只读自己那部分前缀；训练时 trial 取在座模型里最宽的编码交给 worker（`cfg["encoding"]`）。
 - `guided.deployment` 是独立 GPU 服务：`POST /act` 接收 `{"observation_payload": ...}` 完整公开观察并返回合法动作，`GET /health` 报告状态。它不是 ONNX 发布包，不改变平台 CPU/ONNX 发布契约，导出与测速也不会自动报名比赛。部署验收以 4070 实机的 10 桌并发为准，计时覆盖 HTTP、排队、编码、推理和回传。
 
 运行状态、完整配置和回执放本项目 `.local/`；各次实验的结论与待办汇总在本机 `.local/reports/guided-status.md`，具体成绩不写入本手册。

@@ -1,4 +1,8 @@
-"""Binary public Actor inputs for a local inference service; numpy only."""
+"""Binary public Actor inputs for a local inference service; numpy only.
+
+Requests carry v1 rows (guided-current-hand-v1); the service extends them for
+a model of a wider encoding (guided.encoding.augment).
+"""
 import struct
 
 import numpy as np

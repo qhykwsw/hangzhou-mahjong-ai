@@ -211,6 +211,26 @@ def test_fast_game_plays_the_python_game(members, monkeypatch, features):
         assert any(row.get("deviated") for row in games[1].rows)
 
 
+def test_both_engines_extend_rows_for_a_wider_encoding(members, monkeypatch):
+    from guided.encoding import ENCODING_V2, INPUTS, N_PLANES, call_planes
+
+    by_id = {f"m{i}": m for i, m in enumerate(members)}
+    monkeypatch.setattr(artifacts, "build_policy", lambda bundle, cid: by_id[cid])
+    cfg = configuration(rounds=16, lookahead=True, gae_lambda=0.95) | {
+        "playout_baseline": True, "encoding": ENCODING_V2}
+    seats = ["model:current", "m1", "m3", "m5"]
+    games = [cls(cfg, {"entries": []}, {k: None for k in by_id}, seats, seed_for(31, "fast-game-v2"), train=True)
+             for cls in (Game, fastgame.FastGame)]
+    counts = [play(game) for game in games]
+    assert counts[0] == counts[1] > 50
+    assert rows_of(games[0]) == rows_of(games[1])
+    for row in games[1].rows:
+        assert row["planes"].shape == (INPUTS[ENCODING_V2][0], 34)
+        prefix = dict(row, planes=row["planes"][:N_PLANES])
+        assert np.array_equal(row["planes"][N_PLANES:], call_planes(prefix).astype(np.float16))
+    assert any(row["planes"][N_PLANES:].any() for row in games[1].rows)
+
+
 # The third fixed pool's members (fp-rule-068 whole in C): styles 10 to 16.
 MEMBER68 = MEMBER.replace("{style})", "{style}, True, True)")
 

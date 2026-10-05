@@ -49,7 +49,7 @@ def load_actor(source, device="cuda"):
     checkpoint here is for local export/benchmark, never an HTTP-supplied path.
     """
     import torch
-    from .encoding import ENCODING
+    from .encoding import ENCODING, INPUTS
     from .networks import Actor
 
     source = Path(source)
@@ -58,7 +58,7 @@ def load_actor(source, device="cuda"):
         raise RuntimeError("CUDA unavailable; refusing silent CPU inference")
     if source.is_dir():
         metadata = json.loads((source / "meta.json").read_text())
-        if metadata.get("format") != FORMAT or metadata.get("encoding") != ENCODING:
+        if metadata.get("format") != FORMAT or metadata.get("encoding") not in INPUTS:
             raise ValueError("incompatible Actor artifact or observation encoding")
         if _sha256(source / "actor.pt") != metadata.get("weights_sha256"):
             raise ValueError("Actor weight checksum mismatch")
@@ -70,8 +70,12 @@ def load_actor(source, device="cuda"):
             raise ValueError("expected a guided-v1 training checkpoint")
         config = _actor_config(state["config"])
         weights = state["actor"]
-        metadata = {"format": FORMAT, "encoding": ENCODING, "config": config}
-    actor = Actor(config["dim"], config["layers"], config["heads"])
+        encoding = state["config"].get("encoding", ENCODING)
+        if encoding not in INPUTS:
+            raise ValueError("incompatible observation encoding")
+        metadata = {"format": FORMAT, "encoding": encoding, "config": config}
+    planes, scalars = INPUTS[metadata["encoding"]]
+    actor = Actor(config["dim"], config["layers"], config["heads"], planes=planes, scalars=scalars)
     actor.load_state_dict(weights, strict=True)
     for value in actor.state_dict().values():
         if not bool(torch.isfinite(value).all()):
@@ -82,7 +86,6 @@ def load_actor(source, device="cuda"):
 def export_actor(checkpoint, output):
     """Atomically export ONLY Actor tensors, architecture and public encoding ID."""
     import torch
-    from .encoding import ENCODING
 
     actor, metadata = load_actor(checkpoint, "cpu")
     output = Path(output).resolve()
@@ -99,7 +102,7 @@ def export_actor(checkpoint, output):
         torch.save(weights, directory / "actor.pt")
         meta = {
             "format": FORMAT,
-            "encoding": ENCODING,
+            "encoding": metadata["encoding"],
             "config": metadata["config"],
             "weights_sha256": _sha256(directory / "actor.pt"),
             "source_checkpoint_sha256": _sha256(checkpoint)
@@ -289,11 +292,12 @@ class BatchService:
 
     def _loop(self):
         import torch
-        from .encoding import encode
+        from .encoding import encoder
         from .learning import make_batch, masked_log_probs
         from selfplay_core.actions import action_index
 
         device = next(self.actor.parameters()).device
+        encode = encoder(self.metadata["encoding"])
         while not self.closed.is_set():
             try:
                 first = self.queue.get(timeout=0.05)

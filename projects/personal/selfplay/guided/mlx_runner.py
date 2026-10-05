@@ -8,13 +8,13 @@ import mlx.core as mx
 import numpy as np
 
 from selfplay_core.actions import N_ACTIONS
-from selfplay_core.encoding import N_PLANES, N_SCALARS
+from selfplay_core.encoding import N_SCALARS
 
 
 class Slot:
-    def __init__(self, size, width):
+    def __init__(self, size, width, planes):
         self.views = (
-            np.zeros((size, N_PLANES, 34), np.float16),
+            np.zeros((size, planes, 34), np.float16),
             np.zeros((size, N_SCALARS), np.float16),
             np.zeros((size, width, 5), np.int32),
             np.zeros((size, N_ACTIONS), bool),
@@ -48,13 +48,13 @@ class Runner:
         threading.Thread(target=self._wait, name="mlx-waiter", daemon=True).start()
 
     @staticmethod
-    def new_slot(size, width):
-        return Slot(size, width)
+    def new_slot(size, width, planes):
+        return Slot(size, width, planes)
 
-    def slot(self, count, length):
+    def slot(self, count, length, planes):
         from .model_server import IN_FLIGHT, bucket
 
-        shape = bucket(count, length)
+        shape = (*bucket(count, length), planes)
         if shape not in self.slots:
             self.slots[shape] = [Slot(*shape) for _ in range(IN_FLIGHT)]
         return next((s for s in self.slots[shape] if s.event is None), None)

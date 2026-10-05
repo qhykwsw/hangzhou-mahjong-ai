@@ -51,16 +51,24 @@ class BatchFirstEncoderLayer(nn.TransformerEncoderLayer):
 
 
 class HistoryEncoder(nn.Module):
-    def __init__(self, dim, layers, heads, max_events=4096, *, state_only=False):
+    """Tile, state and event tokens through a pre-norm transformer.
+
+    ``planes`` and ``scalars`` are the input sizes of the encoding it is built
+    for (guided.encoding.INPUTS). Later encodings append planes, so it reads
+    the first ``planes`` of whatever it is given.
+    """
+
+    def __init__(self, dim, layers, heads, max_events=4096, *, state_only=False,
+                 planes=N_PLANES, scalars=N_SCALARS):
         super().__init__()
         if dim % heads or dim < 2:
             raise ValueError("dim must be divisible by heads and at least 2")
         self.dim, self.layers, self.heads = dim, layers, heads
         self.max_events = max_events
         self.state_only = state_only
-        self.tile_in = nn.Linear(N_PLANES, dim)
+        self.tile_in = nn.Linear(planes, dim)
         self.tile_embedding = nn.Parameter(torch.empty(34, dim))
-        self.state_in = nn.Linear(N_SCALARS, dim)
+        self.state_in = nn.Linear(scalars, dim)
         self.event_embeddings = nn.ModuleList(
             nn.Embedding(size, dim) for size in (7, 5, 35, 35, 4)
         )
@@ -111,6 +119,7 @@ class HistoryEncoder(nn.Module):
             for field, embedding in enumerate(self.event_embeddings)
         )
         event_tokens = event_tokens + self.positions[valid.long().cumsum(1)]
+        planes = planes[:, : self.tile_in.in_features]
         tiles = self.tile_in(planes.float().transpose(1, 2)) + self.tile_embedding
         state = self.state_in(scalars.float())[:, None]
         tokens = torch.cat(
@@ -137,10 +146,10 @@ class HistoryEncoder(nn.Module):
 
 
 class Actor(nn.Module):
-    def __init__(self, dim=128, layers=4, heads=4):
+    def __init__(self, dim=128, layers=4, heads=4, *, planes=N_PLANES, scalars=N_SCALARS):
         super().__init__()
         self.dim, self.layers, self.heads = dim, layers, heads
-        self.encoder = HistoryEncoder(dim, layers, heads)
+        self.encoder = HistoryEncoder(dim, layers, heads, planes=planes, scalars=scalars)
         self.discard_head = nn.Linear(dim, 1)
         self.claim_head = nn.Linear(dim, 4)
         self.state_head = nn.Linear(dim, 65)

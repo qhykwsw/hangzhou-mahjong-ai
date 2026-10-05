@@ -26,9 +26,13 @@ def make_batch(rows, device):
     """
     if not rows:
         raise ValueError("cannot make an empty batch")
+    # Encodings differ in their number of planes (guided.encoding.INPUTS); a batch has one.
+    planes = len(rows[0]["planes"]) if "planes" in rows[0] else N_PLANES
+    if planes < N_PLANES:
+        raise ValueError("incorrect planes shape")
     batch = {}
     for key, shape, dtype in (
-        ("planes", (N_PLANES, 34), np.float16),
+        ("planes", (planes, 34), np.float16),
         ("scalars", (N_SCALARS,), np.float16),
         ("mask", (N_ACTIONS,), bool),
         ("oracle_planes", (16, 34), np.float32),

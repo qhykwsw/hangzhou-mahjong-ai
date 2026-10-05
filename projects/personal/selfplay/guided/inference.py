@@ -31,12 +31,31 @@ def policy_logits(model, planes, scalars, events):
         return model(planes, scalars, events)
 
 
+def widen(rows, model):
+    """Rows extended to the planes ``model`` reads, when they were encoded for a narrower encoding.
+
+    Collection workers encode for the widest encoding the trial names
+    (cfg["encoding"]); this covers callers that leave it at v1.
+    """
+    wanted = model.encoder.tile_in.in_features
+    if not rows or len(rows[0]["planes"]) >= wanted:
+        return rows
+    from .encoding import INPUTS, augment
+
+    encoding = next(e for e, (planes, _) in INPUTS.items() if planes == wanted)
+    return [augment(r, encoding) for r in rows]
+
+
 def policy_batch(rows, device):
     if not rows:
         raise ValueError("cannot infer an empty batch")
+    # Encodings differ in their number of planes (guided.encoding.INPUTS); a batch has one.
+    planes = len(rows[0]["planes"])
+    if planes < N_PLANES:
+        raise ValueError("incorrect planes shape")
     batch = {}
     for key, shape, dtype in (
-        ("planes", (N_PLANES, 34), np.float16),
+        ("planes", (planes, 34), np.float16),
         ("scalars", (N_SCALARS,), np.float16),
         ("mask", (N_ACTIONS,), bool),
     ):
@@ -73,8 +92,8 @@ def evaluate_requests(pending, actor, history, device, max_batch=128):
         for slot in sorted(grouped):
             for first in range(0, len(grouped[slot]), max_batch):
                 group = grouped[slot][first : first + max_batch]
-                batch = policy_batch([item[2]["row"] for item in group], device)
                 model = actor if slot == "model:current" else history[slot]
+                batch = policy_batch(widen([item[2]["row"] for item in group], model), device)
                 logits = policy_logits(
                     model, batch["planes"], batch["scalars"], batch["events"]
                 ).float()
@@ -139,16 +158,16 @@ class ActorGraphs:
             else None
         )
 
-    def _host(self, key, size, width):
+    def _host(self, key, size, width, planes):
         # A ring of IN_FLIGHT buffer sets per model and shape: a buffer is not
         # refilled while its earlier copy may still be on the way, and other
         # models' batches or the next round may be launched in between.
-        ring = self.hosts.get((key, size, width))
+        ring = self.hosts.get((key, size, width, planes))
         if ring is None:
-            ring = self.hosts[(key, size, width)] = []
+            ring = self.hosts[(key, size, width, planes)] = []
             for _ in range(self.IN_FLIGHT):
                 tensors = (
-                    torch.zeros((size, N_PLANES, 34), dtype=torch.float16).pin_memory(),
+                    torch.zeros((size, planes, 34), dtype=torch.float16).pin_memory(),
                     torch.zeros((size, N_SCALARS), dtype=torch.float16).pin_memory(),
                     torch.zeros((size, width, 5), dtype=torch.int64).pin_memory(),
                     torch.zeros((size, N_ACTIONS), dtype=torch.bool).pin_memory(),
@@ -159,8 +178,8 @@ class ActorGraphs:
                 )
                 answers = torch.zeros((size, 3), dtype=torch.float32).pin_memory()
                 ring.append((tensors, views, answers, torch.cuda.Event()))
-        turn = self.turn.get((key, size, width), 0)
-        self.turn[(key, size, width)] = (turn + 1) % self.IN_FLIGHT
+        turn = self.turn.get((key, size, width, planes), 0)
+        self.turn[(key, size, width, planes)] = (turn + 1) % self.IN_FLIGHT
         return ring[turn]
 
     @staticmethod
@@ -188,6 +207,7 @@ class ActorGraphs:
         for one model and shape may be unread (their host buffers rotate), so
         the device runs one batch while the host fills the next.
         """
+        rows = widen(rows, model)
         shape = self.shape(rows)
         device = next(model.parameters()).device
         if shape is None:
@@ -203,8 +223,9 @@ class ActorGraphs:
                 )
             )
         size, width = shape
+        count = len(rows[0]["planes"])
         tensors, (planes, scalars, events, mask), answers, done = self._host(
-            key, size, width
+            key, size, width, count
         )
         for i, row in enumerate(rows):
             planes[i] = row["planes"]
@@ -213,7 +234,7 @@ class ActorGraphs:
             events[i, : len(history)] = history
             events[i, len(history) :] = 0
             mask[i] = row["mask"]
-        entry = self.graphs.get((key, size, width, sample))
+        entry = self.graphs.get((key, size, width, count, sample))
         if entry is None:
             static = [t.to(device) for t in tensors]
             side = torch.cuda.Stream()
@@ -226,7 +247,7 @@ class ActorGraphs:
             with torch.cuda.graph(graph, pool=self.pool):
                 out = self._decide(model, *static, sample)
             self.pool = graph.pool()
-            entry = self.graphs[(key, size, width, sample)] = (static, out, graph)
+            entry = self.graphs[(key, size, width, count, sample)] = (static, out, graph)
         static, out, graph = entry
         for target, source in zip(static, tensors):
             target.copy_(source, non_blocking=True)

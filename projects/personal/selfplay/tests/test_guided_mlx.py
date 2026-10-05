@@ -37,6 +37,23 @@ def test_actor_matches_reference_with_real_and_padded_histories():
     np.testing.assert_allclose(actual, compact, rtol=0.01, atol=0.005)
 
 
+def test_actor_of_a_wider_encoding_matches_reference():
+    from guided.encoding import ENCODING_V2, INPUTS
+
+    torch.manual_seed(594)
+    planes, scalars = INPUTS[ENCODING_V2]
+    actor = Actor(32, 1, 4, planes=planes, scalars=scalars).eval()
+    rng = np.random.default_rng(457)
+    row = blank(planes)
+    args = [rng.normal(size=(2, *row["planes"].shape)).astype(np.float16),
+            rng.normal(size=(2, *row["scalars"].shape)).astype(np.float16),
+            np.ones((2, 4, 5), np.int32)]
+    with torch.inference_mode():
+        expected = actor(*(torch.from_numpy(a) for a in args)).numpy()
+    actual = np.asarray(MetalActor(actor).logits(*(mx.array(a) for a in args)))
+    np.testing.assert_allclose(actual, expected, rtol=0.01, atol=0.005)
+
+
 def test_service_two_inflight_batches_reuse_slots_without_stale_answers():
     torch.manual_seed(139)
     actor = MetalActor(Actor(32, 1, 4).eval())
@@ -48,12 +65,12 @@ def test_service_two_inflight_batches_reuse_slots_without_stale_answers():
             row = blank()
             row["mask"][:] = False
             row["mask"][legal] = True
-            slot = runner.slot(1, 1)
+            slot = runner.slot(1, 1, len(row["planes"]))
             assert slot is not None
             slot.fill([row])
             runner.launch("test", actor, slot)
             slots.append((slot, legal))
-        assert runner.slot(1, 1) is None
+        assert runner.slot(1, 1, len(blank()["planes"])) is None
         for slot, legal in slots:
             while not runner.ready(slot):
                 service.wait()
@@ -63,8 +80,8 @@ def test_service_two_inflight_batches_reuse_slots_without_stale_answers():
 def test_metal_rejects_invalid_event_indices():
     from guided.mlx_runner import Slot
 
-    slot = Slot(1, 32)
     row = blank()
+    slot = Slot(1, 32, len(row["planes"]))
     row["events"][0] = [1, 0, 35, 0, 0]
     with pytest.raises(ValueError, match="embedding index"):
         slot.fill([row])
