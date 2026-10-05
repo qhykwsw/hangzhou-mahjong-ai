@@ -85,7 +85,9 @@ TIE = 1e-7  # weight of shape potential, which only separates equal values
 # tiles among its last three discards, whether it has three yet, middle tiles
 # among its last six, honors and terminals among its last three, its discards
 # /10, its discards since its last call /9 (9 without a call), whether it
-# deals, and whether it has discarded a white (a piao: it waits on baotou).
+# deals, and whether its last discard is a white (a piao: it waits on
+# baotou; a white let go earlier, as a timed-out player's stand-in does with a
+# drawn one, says nothing of now).
 OPPONENT_LOGIT = (-0.0571, -0.1131, -0.2408, -0.5687, -0.2777, 0.1483, 0.0804, 0.0021, 1.0988, 0.1779, -0.4002, -0.1582, -1.9073, -0.6204, 0.1573, 5.1224)
 SHAPE_PAIR = 0.009
 SHAPE_ADJACENT = 0.0114
@@ -280,7 +282,7 @@ def opponent_speed(obs, draws):
             sum(1 for t in last3 if t < 27 and 2 <= t % 9 <= 6), len(last3) == 3,
             sum(1 for t in last6 if t < 27 and 2 <= t % 9 <= 6),
             sum(1 for t in last3 if t >= 27), sum(1 for t in last3 if t < 27 and t % 9 in (0, 8)),
-            len(discards) / 10, min(since.get(seat, 9), 9) / 9, obs.stage.dealer == seat, WHITE in discards,
+            len(discards) / 10, min(since.get(seat, 9), 9) / 9, obs.stage.dealer == seat, bool(discards) and discards[-1] == WHITE,
         )
         logit = sum(w * x for w, x in zip(OPPONENT_LOGIT, features))
         stay *= 1 - 1 / (1 + math.exp(-logit))
