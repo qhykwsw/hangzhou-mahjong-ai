@@ -1,22 +1,16 @@
-"""Proxy tables: whole games against stand-ins of the platform players we meet.
+"""Proxy tables: whole games against the tournament crowd's stand-in.
 
-A proxy panel imitates platform players (Actors cloned from their own
-replays, ADR-0015); a long-tail proxy stands for rarer players. Two panels
-are active, one per stage of the competition (user decisions 2026-10-05):
-
-- tournament (.local/proxy/tournament.json): the strongest players of the
-  last week. A line's version whose development set beats its best plays
-  them on the host of its evaluation, paired with that best version; with
-  the confirmation set they count half each in the verdict (harness.evaluate).
-  Candidates do not train or tune against them.
-- qualifier (.local/proxy/panel.json): the held-out half of the players we
-  meet most, plus the tail; it judges the qualifier lines (harness.qualifier),
-  whose candidates may train and tune against the other half only.
+The proxy panel imitates the platform players we meet (Actors cloned from
+their own replays, ADR-0015); the long tail of rarer players is one more
+proxy. The active tables judge the qualifier version (harness.qualifier,
+user decision 2026-10-05); a line's new best version plays them too, on the
+host of its evaluation, for the record (``proxy``) and the lines page. Only
+the held-out half of the panel is active: candidates may train and tune
+against the other half.
 
   python -m harness.proxy register <actors dir> --job <job.json> --name "代理面板 v2" [--built 2026-10-05] [--check "..."]
-  python -m harness.proxy activate <panel.json> --kind tournament|qualifier [--reference fp-rule-131] [--name ...]
-                                                                             # maintainer; reseal afterwards
-  python -m harness.proxy run <version> --host <host> [--kind tournament|qualifier]   # a version recorded before
+  python -m harness.proxy activate <panel.json> [--reference fp-rule-131] [--name ...]   # maintainer; reseal afterwards
+  python -m harness.proxy run <version> --host <host>                        # a version recorded before
 
 Activation freezes the panel as a set of tables: one lineup of three proxies
 per block, drawn by each player's share of our recent tables (a named proxy
@@ -39,23 +33,27 @@ from pathlib import Path
 from . import evaluate as E
 
 BLOCKS = E.override("FP_PROXY_BLOCKS", 1500)  # 4 games each: 6000 whole games
-TAIL_SEATS = ("tail", "tail-2", "tail-3")
 
 
-KINDS = {"tournament": "tournament.json", "qualifier": "panel.json"}
+def seats_of(name):
+    """A tail proxy (name starting with "tail") pools many players, so it may fill several seats at a table."""
+    return (name, f"{name}-2", f"{name}-3") if name.startswith("tail") else (name,)
 
 
-def panel_path(kind):
-    return E.LOCAL / "proxy" / KINDS[kind]
+TAIL_SEATS = seats_of("tail")
+
+
+def panel_path():
+    return E.LOCAL / "proxy" / "panel.json"
 
 
 def results_path():
     return E.LOCAL / "proxy-results.json"
 
 
-def load(kind):
-    """The kind's active tables, or None."""
-    path = panel_path(kind)
+def load():
+    """The active panel's tables, or None."""
+    path = panel_path()
     return E.read_json(path) if path.exists() else None
 
 
@@ -66,12 +64,12 @@ def lineups(shares, blocks, seed):
     weights = [shares[n] for n in names]
     out = []
     for _ in range(blocks):
-        seats, tails = [], 0
+        seats, pooled = [], {}
         while len(seats) < 3:
             name = rng.choices(names, weights)[0]
-            if name == "tail":
-                seats.append(TAIL_SEATS[tails])
-                tails += 1
+            if name.startswith("tail"):
+                seats.append(seats_of(name)[pooled.get(name, 0)])
+                pooled[name] = pooled.get(name, 0) + 1
             elif name not in seats:
                 seats.append(name)
         out.append(seats)
@@ -84,7 +82,7 @@ def tables(panel, pool, reference, blocks=None):
     members = {}
     for name, m in panel["members"].items():
         spec = E.with_timeouts({"family": "model", "version": name, "parameters": {"weights": m["weights"]}})
-        for seat in (TAIL_SEATS if name == "tail" else (name,)):
+        for seat in seats_of(name):
             members[seat] = dict(spec, version=seat)
     shares = {n: m["share"] for n, m in panel["members"].items()}
     digest = hashlib.sha256(json.dumps([shares, members, blocks, pool["runtime_path"], pool["config"],
@@ -129,10 +127,10 @@ def reference_blocks(t, host):
     return scores
 
 
-def score(version, spec, host, champion=None, kind="tournament"):
-    """The record's ``proxy``: whole games on the kind's active tables, paired with their reference on the same
-    host, and with the line's best version (``champion``, a record) when given."""
-    t = load(kind)
+def score(version, spec, host, champion=None):
+    """The record's ``proxy``: whole games on the active panel, paired with its reference on the same host,
+    and with the line's best version (``champion``, a record) when given."""
+    t = load()
     if t is None:
         return None
     theirs = reference_blocks(t, host)
@@ -144,7 +142,7 @@ def score(version, spec, host, champion=None, kind="tournament"):
     mean, se = E.mean_se(mine[b] for b in blocks)
     diff, dse = E.paired(mine, theirs, blocks) if version != t["reference"]["id"] else (0.0, 0.0)
     out = {"panel": t["panel"], "games": t["blocks"] * 4, "score": mean, "se": se, "seed": t["seed"],
-           "host": host, "batch": "开发集过线后的代理桌", "stats": stats,
+           "host": host, "batch": "新最好版本的代理桌", "stats": stats,
            "against": {"version": t["reference"]["id"], "diff": diff, "se": dse}}
     if champion is not None:
         # The best version's tables on this host: played once, then its jobs are reused.
@@ -191,32 +189,28 @@ def register(actors, job, name, built=None, check=None):
     print(f"{len(members)} 个代理已登记 → {out}")
 
 
-def activate(panel_file, reference, kind, name=None):
+def activate(panel_file, reference, name=None):
     panel = E.read_json(Path(panel_file))
     panel["name"] = name or panel.get("name") or panel_id(panel)[:8]
     ref = {"id": reference, "spec": spec_of(reference)}
     t = tables(panel, E.load_pool(), ref)
     (E.LOCAL / "proxy").mkdir(parents=True, exist_ok=True)
-    E.atomic_json(panel_path(kind), t)
+    E.atomic_json(panel_path(), t)
     path = results_path()
     value = E.read_json(path) if path.exists() else {"panels": {}, "results": []}
     known = value.setdefault("panels", {}).setdefault(t["panel"], {})
     known.update({k: v for k, v in {"name": panel["name"], "built": panel.get("built"), "games": panel.get("games"),
-                                    "proxies": len(panel["members"]), "check": panel.get("check"), "kind": kind}.items()
+                                    "proxies": len(panel["members"]), "check": panel.get("check")}.items()
                   if v is not None})
     E.atomic_json(path, value)
-    use = "开发集过线的版本加跑、与确认集各占一半" if kind == "tournament" else "海选线判定"
-    print(f"代理面板 {t['panel']}（{panel['name']}）已启用为{KIND_NAMES[kind]}：{t['blocks'] * 4} 场，参照 {reference}，"
-          f"用于{use}。重新 seal 后生效。")
+    print(f"代理面板 {t['panel']}（{panel['name']}）已启用：{t['blocks'] * 4} 场，参照 {reference}。"
+          "重新 seal 后生效：海选判定与新最好版本的记录都用它。")
 
 
-KIND_NAMES = {"tournament": "锦标赛代理桌", "qualifier": "海选代理桌"}
-
-
-def run(version, host, kind="tournament"):
+def run(version, host):
     """Score a version recorded before the panel was active (it then shows on the lines page)."""
     E.check_seal()
-    entry = score(version, spec_of(version), host, kind=kind)
+    entry = score(version, spec_of(version), host)
     if entry is None:
         raise E.Refused("还没有启用的代理面板")
     if version != entry["against"]["version"]:
@@ -236,21 +230,19 @@ def main():
     g.add_argument("--check")
     a = sub.add_parser("activate")
     a.add_argument("panel")
-    a.add_argument("--kind", required=True, choices=tuple(KINDS))
     a.add_argument("--reference", default="fp-rule-131")
     a.add_argument("--name", help="shown on the lines page (default: the panel's)")
     r = sub.add_parser("run")
     r.add_argument("version")
     r.add_argument("--host", required=True, choices=tuple(E.EVAL_WORKERS))
-    r.add_argument("--kind", default="tournament", choices=tuple(KINDS))
     args = parser.parse_args()
     try:
         if args.command == "register":
             register(args.actors, args.job, args.name, args.built, args.check)
         elif args.command == "activate":
-            activate(args.panel, args.reference, args.kind, args.name)
+            activate(args.panel, args.reference, args.name)
         else:
-            run(args.version, args.host, args.kind)
+            run(args.version, args.host)
     except E.Refused as exc:
         print(f"拒绝：{exc}")
         raise SystemExit(2)

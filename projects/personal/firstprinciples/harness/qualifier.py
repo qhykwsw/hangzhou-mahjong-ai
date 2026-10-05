@@ -10,9 +10,9 @@ q2 (led by the Claude helper), rule or RL alike. A candidate is judged
 against its line's best version so far (before the first one, the proxy
 panel's reference version):
 
-1. the qualifier's proxy tables (harness.proxy; the held-out half of the
-   panel, candidates train and tune against the other half only): its paired
-   difference must be above 0, or it stops here;
+1. the active proxy tables (the held-out half of the panel; candidates train
+   and tune against the other half only): its paired difference must be
+   above 0, or it stops here;
 2. the development set: at most POOL_FLOOR per game below the better of the
    two lines' best versions (strong opponents), or it stops here;
 3. fresh proxy walls, played by both: the one-sided 90% lower bound of the
@@ -106,9 +106,9 @@ def fresh(t, seed):
 
 def submit(source, line, host, name, why=None, resume=None):
     E.check_seal()
-    t = proxy.load("qualifier")
+    t = proxy.load()
     if t is None:
-        raise E.Refused("还没有启用的海选代理面板")
+        raise E.Refused("还没有启用的代理面板")
     pool = E.load_pool()
     state_path = E.LOCAL / "qualifier" / (resume or next_id(line)) / "state.json"
     if resume:
