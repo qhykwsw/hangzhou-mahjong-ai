@@ -389,3 +389,106 @@ def test_a_model_teacher_keeps_the_c_game_and_labels_from_the_answers(members, m
     ruled = fastgame.FastGame(cfg, {"entries": []}, {k: None for k in by_id}, seats, seed_for(31, "model-teacher"),
                               focal=1, teacher="m1", train=True)
     assert ruled.teacher is by_id["m1"] and ruled.seats is None
+
+
+# guided.walls: the stable wall and the learner's draw luck, on both engines.
+from guided.walls import train_hand  # noqa: E402
+
+
+def test_a_stable_c_hand_with_luck_is_the_python_hand_at_every_step():
+    rng = random.Random(23)
+    for case in range(60):
+        seed, dealer, hand_no = rng.getrandbits(64), rng.randrange(4), rng.randrange(1, 17)
+        scores = tuple(rng.randrange(-50, 50) for _ in range(4))
+        state = HandState(CONFIG, seed, dealer, hand_no, scores)
+        state.rounds_total = 16
+        hand = fastgame.native.Hand(seed, dealer, hand_no, scores, 16)
+        learner = rng.randrange(4)
+        # Converted at the deal, or partway through the hand (as an opening is).
+        convert_at = 0 if case % 2 == 0 else rng.randrange(1, 30)
+        steps = 0
+        while True:
+            if steps == convert_at:
+                train_hand(state, stable=True, luck_seat=learner)
+                hand.stabilize()
+                hand.track_luck(learner)
+            got = hand.snapshot()
+            got.pop("log")
+            assert got == snapshot_of(state)
+            if steps >= convert_at:
+                assert hand.luck == state.luck
+            if state.settled:
+                break
+            legal = state.legal_actions()
+            assert hand.legal() == tuple(action_index(a) for a in legal)
+            # Calls are favoured, so that branches of a hand would shift the ordinary wall.
+            calls = [i for i, a in enumerate(legal) if a.action in ("chi", "peng", "gang")]
+            choice = rng.choice(calls) if calls and rng.random() < 0.7 else rng.randrange(len(legal))
+            state.step(legal[choice], legal)
+            hand.step(action_index(legal[choice]))
+            steps += 1
+
+
+def test_without_calls_a_stable_wall_draws_the_ordinary_walls_tiles():
+    rng = random.Random(5)
+    for _ in range(20):
+        seed, dealer = rng.getrandbits(64), rng.randrange(4)
+        plain = HandState(CONFIG, seed, dealer, 1, (0, 0, 0, 0))
+        stable = train_hand(HandState(CONFIG, seed, dealer, 1, (0, 0, 0, 0)), stable=True)
+        while not plain.settled:
+            legal = plain.legal_actions()
+            quiet = [a for a in legal if a.action not in ("chi", "peng", "gang", "hu")] or legal
+            move = quiet[rng.randrange(len(quiet))]
+            plain.step(move, legal)
+            stable.step(move, stable.legal_actions())
+        assert [e for e, _ in plain.events] == [e for e, _ in stable.events]
+
+
+def test_the_draw_luck_has_mean_zero():
+    rng = random.Random(41)
+    totals = []
+    for _ in range(3000):
+        hand = fastgame.native.Hand(rng.getrandbits(64), rng.randrange(4), 1, (0, 0, 0, 0), 16)
+        hand.stabilize()
+        hand.track_luck(rng.randrange(4))
+        while not hand.settled:
+            legal = hand.legal()
+            hand.step(legal[rng.randrange(len(legal))] if rng.random() < 0.5 else legal[0])
+        totals.append(hand.luck)
+    for k in range(2):
+        values = np.array([t[k] for t in totals])
+        assert values.std() > 0
+        assert abs(values.mean()) < 4 * values.std() / np.sqrt(len(values))
+
+
+@pytest.mark.parametrize("stable", [False, True])
+def test_a_fast_game_with_walls_and_luck_plays_the_python_game(members, monkeypatch, stable):
+    by_id = {f"m{i}": m for i, m in enumerate(members)}
+    monkeypatch.setattr(artifacts, "build_policy", lambda bundle, cid: by_id[cid])
+    cfg = configuration(rounds=16, lookahead=True, gae_lambda=0.95) | {
+        "playout_baseline": True, "stable_wall": stable, "luck": True,
+        "critic_features": "guided.encoding:oracle"}
+    seed = seed_for(31, "fast-game-walls")
+    seats = ["m0", "model:current", "m2", "m5"]
+    games = [cls(cfg, {"entries": []}, {k: None for k in by_id}, seats, seed, focal=1, train=True)
+             for cls in (Game, fastgame.FastGame)]
+    assert games[1].seats is not None
+    counts = [play(game) for game in games]
+    assert counts[0] == counts[1] > 50
+    assert games[0].scores == games[1].scores
+    assert rows_of(games[0]) == rows_of(games[1])
+    rows = games[1].rows
+    assert all("luck_pay" in row for row in rows)
+    deviated = [row for row in rows if row.get("deviated")]
+    assert deviated and all("playout_luck_pay" in row for row in deviated)
+    assert any("end_luck_pay" in row for row in rows)
+
+
+def test_without_the_keys_rows_carry_no_luck(members, monkeypatch):
+    by_id = {f"m{i}": m for i, m in enumerate(members)}
+    monkeypatch.setattr(artifacts, "build_policy", lambda bundle, cid: by_id[cid])
+    cfg = configuration(rounds=16, lookahead=True, gae_lambda=0.95) | {"playout_baseline": True}
+    game = fastgame.FastGame(cfg, {"entries": []}, {k: None for k in by_id}, ["model:current", "m1", "m2", "m3"],
+                             seed_for(3, "no-luck"), focal=0, train=True)
+    play(game)
+    assert not any(key.startswith(("luck", "end_luck", "playout_luck")) for row in game.rows for key in row)

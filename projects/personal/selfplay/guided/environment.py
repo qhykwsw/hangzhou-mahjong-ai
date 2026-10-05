@@ -97,6 +97,9 @@ class Game:
         self.playout = bool(cfg.get("playout_baseline")) and train
         # cfg["search"] (guided.search): key windows of the learner get a search over worlds.
         self.search = cfg.get("search") if train else None
+        # guided.walls: training hands on a stable wall, and the learner's draw luck on its rows.
+        self.stable = bool(cfg.get("stable_wall")) and train
+        self.luck = bool(cfg.get("luck")) and train
         self.searched, self.window = 0, None
         self.shadows = []
         self.unfinished = False
@@ -122,6 +125,14 @@ class Game:
             from .starts import replay
 
             replay(self.state, opening["prefix"], self.focal)
+            if self.train and self.cfg.get("starts_reshuffle"):
+                # The recorded wall's order past the position is hidden: a fresh
+                # order per game makes each replay a new hidden sample.
+                random.Random(seed_for(self.seed, "starts-reshuffle")).shuffle(self.state.wall)
+        if self.stable or self.luck:
+            from .walls import train_hand
+
+            train_hand(self.state, stable=self.stable, luck_seat=self.focal if self.luck else None)
 
     def advance(self):
         from mahjong_ai.domain.types import RoundResult
@@ -137,6 +148,8 @@ class Game:
                     self.rows[-1]["reward"] += (
                         state.delta[self.focal] / self.config.base_score
                     )
+                    if self.luck:
+                        self.rows[-1]["end_luck_pay"], self.rows[-1]["end_luck_deal"] = state.luck
                 else:
                     # A hand in which the learner had no choice (before its first,
                     # or a later hand won before its turn) credits no decision:
@@ -198,6 +211,8 @@ class Game:
             )
             if self.train and seat == self.focal:
                 row.update(hook(self.cfg.get("critic_features"), oracle)(state, seat))
+                if self.luck:
+                    row["luck_pay"], row["luck_deal"] = state.luck
                 if self.teacher:
                     # A teacher that fails on a decision (raises, or answers
                     # illegally) leaves that row unlabelled instead of
@@ -359,6 +374,8 @@ class Shadow:
         # The continuation's next-hand start, for a recipe's value of it.
         self.row["playout_dealer"] = dealer
         self.row["playout_scores"] = [(s + d) / game.config.base_score for s, d in zip(state.scores, state.delta)]
+        if game.luck:
+            self.row["playout_luck_pay"], self.row["playout_luck_deal"] = state.luck
 
     def apply(self, response):
         from selfplay_core.actions import action_index

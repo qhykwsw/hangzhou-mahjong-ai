@@ -69,6 +69,10 @@ class FastGame(Game):
             derive_seed(self.seed, "wall", self.hand_no), self.dealer, self.hand_no, self.scores,
             config.rounds, config.base_score, int(config.you_cai_bi_kao), config.max_actions_per_hand,
         )
+        if self.stable:
+            self.state.stabilize()
+        if self.luck:
+            self.state.track_luck(self.focal)
         self.start = (self.dealer, tuple(self.scores))
 
     def _plan(self):
@@ -107,6 +111,8 @@ class FastGame(Game):
                 self.scores = [s + d for s, d in zip(self.scores, delta)]
                 if self.rows and self.rows[-1]["hand"] == self.hand_no:
                     self.rows[-1]["reward"] += delta[self.focal] / self.config.base_score
+                    if self.luck:
+                        self.rows[-1]["end_luck_pay"], self.rows[-1]["end_luck_deal"] = state.luck
                 else:
                     self.predecision_reward += delta[self.focal] / self.config.base_score
                 self.hands.append((*self.start, state.snapshot()["log"]))
@@ -135,6 +141,8 @@ class FastGame(Game):
             if self.train and seat == self.focal:
                 features = self.cfg.get("critic_features")
                 row.update(state.oracle(seat) if not features else hook(features, None)(StateView(self, state), seat))
+                if self.luck:
+                    row["luck_pay"], row["luck_deal"] = state.luck
             self.pending = (row, state.legal(), seat)
             return {
                 "row": row,
@@ -191,6 +199,8 @@ class FastShadow:
         self.row["playout_deals_next"] = float(dealer == game.focal)
         self.row["playout_dealer"] = dealer
         self.row["playout_scores"] = [(s + d) / game.config.base_score for s, d in zip(self.start_scores, state.delta)]
+        if game.luck:
+            self.row["playout_luck_pay"], self.row["playout_luck_deal"] = state.luck
         return None
 
     def apply(self, response):
@@ -282,6 +292,10 @@ def replay(game, snap):
         state = HandState(config, derive_seed(game.seed, "wall", number), dealer, number, scores, history, False,
                           previous_views=views)
         state.rounds_total = config.rounds
+        if game.stable or game.luck:
+            from .walls import train_hand
+
+            train_hand(state, stable=game.stable, luck_seat=game.focal if game.luck else None)
         for index in log:
             legal = state.legal_actions()
             state.step(next(a for a in legal if action_index(a) == index), legal)

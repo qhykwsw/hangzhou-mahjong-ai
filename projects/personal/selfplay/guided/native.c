@@ -145,9 +145,25 @@ typedef struct {
     /* every applied action's index, for replaying the hand on the Python engine */
     int16_t log[G_LOG];
     int n_log;
+    /* guided.walls: a stable wall (each seat's normal draws from its own
+     * interleaved positions of the wall, counted from the back as of the
+     * conversion; kong replacements from the front) and the learner's draw
+     * luck (luck_seat -1: not tracked). */
+    int stable, sub_back, sub_next[4], sub_off[4], n_left;
+    uint8_t used[G_WALL];
+    int luck_seat;
+    double luck_pay, luck_deal;
 } g_hand;
 
-static int wall_len(const g_hand *h) { return h->hi - h->lo; }
+static int wall_len(const g_hand *h) { return h->stable ? h->n_left : h->hi - h->lo; }
+
+/* The remaining wall's tiles in wall order (a stable wall skips the drawn positions). */
+static int g_wall_tiles(const g_hand *h, int8_t *out) {
+    int n = 0;
+    for (int k = h->lo; k < h->hi; k++)
+        if (!h->stable || !h->used[k]) out[n++] = h->wall[k];
+    return n;
+}
 
 static void g_event_add(g_hand *h, int kind, int seat, int tile, const int8_t *tiles, int n, int priv) {
     if (h->n_ev >= G_EVENTS) return;  /* checked by the caller's step budget long before */
@@ -207,18 +223,103 @@ static void g_finish(g_hand *h, int winner) {
     g_event_add(h, EV_END, winner, -1, NULL, 0, -1);
 }
 
+/* The next tile a seat draws (guided.walls.TrainingHand._take). */
+static int g_take_wall(g_hand *h, int seat, int kong) {
+    if (!h->stable) return kong ? h->wall[h->lo++] : h->wall[--h->hi];
+    int k;
+    if (kong) {
+        for (k = h->lo; h->used[k]; k++) {}
+    } else {
+        int target = h->sub_back - (4 * h->sub_next[seat] + h->sub_off[seat]);
+        h->sub_next[seat]++;
+        if (target >= h->lo && target < h->hi && !h->used[target]) {
+            k = target;
+        } else {
+            for (k = h->hi - 1; h->used[k]; k--) {}
+        }
+    }
+    h->used[k] = 1;
+    h->n_left--;
+    while (h->hi > h->lo && h->used[h->hi - 1]) h->hi--;
+    while (h->lo < h->hi && h->used[h->lo]) h->lo++;
+    return h->wall[k];
+}
+
+/* The learner's payoff (base units) if `seat` won now with `fan`. */
+static double g_luck_payoff(const g_hand *h, int seat, long fan) {
+    int learner = h->luck_seat;
+    if (seat == learner) {
+        double total = 0.0;
+        for (int t = 0; t < 4; t++)
+            if (t != seat) total += (double)(fan * (h->dealer == t || h->dealer == seat ? 8 : 1));
+        return total;
+    }
+    return -(double)(fan * (h->dealer == learner || h->dealer == seat ? 8 : 1));
+}
+
+/* Before `seat` draws: whether its hand is ready (else its draw carries no
+ * luck), and the means over the remaining wall of the payoff and of the
+ * learner dealing next if it won at once with that tile. */
+static int g_luck_expect(const g_hand *h, int seat, int kong, double *pay, double *deal) {
+    int c[NTILES], w[NTILES] = {0}, opened = h->n_melds[seat], n = 0;
+    *pay = *deal = 0.0;
+    memcpy(c, h->c[seat], sizeof(c));
+    if (shanten_raw(c, opened) > 0) return 0;
+    for (int k = h->lo; k < h->hi; k++)
+        if (!h->stable || !h->used[k]) {
+            w[h->wall[k]]++;
+            n++;
+        }
+    for (int y = 0; y < NTILES; y++) {
+        if (!w[y]) continue;
+        c[y]++;
+        long fan = fan_value(c, y, opened, h->chain[seat], h->piao[seat], h->ycbk, kong);
+        c[y]--;
+        if (fan > 0) {
+            *pay += (double)w[y] * g_luck_payoff(h, seat, fan);
+            if (seat == h->luck_seat) *deal += (double)w[y];
+        }
+    }
+    *pay /= (double)n;
+    *deal /= (double)n;
+    return 1;
+}
+
 static void g_draw(g_hand *h, int seat, int kong, int initial) {
     if (wall_len(h) <= 20) {
         g_finish(h, -1);
         return;
     }
+    double pay = 0.0, deal = 0.0;
+    int luck = !initial && h->luck_seat >= 0 && g_luck_expect(h, seat, kong, &pay, &deal);
     h->turn = seat;
-    h->drawn = kong ? h->wall[h->lo++] : h->wall[--h->hi];
+    h->drawn = g_take_wall(h, seat, kong);
     g_take(h, seat, h->drawn);
     if (h->drawn == WHITE) h->white_acquired[seat]++;
     h->kong_draw = kong;
     h->phase = PH_DRAW;
     if (!initial) g_event_add(h, EV_DRAW, seat, h->drawn, NULL, 0, seat);
+    if (luck) {
+        long fan = fan_value(h->c[seat], h->drawn, h->n_melds[seat], h->chain[seat], h->piao[seat], h->ycbk, kong);
+        double got = fan > 0 ? g_luck_payoff(h, seat, fan) : 0.0;
+        double dealt = fan > 0 && seat == h->luck_seat ? 1.0 : 0.0;
+        h->luck_pay += got - pay;
+        h->luck_deal += dealt - deal;
+    }
+}
+
+/* guided.walls.stabilize: from here on each seat draws from its own positions. */
+static void g_stabilize(g_hand *h) {
+    if (h->stable) return;
+    int next = h->phase == PH_DRAW ? (h->turn + 1) % 4 : (h->discarder + 1) % 4;
+    h->stable = 1;
+    memset(h->used, 0, sizeof(h->used));
+    h->n_left = h->hi - h->lo;
+    h->sub_back = h->hi - 1;
+    for (int s = 0; s < 4; s++) {
+        h->sub_next[s] = 0;
+        h->sub_off[s] = ((s - next) % 4 + 4) % 4;
+    }
 }
 
 static void g_start(g_hand *h, uint64_t seed, int dealer, int hand_no, const int *scores,
@@ -251,6 +352,7 @@ static void g_start(g_hand *h, uint64_t seed, int dealer, int hand_no, const int
     }
     h->turn = dealer;
     h->drawn = -1;
+    h->luck_seat = -1;
     h->catch_owner = -1;
     h->discarder = h->discarded = h->winner = -1;
     g_draw(h, dealer, 0, 1);
@@ -1338,7 +1440,8 @@ static void g_oracle(const g_hand *h, int seat, float *planes, float *scalars) {
                 scalars[i] = (float)((8 - sh) / 9.0);
             }
         } else {
-            for (int k = h->lo; k < h->hi; k++) c[h->wall[k]]++;
+            for (int k = h->lo; k < h->hi; k++)
+                if (!h->stable || !h->used[k]) c[h->wall[k]]++;
         }
         g_count_planes4(planes + 4 * i * NTILES, c);
     }
@@ -1389,7 +1492,10 @@ static PyObject *hand_snapshot(HandObject *self, PyObject *unused) {
     SET("hand_no", PyLong_FromLong(h->hand_no));
     SET("rounds_total", PyLong_FromLong(h->rounds_total));
     SET("scores", g_int_tuple(h->scores, 4));
-    SET("wall", g_tiles(h->wall + h->lo, wall_len(h)));
+    {
+        int8_t wall[G_WALL];
+        SET("wall", g_tiles(wall, g_wall_tiles(h, wall)));
+    }
     PyObject *hands = PyTuple_New(4), *initial = PyTuple_New(4), *melds = PyTuple_New(4), *rivers = PyTuple_New(4);
     if (!hands || !initial || !melds || !rivers) { Py_XDECREF(hands); Py_XDECREF(initial); Py_XDECREF(melds); Py_XDECREF(rivers); Py_DECREF(d); return NULL; }
     for (int s = 0; s < 4; s++) {
@@ -1447,6 +1553,23 @@ static PyObject *hand_get_delta(HandObject *self, void *c) { return g_int_tuple(
 static PyObject *hand_get_turn(HandObject *self, void *c) { return PyLong_FromLong(self->h.turn); }
 static PyObject *hand_get_dealer(HandObject *self, void *c) { return PyLong_FromLong(self->h.dealer); }
 static PyObject *hand_get_steps(HandObject *self, void *c) { return PyLong_FromLong(self->h.steps); }
+static PyObject *hand_get_luck(HandObject *self, void *c) { return Py_BuildValue("(dd)", self->h.luck_pay, self->h.luck_deal); }
+
+static PyObject *hand_stabilize(HandObject *self, PyObject *unused) {
+    g_stabilize(&self->h);
+    Py_RETURN_NONE;
+}
+
+static PyObject *hand_track_luck(HandObject *self, PyObject *arg) {
+    long seat = PyLong_AsLong(arg);
+    if (seat == -1 && PyErr_Occurred()) return NULL;
+    if (seat < 0 || seat > 3) {
+        PyErr_SetString(PyExc_ValueError, "seat must be 0..3");
+        return NULL;
+    }
+    self->h.luck_seat = (int)seat;
+    Py_RETURN_NONE;
+}
 
 static PyGetSetDef hand_getset[] = {
     {"settled", (getter)hand_get_settled, NULL, NULL, NULL},
@@ -1455,6 +1578,7 @@ static PyGetSetDef hand_getset[] = {
     {"turn", (getter)hand_get_turn, NULL, NULL, NULL},
     {"dealer", (getter)hand_get_dealer, NULL, NULL, NULL},
     {"steps", (getter)hand_get_steps, NULL, NULL, NULL},
+    {"luck", (getter)hand_get_luck, NULL, NULL, NULL},
     {NULL},
 };
 
@@ -1470,6 +1594,8 @@ static PyMethodDef hand_methods[] = {
     {"encode_into", (PyCFunction)hand_encode_into, METH_VARARGS, "encode into whole columns of a row store; events written, or None."},
     {"oracle_into", (PyCFunction)hand_oracle_into, METH_VARARGS, "oracle into whole columns of a row store."},
     {"snapshot", (PyCFunction)hand_snapshot, METH_NOARGS, "Every field as plain values."},
+    {"stabilize", (PyCFunction)hand_stabilize, METH_NOARGS, "guided.walls.stabilize: each seat draws from its own positions from here on."},
+    {"track_luck", (PyCFunction)hand_track_luck, METH_O, "Accumulate this seat's draw luck (guided.walls) from here on."},
     {NULL},
 };
 

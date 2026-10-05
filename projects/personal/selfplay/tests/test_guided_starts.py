@@ -89,3 +89,20 @@ def test_an_opening_must_stop_at_its_learners_choice():
         replay(original, bytes([illegal]).hex(), opening["focal"])
     with pytest.raises(ValueError):
         check(dict(opening, prefix=[0, 1]))  # the prefix is the hex of action indices
+
+
+def test_a_reshuffled_opening_keeps_the_position_and_draws_a_fresh_wall():
+    cfg = dict(CFG, starts_reshuffle=True, stable_wall=True, luck=True)
+    differed = 0
+    for opening, original in openings(6):
+        seats = ["stub"] * 4
+        seats[opening["focal"]] = "model:current"
+        game = Game(cfg, None, {}, seats, 11, focal=opening["focal"], train=True, external=Stubs(), opening=opening)
+        state = game.state
+        assert state.hands == original.hands and sorted(state.wall) == sorted(original.wall)
+        assert (state.turn, state.phase, state.melds, state.discards) == (
+            original.turn, original.phase, original.melds, original.discards)
+        differed += state.wall != original.wall
+        drive(game, random.Random(3))
+        assert game.complete and all("luck_pay" in r for r in game.rows)
+    assert differed == 6
