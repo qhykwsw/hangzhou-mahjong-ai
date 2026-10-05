@@ -1,5 +1,6 @@
 """Iteration-line loop (ADR-0016): seal, leases, host queue, recipe rules, platform flag."""
 import importlib
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -585,9 +586,7 @@ def test_a_lent_host_runs_the_rule_line_after_the_attempt_it_has(harness):
     assert line.line_hosts("rule") == ("local",) and "4070" in line.line_hosts("rl")
 
 
-def test_a_version_above_the_best_also_plays_the_proxy_tables_which_count_half(harness, monkeypatch, tmp_path):
-    E, _, _ = harness
-    proxy = importlib.import_module("harness.proxy")
+def proxy_panel(E, proxy, tmp_path, monkeypatch, reference="fp-rule-131"):
     monkeypatch.setattr(proxy, "BLOCKS", 40)
     monkeypatch.setattr(E, "DEV_BLOCKS", 2)
     monkeypatch.setattr(E, "CONFIRM_BLOCKS", 2)
@@ -602,11 +601,17 @@ def test_a_version_above_the_best_also_plays_the_proxy_tables_which_count_half(h
         "p01": {"weights": "w1", "share": 0.3}, "p02": {"weights": "w2", "share": 0.2},
         "tail": {"weights": "wt", "share": 0.5}}}))
     E.seal()
-    proxy.activate(panel, "fp-rule-131")
+    proxy.activate(panel, reference)
     with pytest.raises(E.Refused):
         E.check_seal()  # the active panel is a sealed condition
     E.seal()
-    tables = proxy.load()
+    return proxy.load()
+
+
+def test_a_new_best_version_plays_the_proxy_tables_for_the_record_only(harness, monkeypatch, tmp_path):
+    E, _, _ = harness
+    proxy = importlib.import_module("harness.proxy")
+    tables = proxy_panel(E, proxy, tmp_path, monkeypatch)
     for seats in tables["lineups"]:
         named = [s for s in seats if not s.startswith("tail")]
         assert len(seats) == 3 and len(set(named)) == len(named)
@@ -627,20 +632,19 @@ def test_a_version_above_the_best_also_plays_the_proxy_tables_which_count_half(h
         return [c[1:] for c in calls if c[0] == tables["id"]]
 
     monkeypatch.setattr(E, "play", play)
-    # Above the best: confirmation and proxy tables, each paired with it, decide half and half.
+    # A new best version (strong opponents decide) plays the proxy tables, paired with the one it replaces.
     r = E.evaluate("rule", {"family": "code", "package_hash": "n"}, "x", "fp-rule-132", host="local", confirm_seed=5)
     assert r["status"] == "keep" and r["proxy"]["best"] == {"version": "fp-rule-131", "diff": 1.0, "se": 0.0}
-    assert r["confirm"]["combined"]["diff"] == 1.0 and r["proxy"]["against"]["diff"] == 1.0
+    assert r["proxy"]["against"]["diff"] == 1.0 and "combined" not in r["confirm"]
     assert proxied() == [("fp-rule-131", "proxy-local"), ("fp-rule-132", "proxy-local")]  # the best is the reference
-    assert "确认集与代理桌各占一半：配对差 +1.00" in E.report(r)
+    assert "对 fp-rule-131 配对差 +1.00" in E.report(r)
     # Below the best on the development set: no proxy tables at all.
     calls.clear()
     r = E.evaluate("rule", {"family": "code", "package_hash": "o"}, "x", "fp-rule-133", host="local", confirm_seed=5)
     assert r["status"] == "discard" and "proxy" not in r and proxied() == []
-    # Confirmed on the pool but far behind at the proxy tables: the halves together are not above the best.
+    # Far behind at the proxy tables does not undo a confirmed win against the pool.
     r = E.evaluate("rule", {"family": "code", "package_hash": "p"}, "x", "fp-rule-134", host="local", confirm_seed=5)
-    assert r["confirm"]["diff"] == 1.0 and r["proxy"]["best"]["diff"] == -4.0
-    assert r["confirm"]["combined"]["diff"] == -1.5 and r["status"] == "unconfirmed"
+    assert r["status"] == "keep" and r["proxy"]["best"]["diff"] == -4.0
     assert proxied() == [("fp-rule-134", "proxy-local"), ("fp-rule-132", "proxy-local")]
     # A line's first version is on record at the proxy tables; another host plays the reference again.
     calls.clear()
@@ -651,9 +655,65 @@ def test_a_version_above_the_best_also_plays_the_proxy_tables_which_count_half(h
     rows = E.read_json(E.LOCAL / "proxy-results.json")
     assert [(x["version"], x["host"]) for x in rows["results"]] == [("fp-rule-131", "local"), ("fp-rule-131", "4070")]
     assert rows["panels"][tables["panel"]]["proxies"] == 3
-    # A failure at the proxy tables is recorded in their place; the confirmation set decides alone.
+    # A failure at the proxy tables is recorded in their place.
     monkeypatch.setattr(E, "play", lambda pool, cid, spec, blocks, seed, label, host: (_ for _ in ()).throw(
         RuntimeError("down")) if label.startswith("proxy") else play(pool, cid, spec, blocks, seed, label, host))
     r = E.evaluate("rl", {"family": "model", "parameters": {"weights": "m2"}}, "x", "fp-rl-141", host="5070ti",
                    confirm_seed=5)
-    assert "down" in r["proxy"]["error"] and r["status"] == "keep" and "combined" not in r["confirm"]
+    assert "down" in r["proxy"]["error"] and r["status"] == "keep"
+
+
+def test_the_qualifier_version_may_lose_a_little_to_strong_opponents_to_win_more_against_the_crowd(
+        harness, monkeypatch, tmp_path):
+    E, _, _ = harness
+    proxy = importlib.import_module("harness.proxy")
+    Q = importlib.import_module("harness.qualifier")
+    tables = proxy_panel(E, proxy, tmp_path, monkeypatch)
+    record(E, id="fp-rl-172", line="rl", games=8, finished_at=2, score=1.5, spec={"family": "model"},
+           dev_blocks={"0": 1.0, "1": 2.0})
+    # Per candidate: fixed proxy tables, development set, fresh proxy walls.
+    scores = {"fp-rule-131": (0.0, None, 0.0),
+              "fp-q1-001": (0.0, None, None),   # not ahead at the proxy tables
+              "fp-q1-002": (2.0, -1.5, None),   # 2.5 below the lines' best (fp-rl-172) against strong opponents
+              "fp-q1-003": (2.0, 0.0, 2.0),     # 1 below it, clearly ahead on fresh walls: the qualifier version
+              "fp-q1-004": (3.0, 1.0, 2.0),     # ahead of fp-q1-003 at the fixed tables only
+              "fp-q2-001": (1.0, 1.0, 1.0)}     # the other qualifier line starts from the reference too
+    walls = []
+
+    def play(pool, attempt_id, spec, blocks, seed, label, host):
+        assert host == "4070"
+        if pool["id"] == tables["id"]:
+            score = scores[attempt_id][0]
+        elif pool["id"].startswith(tables["id"] + "-fresh-"):
+            assert pool["seed"] == seed and len(pool["lineups"]) == tables["blocks"]
+            assert pool["lineups"] != tables["lineups"]
+            walls.append((attempt_id, label, seed))
+            score = scores[attempt_id][2]
+        else:
+            assert pool["id"] == "pool-a" and label == "dev"
+            score = scores[attempt_id][1]
+        return {b: score + (b % 2) for b in blocks}, {"timeouts": 0, "fallback_actions": 0, "errors": 0}
+
+    monkeypatch.setattr(E, "play", play)
+    statuses = []
+    for n, line in enumerate(("q1", "q1", "q1", "q1", "q2"), 1):
+        actor = tmp_path / f"actor-{n}"
+        actor.mkdir()
+        (actor / "actor.pt").write_bytes(bytes([n]))
+        (actor / "meta.json").write_text(json.dumps({"weights_sha256": hashlib.sha256(bytes([n])).hexdigest()}))
+        r = Q.submit(actor, line, "4070", f"候选 {n}")
+        statuses.append((r["id"], r["status"], r["against"]))
+        assert (E.MODELS / r["spec"]["parameters"]["weights"]).is_dir() and r["spec"]["version"] == r["id"]
+    assert statuses == [("fp-q1-001", "discard", "fp-rule-131"), ("fp-q1-002", "pool", "fp-rule-131"),
+                        ("fp-q1-003", "keep", "fp-rule-131"), ("fp-q1-004", "unconfirmed", "fp-q1-003"),
+                        ("fp-q2-001", "keep", "fp-rule-131")]
+    q3, q4 = Q.records("q1")[2:]
+    assert q3["pool"]["against"] == "fp-rl-172" and q3["pool"]["diff"] == -1.0 and q3["confirm"]["lower90"] == 2.0
+    assert q4["proxy"]["diff"] == 1.0 and q4["confirm"]["diff"] == 0.0
+    # Each candidate's fresh walls are new, and the version it is judged against replays them.
+    assert [w[:2] for w in walls][:4] == [("fp-q1-003", "fresh"), ("fp-rule-131", "fresh-for-fp-q1-003"),
+                                          ("fp-q1-004", "fresh"), ("fp-q1-003", "fresh-for-fp-q1-004")]
+    assert walls[0][2] == walls[1][2] != walls[2][2]
+    assert "成功（新的海选版本）" in Q.report(q3) and "对 fp-rl-172 -1.00" in Q.report(q3)
+    rows = E.read_json(E.LOCAL / "proxy-results.json")["results"]
+    assert [x["version"] for x in rows if x["batch"] == "海选候选"] == [s[0] for s in statuses]

@@ -1006,15 +1006,11 @@ def evaluate(line, spec, description, attempt_id=None, design_seconds=None, host
             confirm = {"seed": seed, "games": CONFIRM_BLOCKS * 4, "diff": diff, "se": se,
                        "lower90": diff - CONFIRM_Z * se, "against": champion["id"]}
             verdict = "keep" if diff - CONFIRM_Z * se > 0 else "unconfirmed"
-            # Above the best on the development set, the proxy tables (the tournament
-            # crowd) join the verdict half and half with the confirmation set (user, 10-05).
-            proxy = proxy_tables(attempt_id, spec, host, champion)
-            vs = (proxy or {}).get("best")
-            if vs:
-                d = (diff + vs["diff"]) / 2
-                s = math.sqrt(se ** 2 + vs["se"] ** 2) / 2
-                confirm["combined"] = {"diff": d, "se": s, "lower90": d - CONFIRM_Z * s}
-                verdict = "keep" if d - CONFIRM_Z * s > 0 else "unconfirmed"
+            if verdict == "keep":
+                # The lines build the semifinal and final version against strong opponents
+                # (user, 10-05); a new best version's proxy tables are on record only, for
+                # the qualifier version (harness.qualifier) to measure itself against.
+                proxy = proxy_tables(attempt_id, spec, host, champion)
     elif champion is None and not reference:
         proxy = proxy_tables(attempt_id, spec, host)  # a line's first version: on record, nothing to pair with
     score, se = mean_se(scores[k] for k in range(DEV_BLOCKS))
@@ -1038,8 +1034,7 @@ def proxy_tables(attempt_id, spec, host, champion=None):
     """The version's whole games on the proxy panel (harness.proxy), when one is active.
 
     Paired with the champion when given (its tables on this host are played
-    once and reused). A failure is recorded in its place; the verdict then
-    rests on the confirmation set alone.
+    once and reused). A failure is recorded in its place.
     """
     from . import proxy
 
@@ -1156,7 +1151,7 @@ def report(record):
     if record["confirm"]:
         c = record["confirm"]
         lines.append(f"确认集：{c['games']} 场配对差 {c['diff']:+.2f} ± {c['se']:.2f}，90% 下界 {c['lower90']:+.2f}")
-        if c.get("combined"):
+        if c.get("combined"):  # 10-05 (eb07bed) to the qualifier split: the proxy tables counted half
             m = c["combined"]
             lines.append(f"确认集与代理桌各占一半：配对差 {m['diff']:+.2f} ± {m['se']:.2f}，90% 下界 {m['lower90']:+.2f}（判定依据）")
     if cost:
@@ -1173,7 +1168,7 @@ def report(record):
                      f"90% 下界 {ref['lower90']:+.2f}，{verdict}")
     proxy = record.get("proxy")
     if proxy and proxy.get("error"):
-        lines.append(f"代理桌：没有打完（{proxy['error'][-200:]}），不影响结论")
+        lines.append(f"代理桌：没有打完（{proxy['error'][-200:]}），只作记录，不影响结论")
     elif proxy:
         a, b = proxy["against"], proxy.get("best")
         lines.append(f"代理桌：{proxy['games']} 场 {proxy['score']:+.2f} ± {proxy['se']:.2f}，"

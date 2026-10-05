@@ -1,12 +1,12 @@
-"""Proxy tables: a version above its line's best also plays whole games against the tournament crowd's stand-in.
+"""Proxy tables: whole games against the tournament crowd's stand-in.
 
 The proxy panel imitates the platform players we meet (Actors cloned from
 their own replays, ADR-0015); the long tail of rarer players is one more
-proxy. Since 2026-10-05 (user decisions) a version whose development set beats
-its line's best plays the active panel too, beside the confirmation set, on
-the same host; its paired difference with the best version there and the
-confirmation set's count half each in the verdict (harness.evaluate). The
-result joins the record as ``proxy`` and shows on the lines page.
+proxy. The active tables judge the qualifier version (harness.qualifier,
+user decision 2026-10-05); a line's new best version plays them too, on the
+host of its evaluation, for the record (``proxy``) and the lines page. Only
+the held-out half of the panel is active: candidates may train and tune
+against the other half.
 
   python -m harness.proxy register <actors dir> --job <job.json> --name "代理面板 v2" [--built 2026-10-05] [--check "..."]
   python -m harness.proxy activate <panel.json> [--reference fp-rule-131] [--name ...]   # maintainer; reseal afterwards
@@ -83,7 +83,7 @@ def tables(panel, pool, reference, blocks=None):
     seed = int(digest[:15], 16)
     # The panel id names the proxies (results of other table draws with them share it); the tables id names these games.
     return {"id": f"proxy-{digest[:16]}", "panel": panel_id(panel)[:8], "name": panel["name"], "members": members,
-            "lineups": lineups(shares, blocks, seed), "blocks": blocks, "seed": seed,
+            "shares": shares, "lineups": lineups(shares, blocks, seed), "blocks": blocks, "seed": seed,
             "runtime_path": pool["runtime_path"], "config": pool["config"], "timeouts": pool["timeouts"],
             "resources": pool["resources"], "reference": reference, "activated_at": time.time()}
 
@@ -135,7 +135,7 @@ def score(version, spec, host, champion=None):
     mean, se = E.mean_se(mine[b] for b in blocks)
     diff, dse = E.paired(mine, theirs, blocks) if version != t["reference"]["id"] else (0.0, 0.0)
     out = {"panel": t["panel"], "games": t["blocks"] * 4, "score": mean, "se": se, "seed": t["seed"],
-           "host": host, "batch": "开发集过线后的代理桌", "stats": stats,
+           "host": host, "batch": "新最好版本的代理桌", "stats": stats,
            "against": {"version": t["reference"]["id"], "diff": diff, "se": dse}}
     if champion is not None:
         # The best version's tables on this host: played once, then its jobs are reused.
@@ -197,7 +197,7 @@ def activate(panel_file, reference, name=None):
                   if v is not None})
     E.atomic_json(path, value)
     print(f"代理面板 {t['panel']}（{panel['name']}）已启用：{t['blocks'] * 4} 场，参照 {reference}。"
-          "重新 seal 后，新评估的版本默认加跑。")
+          "重新 seal 后生效：海选判定与新最好版本的记录都用它。")
 
 
 def run(version, host):
