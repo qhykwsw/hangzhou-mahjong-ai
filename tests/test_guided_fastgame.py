@@ -492,3 +492,46 @@ def test_without_the_keys_rows_carry_no_luck(members, monkeypatch):
                              seed_for(3, "no-luck"), focal=0, train=True)
     play(game)
     assert not any(key.startswith(("luck", "end_luck", "playout_luck")) for row in game.rows for key in row)
+
+
+def test_a_vine_game_plays_the_argmax_path_and_the_deviations_in_copies(members, monkeypatch):
+    by_id = {f"m{i}": m for i, m in enumerate(members)}
+    monkeypatch.setattr(artifacts, "build_policy", lambda bundle, cid: by_id[cid])
+    base = configuration(rounds=16, lookahead=True, gae_lambda=0.95) | {
+        "playout_baseline": True, "stable_wall": True, "luck": True, "critic_features": "guided.encoding:oracle"}
+    seed = seed_for(37, "vine")
+    seats = ["m1", "m3", "model:current", "m4"]
+    vine = [cls(base | {"vine": True}, {"entries": []}, {k: None for k in by_id}, seats, seed, focal=2, train=True)
+            for cls in (Game, fastgame.FastGame)]
+    counts = [play(game) for game in vine]
+    assert counts[0] == counts[1] > 50
+    assert rows_of(vine[0]) == rows_of(vine[1])
+    deviated = [row for row in vine[1].rows if row["deviated"]]
+    assert deviated and all("playout" in row and "playout_luck_pay" in row for row in deviated)
+
+    # The hand itself is the pure argmax path: a learner that always answers
+    # with its argmax plays the same game, decision for decision.
+    def greedy_play(game):
+        while True:
+            for shadow in game.shadows:
+                while not shadow.done:
+                    request = shadow.advance()
+                    if request is None:
+                        break
+                    legal = [i for i in np.flatnonzero(request["row"]["mask"])]
+                    shadow.apply((learner(request["row"], legal)[1], -0.25, 0.0, 0))
+            request = game.advance()
+            if request is None:
+                if game.settled():
+                    return
+                continue
+            legal = [int(i) for i in np.flatnonzero(request["row"]["mask"])]
+            greedy = learner(request["row"], legal)[1]
+            game.apply((greedy, -0.5, 0.125, greedy))
+
+    pure = fastgame.FastGame(base, {"entries": []}, {k: None for k in by_id}, seats, seed, focal=2, train=True)
+    greedy_play(pure)
+    assert pure.scores == vine[1].scores
+    strip = lambda rows: [{k: v for k, v in r.items() if k in ("planes", "events", "mask", "hand", "reward")} for r in rows]
+    assert [{k: (v.tobytes() if hasattr(v, "tobytes") else v) for k, v in r.items()} for r in strip(pure.rows)] == \
+        [{k: (v.tobytes() if hasattr(v, "tobytes") else v) for k, v in r.items()} for r in strip(vine[1].rows)]

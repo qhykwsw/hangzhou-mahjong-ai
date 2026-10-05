@@ -169,6 +169,8 @@ class FastGame(Game):
                 row["deviated"] = greedy[0] != index
                 if row["deviated"]:
                     move = next(a for a in legal if a == greedy[0])
+                    if self.vine:
+                        move, index = index, move
                     self.shadows.append(FastShadow(self, self.state.fork(), move, row))
             self.rows.append(row)
         self.pending = None

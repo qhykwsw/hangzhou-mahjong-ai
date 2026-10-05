@@ -95,6 +95,9 @@ class Game:
         # cfg["playout_baseline"]: every learner deviation from the argmax gets a
         # greedy continuation of its hand (Shadow); the game is finished once they are.
         self.playout = bool(cfg.get("playout_baseline")) and train
+        # cfg["vine"]: the hand itself always plays the learner's argmax and each
+        # deviation is played out in the copy instead (see Shadow).
+        self.vine = self.playout and bool(cfg.get("vine"))
         # cfg["search"] (guided.search): key windows of the learner get a search over worlds.
         self.search = cfg.get("search") if train else None
         # guided.walls: training hands on a stable wall, and the learner's draw luck on its rows.
@@ -265,6 +268,9 @@ class Game:
                 row["deviated"] = greedy[0] != index
                 if row["deviated"]:
                     move = next(a for a in legal if action_index(a) == greedy[0])
+                    if self.vine:
+                        # The copy plays the sampled move, the hand its argmax.
+                        move, action = action, move
                     self.shadows.append(Shadow(self, fork(self.state), move, legal, row))
             if window:
                 if not greedy:
@@ -331,6 +337,12 @@ class Shadow:
     outcome. The deviating row gets ``playout`` (the learner's hand score in
     base-score units) and ``playout_deals_next`` (1.0 when the learner deals
     the next hand).
+
+    Under cfg["vine"] the roles swap: the hand plays the argmax at every
+    learner decision, so its states are the argmax path's whatever the
+    sampling, and the copy plays the sampled move there and the argmax
+    afterwards; ``playout`` is then the deviation's value and the hand's own
+    outcome is the argmax value at each of its deviations.
     """
 
     def __init__(self, game, state, action, legal, row):
