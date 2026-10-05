@@ -77,8 +77,9 @@ def test_ids_are_never_reused(harness):
         assert E.next_attempt_id("rule") == "fp-rule-000"
 
 
-def test_requeued_attempts_take_free_hosts_before_new_designs(harness):
+def test_requeued_attempts_take_free_hosts_before_new_designs(harness, monkeypatch):
     E, rl, line = harness
+    monkeypatch.setitem(rl.HOST_SIZE, "4090", "medium")  # hosts of two sizes, as on 2026-10-04
     for host in rl.HOSTS:
         (rl.RL / f"setup-{host}.json").write_text("{}")
     record(E, id="fp-rl-000")
@@ -263,6 +264,7 @@ def test_rl_attempts_choose_their_hands_and_may_continue_the_best(harness, monke
     import shutil
 
     E, rl, line = harness
+    monkeypatch.setitem(rl.HOST_SIZE, "4090", "medium")  # hosts of two sizes, as on 2026-10-04
     monkeypatch.setattr(line, "spawn", lambda attempt_id: None)
     for host in rl.HOSTS:
         (rl.RL / f"setup-{host}.json").write_text(json.dumps({"start_actor": "/start"}))

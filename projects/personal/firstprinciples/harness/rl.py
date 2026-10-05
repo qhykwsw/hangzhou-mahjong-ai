@@ -55,9 +55,11 @@ BUDGET = E.override("FP_RL_BUDGET", 2 * 86400)
 # runs the medium size (about 4.8M parameters, between small 0.84M and large
 # 14.3M) from a randomly initialized start, budgeted like the small size; the
 # large versions stay comparable on the development set but no host trains them.
+# Since 2026-10-05 (user: one RL route, on the 4090) the 4090 runs the small size,
+# continuing the best lineage; the medium versions stay comparable, untrained.
 SIZES = {"small": {"dim": 128, "layers": 4, "heads": 4}, "medium": {"dim": 256, "layers": 6, "heads": 8},
          "large": {"dim": 384, "layers": 8, "heads": 8}}
-HOST_SIZE = {"4070": "small", "4090": "medium", "5070ti": "small"}
+HOST_SIZE = {"4070": "small", "4090": "small", "5070ti": "small"}
 BUDGETS = {"small": {"max_hands": 5_000_000, "max_labeled": None},
            "medium": {"max_hands": 5_000_000, "max_labeled": None},
            "large": {"max_hands": 10_000_000, "max_labeled": 5_000_000}}
