@@ -220,6 +220,7 @@ class FastGame(Game):
         if row is None:  # a hand past the winning boundary: the Python encoder's analysis
             row = encode(observation(state.snapshot(), seat, self.config), self.cfg["lookahead"])
         # The C engine encodes v1; a wider encoding extends the row (guided.encoding).
+        # Inside a stage the caller then rewrites the stage's scalars, v4's among them (guided.stage.rewrite).
         return augment(row, self.encoding)
 
     def advance(self):

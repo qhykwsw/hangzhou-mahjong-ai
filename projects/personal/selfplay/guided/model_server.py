@@ -432,7 +432,8 @@ class Service:
         if pre_encoded:
             if any(p.get("lookahead") != meta["config"]["lookahead"] for p in requests):
                 raise ValueError("encoding does not match the model's lookahead")
-            # Match workers send v1 rows (selfplay_core.wire); a model of a
+            # Match workers send v1 rows (selfplay_core.wire), with risk_beta in a
+            # semifinal or final to a model that reads it (inputs); a model of a
             # wider encoding gets them extended here (guided.encoding.augment).
             return [
                 augment(p["encoded"] if p.get("_binary") else decode(p["encoded"]), encoding)
@@ -509,6 +510,15 @@ class Service:
                 self.wait()
         return [answers[i] for i in range(len(payloads))]
 
+    def inputs(self, model):
+        """What a match worker's binary request to ``model`` carries beyond the v1 row (selfplay_core.wire):
+        risk_beta for an encoding that reads it (guided-current-hand-v4)."""
+        from .encoding import ENCODING, RISK, inputs
+
+        _, meta = self.models.get(model)
+        encoding = meta.get("encoding", ENCODING)
+        return {"encoding": encoding, "risk_beta": inputs(encoding)[1] > RISK}
+
     def load(self, model):
         """Load a model and run every padded shape once, so play never pays for it."""
         from .encoding import ENCODING, EVENT_TAILS, INPUTS
@@ -556,12 +566,15 @@ def decode(data):
     from selfplay_core.actions import N_ACTIONS
 
     raw = {k: base64.b64decode(v) for k, v in data.items()}
-    return {
+    row = {
         "planes": np.frombuffer(raw["planes"], dtype=np.float16).reshape(-1, 34),
         "scalars": np.frombuffer(raw["scalars"], dtype=np.float16).reshape(-1),
         "events": np.frombuffer(raw["events"], dtype=np.int16).reshape(-1, 5),
         "mask": np.frombuffer(raw["mask"], dtype=bool).reshape(N_ACTIONS),
     }
+    if "risk_beta" in raw:  # a semifinal or final row's v4 scalar (guided.encoding), one float16
+        row["risk_beta"] = float(np.frombuffer(raw["risk_beta"], dtype=np.float16).reshape(1)[0])
+    return row
 
 
 class Connection:
@@ -749,6 +762,11 @@ def serve(service, port, host="127.0.0.1", code=""):
                             reply(
                                 connection, 200, service.load(json.loads(body)["model"])
                             )
+                        except Exception as exc:
+                            reply(connection, 400, {"error": str(exc)[:2000]})
+                    elif method == "POST" and path == "/inputs":
+                        try:
+                            reply(connection, 200, service.inputs(json.loads(body)["model"]))
                         except Exception as exc:
                             reply(connection, 400, {"error": str(exc)[:2000]})
                     elif method == "BINARY" and path == "/act":
