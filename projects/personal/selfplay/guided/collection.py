@@ -29,7 +29,10 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
     Optional training-recipe hooks apply only to the learning seat during
     collection: hooks["sample"](logits, mask) -> (actions, behaviour logprobs)
     replaces multinomial sampling, and hooks["values"](rows) -> values replaces
-    the built-in privileged Critic. Evaluation never uses hooks.
+    the built-in privileged Critic. Evaluation never uses hooks. With CUDA
+    graphs the sampling hook gets the logits of the rollout's fp16 snapshot
+    (like every other graph decision) and its batch's rows only; it must stay
+    on the device (no host synchronization) to keep the launches overlapped.
 
     A model teacher (with labels, command["teacher"] names its "model:" slot in
     history) labels the learner's decisions here with its argmax over the
@@ -49,11 +52,15 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
     if critic is not None:
         critic.eval()
     device = next(actor.parameters()).device
+    # A sampling hook runs after a graph of the logits (ActorGraphs.decide);
+    # cfg["graph_sample_hooks"] False keeps its decisions on the eager path.
+    graph_hooks = cfg.get("graph_sample_hooks", True)
     def prepare_inference():
-        # The built-in Critic needs the full batch and a sampling hook its own
-        # ops; every other path is the fixed decision, which the graphs replay
-        # straight from the rows. Behaviour cloning of a rule teacher reads its
-        # move from the row; a model teacher's move is its argmax in a graph.
+        # The built-in Critic needs the full batch; every other path is the
+        # fixed decision (or a sampling hook's, on the graph's logits), which
+        # the graphs replay straight from the rows. Behaviour cloning of a rule
+        # teacher reads its move from the row; a model teacher's move is its
+        # argmax in a graph.
         graphs = (
             ActorGraphs(
                 fine_batches=cfg.get("fine_graph_batches", False),
@@ -61,7 +68,8 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
             )
             if device.type == "cuda" and cfg.get("cuda_graphs", True)
             and (not cfg["bc_only"] or teacher_model is not None)
-            and "sample" not in hooks and (critic is None or "values" in hooks) else None
+            and ("sample" not in hooks or graph_hooks)
+            and (critic is None or "values" in hooks) else None
         )
         inference_actor = actor
         if graphs is not None and command["kind"] != "evaluate" and cfg.get("precast_collection", True):
@@ -77,7 +85,7 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
     options = (
         command["kind"], id(critic), cfg["bc_only"], teacher_model is not None,
         cfg.get("cuda_graphs", True), cfg.get("fine_graph_batches", False),
-        cfg.get("inference_history_band", 0), cfg.get("precast_collection", True),
+        cfg.get("inference_history_band", 0), cfg.get("precast_collection", True), graph_hooks,
         tuple((key, id(value)) for key, value in sorted(hooks.items())),
     )
     if inference_session is None:
@@ -219,7 +227,9 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
                         # Launch only: every model's batch of this round goes
                         # to the device before any answer is read, and the
                         # round is read after the next one has been launched.
-                        decided = graphs.decide(slot, model, rows_, sample=sample)
+                        # The learner's sampling hook chooses from the graph's logits.
+                        hook = {"hook": hooks["sample"]} if learning and "sample" in hooks else {}
+                        decided = graphs.decide(slot, model, rows_, sample=sample, **hook)
                         # The teacher's argmax on the same rows, under its own
                         # slot (no seat's), so no graph buffer ring is shared.
                         taught = graphs.decide(teacher, teacher_model, rows_, sample=False) if labelled else None
