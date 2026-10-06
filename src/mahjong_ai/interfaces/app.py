@@ -8,10 +8,12 @@ import ipaddress
 import json
 import os
 from pathlib import Path
+import re
 import socket
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import traceback
 import urllib.error
@@ -36,6 +38,115 @@ def recipe_iteration(project):
     if (workspace / RECIPE_PROJECT / "recipes/iteration.toml").exists():
         return RecipeIteration(workspace)
     return None
+
+
+ONLINE_MIN_ROOMS = 20  # a room's total varies by ~180 points: fewer rooms say little about a version
+_online_lock = threading.Lock()
+
+
+def _free_play_game(path, ours):
+    """One online game of ours: [table score, place, hands, an opponent was AFK]."""
+    replay = json.loads(path.read_text())
+    users = [s["user_id"] for s in replay.get("seats", [])]
+    if replay.get("status") != "finished" or ours not in users:
+        return None
+    me = users.index(ours)
+    total, hands = [0] * 4, 0
+    for r in replay.get("rounds", []):
+        if r.get("scores"):
+            hands += 1
+            total = [a + b for a, b in zip(total, r["scores"])]
+    if not hands:
+        return None
+    discards, timeouts = [0] * 4, [0] * 4
+    for block in replay.get("blocks", []):
+        for e in block.get("events", []):
+            if e.get("type") == "tile_discarded":
+                discards[e["seat"]] += 1
+            elif e.get("type") == "timeout" and (e.get("data") or {}).get("kind") == "discard":
+                timeouts[e["seat"]] += 1
+    # An AFK opponent lets every timeout discard for it: half or more of its discards.
+    afk = any(discards[i] and timeouts[i] / discards[i] >= 0.5 for i in range(4) if i != me)
+    place = 1 + sum(t > total[me] for t in total) + (sum(t == total[me] for t in total) - 1) / 2
+    return [total[me], place, hands, afk]
+
+
+def free_play_versions(competition):
+    """Each version's free-play record, from the strongest-entrant runner's rooms (read-only view).
+
+    The runner's log names each room's version. A finished room's games are read
+    from its replays once and kept in ``online-rooms.jsonl``. Games with an AFK
+    opponent are left out of the readout; its SE is clustered by room. Versions
+    with fewer than ONLINE_MIN_ROOMS rooms are listed but not scored.
+    """
+    log = competition / "free-play-strongest.log"
+    if not log.exists():
+        return {"enabled": False}
+    rooms, numbered, ranks = {}, {}, {}
+    for line in log.read_text(encoding="utf-8").splitlines():
+        m = re.match(r"(\S+ \S+) 第 (\d+) 房开始：(\S+) → (\S+)", line)
+        if m:
+            started = time.mktime(time.strptime(m.group(1), "%Y-%m-%d %H:%M:%S"))
+            rooms[m.group(4)], numbered[m.group(2)] = (m.group(3), started), m.group(4)
+            continue
+        m = re.match(r"\S+ \S+ 第 (\d+) 房结束：completed 名次 (\S+)", line)
+        if m and m.group(1) in numbered:
+            ranks[numbered[m.group(1)]] = float(m.group(2))
+    with _online_lock:
+        path = competition / "online-rooms.jsonl"
+        cache = {}
+        if path.exists():
+            for line in path.read_text().splitlines():
+                if line.strip():
+                    r = json.loads(line)
+                    cache[r["room"]] = r
+        new = []
+        for room in rooms:
+            folder = competition / room
+            if room in cache or not (folder / "summary.json").exists():  # playing, or never started
+                continue
+            match = folder / "match.json"
+            ours = json.loads(match.read_text()).get("user_id") if match.exists() else None
+            games = [g for p in sorted((folder / "replays").glob("*.json")) if (g := _free_play_game(p, ours))]
+            cache[room] = {"room": room, "games": games}
+            new.append(cache[room])
+        if new:
+            with path.open("a") as f:
+                f.writelines(json.dumps(r) + "\n" for r in new)
+    versions = {}
+    for room, (version, started) in rooms.items():
+        games = (cache.get(room) or {}).get("games")
+        if games:
+            versions.setdefault(version, []).append((room, started, games))
+    turns = competition / "entrant.rotation"
+    pin = competition / "entrant.pin"
+    playing = (turns.read_text().split() if turns.exists() else []) or ([pin.read_text().strip()] if pin.exists() else [])
+    rows, omitted = [], []
+    for version, played in versions.items():
+        if len(played) < ONLINE_MIN_ROOMS:
+            omitted.append({"version": version, "rooms": len(played)})
+            continue
+        clean = [[g for g in games if not g[3]] for _, _, games in played]
+        n = sum(len(c) for c in clean)
+        if not n:
+            continue
+        total = sum(g[0] for c in clean for g in c)
+        mean = total / n
+        spread = sum((sum(g[0] for g in c) - mean * len(c)) ** 2 for c in clean)
+        se = (spread * len(clean) / (len(clean) - 1)) ** 0.5 / n
+        every = [g for _, _, games in played for g in games]
+        room_ranks = [ranks[room] for room, _, _ in played if room in ranks]
+        rows.append({
+            "version": version, "rooms": len(played), "games": len(every), "clean_games": n,
+            "mean": mean, "se": se, "per_hand": total / sum(g[2] for c in clean for g in c),
+            "place": sum(g[1] for c in clean for g in c) / n,
+            "first": sum(g[1] == 1 for c in clean for g in c) / n,
+            "all_mean": sum(g[0] for g in every) / len(every),
+            "room_rank": sum(room_ranks) / len(room_ranks) if room_ranks else None,
+            "from": min(s for _, s, _ in played), "to": max(s for _, s, _ in played),
+            "playing": version in playing})
+    return {"enabled": True, "min_rooms": ONLINE_MIN_ROOMS, "versions": rows,
+            "omitted": sorted(omitted, key=lambda r: -r["rooms"])}
 
 
 def application(project, tailscale_url=None):
@@ -105,6 +216,7 @@ def application(project, tailscale_url=None):
         )
 
     lines_root = ProjectDescriptor.load(project).workspace / "projects/personal/firstprinciples/.local"
+    competition = ProjectDescriptor.load(project).workspace / ".local/competition"
 
     def iteration_lines():
         """Read-only view of the maintainer's iteration lines (ADR-0016), for every pool.
@@ -191,7 +303,7 @@ def application(project, tailscale_url=None):
         return {"enabled": True, "pool": {"id": pool["id"], "members": sorted(pool["members"])},
                 "pools": pools, "attempts": [r for r in rows if r["pool"] == pool["id"]],
                 "older": [r for r in rows if r["pool"] != pool["id"]],
-                "proxy": proxy_tables(latest)}
+                "proxy": proxy_tables(latest), "online": free_play_versions(competition)}
 
     def proxy_tables(latest):
         """Whole-game results against the proxy panel (the tournament crowd's stand-in):
