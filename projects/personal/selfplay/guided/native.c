@@ -11,9 +11,11 @@
  * falls back to the Python engine wherever this port does not reach (hooks
  * that read the Python state beyond its plain fields, teachers, other rule
  * versions). It includes the bound runtime's _fast.c, so its primitives are
- * the ones the Python engine calls through that runtime.
+ * the ones the Python engine calls through that runtime, and fp-rule-131
+ * whole (rule131.h), which decides here as a race member does.
  */
 #include "_fast.c"
+#include "rule131.h"
 
 #define G_WALL 136
 #define G_EVENTS 512
@@ -719,7 +721,10 @@ static PyObject *g_int_tuple(const int *v, int n) {
 
 /* r68_view of the seat to move (the third pool's members, fp-rule-068 whole in C),
  * as the Observation shows it: the hand sorted, each river, the calls and
- * discards of this hand, the catch-play owner and the drawn tile. */
+ * discards of this hand, the catch-play owner and the drawn tile. (Before the
+ * hand's first event, at the dealer's first turn, opponent_speed reads the
+ * previous hand's calls instead; it is at its floor 0.1 there whatever they
+ * are: no discards or melds yet, sixteen draws left.) */
 static void g_r68_view(const g_hand *h, int s, r68_view *o) {
     memset(o, 0, sizeof(*o));
     o->wall = wall_len(h);
@@ -753,9 +758,23 @@ static void g_r68_view(const g_hand *h, int s, r68_view *o) {
     }
 }
 
-/* py_race_act for the seat to move: the index of its choice among the legal actions. */
-static int g_member_act(const g_hand *h, const g_action *legal, int n_legal, int profile,
+/* A seat of fp-rule-131 (rule131.h) in place of a race profile: rule131() registers its profiles. */
+#define G_R131 (1 << 20)
+
+/* py_race_act for the seat to move: the index of its choice among the legal actions.
+ * G_R131 plays fp-rule-131 on the race profile of its role in this hand. */
+static int g_member_act(const g_hand *h, const g_action *legal, int n_legal, int member,
                         PyObject *fallback, int *choice) {
+    int profile = member;
+    if (member == G_R131) {
+        if (!r131.ready) {
+            PyErr_SetString(PyExc_RuntimeError, "fp-rule-131's profiles are not registered");
+            return -1;
+        }
+        /* SAVED_BY_ROLE[(dealer, min(3, max(0, rounds_total - round_no)))] */
+        int left = h->rounds_total - h->hand_no;
+        profile = r131.role[h->dealer == h->turn][left < 0 ? 0 : left > 3 ? 3 : left];
+    }
     if (profile < 0 || profile >= race_profile_count) {
         PyErr_SetString(PyExc_ValueError, "unknown race profile");
         return -1;
@@ -789,6 +808,13 @@ static int g_member_act(const g_hand *h, const g_action *legal, int n_legal, int
     for (int i = 0; i < n_legal; i++) g_race_action(&legal[i], &A->legal[i]);
     A->piao_known = 1;
     A->piao_ok = g_act_piao(h, s, A->c, A->size, A->opened);
+    if (member == G_R131) {
+        r131_view w;
+        g_r68_view(h, s, &w.o);
+        w.response = h->phase != PH_DRAW;
+        rc = r131_act(A, &w, choice);
+        goto done;
+    }
     if (p->style >= 10) {
         r68_view o;
         g_r68_view(h, s, &o);
@@ -1614,6 +1640,27 @@ static PyObject *py_game_profile(PyObject *self, PyObject *args) {
     return py_race_profile(self, args);
 }
 
+/* rule131(plain, roles): fp-rule-131's profiles here (race_profile's indices):
+ * plain for its module's SAVED as defined, roles[dealer][left] for
+ * SAVED_BY_ROLE[(dealer, left)]. The member code its seats play with. */
+static PyObject *py_rule131(PyObject *self, PyObject *args) {
+    int plain, role[2][4];
+    if (!PyArg_ParseTuple(args, "i((iiii)(iiii))", &plain, &role[0][0], &role[0][1], &role[0][2], &role[0][3],
+                          &role[1][0], &role[1][1], &role[1][2], &role[1][3]))
+        return NULL;
+    int ok = plain >= 0 && plain < race_profile_count;
+    for (int d = 0; d < 2; d++)
+        for (int k = 0; k < 4; k++) ok &= role[d][k] >= 0 && role[d][k] < race_profile_count;
+    if (!ok) {
+        PyErr_SetString(PyExc_ValueError, "unknown race profile");
+        return NULL;
+    }
+    r131.plain = plain;
+    memcpy(r131.role, role, sizeof(role));
+    r131.ready = 1;
+    return PyLong_FromLong(G_R131);
+}
+
 /* ---------- encoding v3 (guided/encoding.py): shape paths and a solitary lookahead ---------- */
 
 /* Per discard of a hand that discards (a waiting-length hand for each tile
@@ -2053,6 +2100,7 @@ static PyObject *py_v3_events(PyObject *self, PyObject *args) {
 
 static PyMethodDef native_methods[] = {
     {"race_profile", py_game_profile, METH_VARARGS, "Register a race member's profile here (the runtime's race_profile arguments)."},
+    {"rule131", py_rule131, METH_VARARGS, "Register fp-rule-131's profiles (plain, roles[dealer][left]); its member code."},
     {"v3_shape", py_v3_shape, METH_VARARGS, "Encoding v3's per-discard shape paths, baotou and lookahead planes and the reference lookahead."},
     {"v3_events", py_v3_events, METH_VARARGS, "Encoding v3's event tails, decayed rivers and call timing."},
     {NULL, NULL, 0, NULL},
