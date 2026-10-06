@@ -473,6 +473,17 @@ class External:
                     pass
 
 
+def rule_seat_kinds(game):
+    """Where a training game's rule seats decided: in C, by a Python callback on the C hand, or on the Python engine."""
+    rules = [seat for seat, spec in enumerate(game.specs) if not spec.startswith("model:")]
+    plan = getattr(game, "seats", None)
+    if plan is None:
+        return {"python_engine": len(rules)}
+    profiles, _ = plan
+    return {"c": sum(profiles[seat] != -1 for seat in rules),
+            "callback": sum(seat in game.python_seats for seat in rules)}
+
+
 def worker(conn, cfg, bundle_path, panel_path, worker_index, command):
     """One bounded collection/evaluation job; no policy crosses job boundaries."""
     # Automatic collections trigger every few hundred allocations and cost
@@ -509,6 +520,7 @@ def worker(conn, cfg, bundle_path, panel_path, worker_index, command):
         else:
             Training = Game
         completed_samples = completed_games = teacher_errors = 0
+        rule_seats = {"c": 0, "callback": 0, "python_engine": 0}
         games = {}
         next_id = 0
 
@@ -597,6 +609,9 @@ def worker(conn, cfg, bundle_path, panel_path, worker_index, command):
                         gc.collect()
                     completed_samples += len(game.rows)
                     teacher_errors += game.teacher_errors
+                    if not is_eval:
+                        for kind, count in rule_seat_kinds(game).items():
+                            rule_seats[kind] += count
                     finished.append(
                         {
                             "rows": game.rows,
@@ -633,6 +648,7 @@ def worker(conn, cfg, bundle_path, panel_path, worker_index, command):
                     "samples": completed_samples,
                     "unfinished_games": len(games),
                     "teacher_errors": teacher_errors,
+                    "rule_seats": rule_seats,
                 },
             )
         )
