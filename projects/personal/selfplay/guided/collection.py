@@ -88,6 +88,8 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
         graphs, inference_actor = inference_session.resolve(actor, history, options, prepare_inference)
     # Custom hooks keep their original batches; they may couple their rows.
     history_band = graphs.history_band if graphs else 0
+    # The graphs persist across rollouts: this rollout's share of their timers.
+    graph_before = (dict(graphs.seconds), dict(graphs.counts)) if hasattr(graphs, "seconds") else None
     timers = {"wait": 0.0, "receive": 0.0, "batch": 0.0, "forward": 0.0, "reply": 0.0}
     batch_sizes = []
     ctx = mp.get_context("spawn")
@@ -289,6 +291,11 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
                 "inference_batch_buckets": None if graphs is None else graphs.batch_buckets,
                 "parent_seconds": {k: round(v, 2) for k, v in timers.items()},
                 "graphs": None if graphs is None else len(graphs.graphs),
+                # The parent's "batch" seconds, by part of the graph launch (guided.inference.ActorGraphs).
+                "graph_seconds": None if graph_before is None else {
+                    k: round(v - graph_before[0][k], 2) for k, v in graphs.seconds.items()},
+                "graph_counts": None if graph_before is None else {
+                    k: v - graph_before[1][k] for k, v in graphs.counts.items()},
             },
         )
     finally:

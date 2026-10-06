@@ -1,5 +1,7 @@
 """Actor-only batches for frozen evaluation; training uses the full learning batch."""
 
+import time
+
 import numpy as np
 import torch
 
@@ -142,6 +144,12 @@ class ActorGraphs:
             self.FINE_BATCH_BUCKETS if fine_batches else self.BATCH_BUCKETS
         )
         self.graphs, self.hosts, self.turn, self.pool = {}, {}, {}, None
+        # Host seconds of decide() by part, cumulative (the collection parent
+        # reports the change over a rollout): filling the pinned buffers, the
+        # four uploads, the replay, the readback and event, first captures,
+        # and batches outside the graph shapes (run eagerly).
+        self.seconds = dict.fromkeys(("fill", "upload", "replay", "readback", "capture", "eager"), 0.0)
+        self.counts = {"graphed": 0, "eager": 0, "captures": 0}
 
     def shape(self, rows):
         size = next((b for b in self.batch_buckets if b >= len(rows)), None)
@@ -208,12 +216,13 @@ class ActorGraphs:
         for one model and shape may be unread (their host buffers rotate), so
         the device runs one batch while the host fills the next.
         """
+        start = time.perf_counter()
         rows = widen(rows, model)
         shape = self.shape(rows)
         device = next(model.parameters()).device
         if shape is None:
             batch = policy_batch(rows, device)
-            return Decided(
+            decided = Decided(
                 self._decide(
                     model,
                     batch["planes"],
@@ -223,6 +232,9 @@ class ActorGraphs:
                     sample,
                 )
             )
+            self.seconds["eager"] += time.perf_counter() - start
+            self.counts["eager"] += 1
+            return decided
         size, width = shape
         count = (len(rows[0]["planes"]), len(rows[0]["scalars"]))
         tensors, (planes, scalars, events, mask), answers, done = self._host(
@@ -235,6 +247,8 @@ class ActorGraphs:
             events[i, : len(history)] = history
             events[i, len(history) :] = 0
             mask[i] = row["mask"]
+        mark = time.perf_counter()
+        self.seconds["fill"] += mark - start
         entry = self.graphs.get((key, size, width, count, sample))
         if entry is None:
             static = [t.to(device) for t in tensors]
@@ -249,12 +263,22 @@ class ActorGraphs:
                 out = self._decide(model, *static, sample)
             self.pool = graph.pool()
             entry = self.graphs[(key, size, width, count, sample)] = (static, out, graph)
+            now = time.perf_counter()
+            self.seconds["capture"] += now - mark
+            self.counts["captures"] += 1
+            mark = now
         static, out, graph = entry
         for target, source in zip(static, tensors):
             target.copy_(source, non_blocking=True)
+        now = time.perf_counter()
+        self.seconds["upload"] += now - mark
         graph.replay()
+        mark = time.perf_counter()
+        self.seconds["replay"] += mark - now
         answers.copy_(out, non_blocking=True)
         done.record()
+        self.seconds["readback"] += time.perf_counter() - mark
+        self.counts["graphed"] += 1
         return Decided(answers.numpy()[: len(rows)], done)
 
 
