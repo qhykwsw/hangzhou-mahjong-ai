@@ -1,17 +1,23 @@
 """The training game on the C engine (native.c): the same games, rows and requests, faster.
 
 A training game plays its hands in C: the engine, every fixed pool member's
-turn (members deciding whole in the runtime's race_act), the learner's
-encoding and the default Critic features. Python keeps the game's
-bookkeeping, the requests and the rows, line for line as Game and Shadow do.
-Any other rule seat (e.g. a version from the catalog) and a rule teacher
-decide on the Python engine's own Observation: the C hand stops at their
-turn, a Python hand (Mirror) replays the C hand's action log to that point,
-and the rule's action is played back into C. A table with such a seat also
-replays each finished hand in Python, for the next hand's public history.
-Imported by a worker after it binds the rules runtime, before any rule
-package loads.
+turn (members deciding whole in the runtime's race_act), fp-rule-131's turn
+and labels (rule131.h), the learner's encoding and the default Critic
+features. Python keeps the game's bookkeeping, the requests and the rows,
+line for line as Game and Shadow do. Any other rule seat (e.g. another
+version from the catalog) and rule teacher decide on the Python engine's own
+Observation: the C hand stops at their turn, a Python hand (Mirror) replays
+the C hand's action log to that point, and the rule's action is played back
+into C. A table with such a seat also replays each finished hand in Python,
+for the next hand's public history. Imported by a worker after it binds the
+rules runtime, before any rule package loads.
 """
+
+from functools import lru_cache
+import hashlib
+import inspect
+from pathlib import Path
+import sys
 
 from mahjong_ai import _fast
 
@@ -53,6 +59,40 @@ def race_member(policy):
     if scope.get("_fast") is not _fast or scope.get("PROFILE") not in PROFILES:
         return None
     return PROFILES[scope["PROFILE"]], scope["examined"]
+
+
+# fp-rule-131 as frozen (rule131.h is its port), by its sources' sha256.
+RULE131 = {
+    "strategy.py": "b18d020d42a979405a2b0a81faa6360185d8626b06eab7d07e781670d943a43c",
+    "native.c": "74114e5e54d446a9aee12371b391258475b537c061f350363eca1f1607ba442f",
+}
+
+
+@lru_cache(maxsize=None)
+def _is_rule131(package):
+    try:
+        return all(hashlib.sha256((Path(package) / name).read_bytes()).hexdigest() == digest
+                   for name, digest in RULE131.items())
+    except OSError:
+        return False
+
+
+def rule131_member(policy):
+    """(member, fallback) of fp-rule-131's policy, which decides whole in C (rule131.h), else None."""
+    cls = type(policy)
+    module = sys.modules.get(cls.__module__)
+    path = getattr(module, "__file__", None)
+    if cls.__name__ != "Race" or not path or not _is_rule131(str(Path(path).resolve().parent)):
+        return None
+    scope = vars(module)
+    profiles = scope["PROFILES"]  # SAVED -> the runtime's profile, registered here too as it loaded
+    plain = inspect.signature(scope["piao_calls"]).parameters["saved"].default
+    try:
+        roles = tuple(tuple(PROFILES[profiles[scope["SAVED_BY_ROLE"][(dealer, left)]]] for left in range(4))
+                      for dealer in (False, True))
+        return native.rule131(PROFILES[profiles[plain]], roles), scope["analyze"]
+    except KeyError:  # the package loaded before this module: its profiles are not here
+        return None
 
 
 class Mirror:
@@ -112,7 +152,7 @@ def python_act(game, mirror, hand, seat):
 
 
 class FastGame(Game):
-    """Game on native.Hand; race members decide in C, other rule seats and a rule teacher on a Mirror."""
+    """Game on native.Hand; race members and fp-rule-131 decide in C, other rule seats and teachers on a Mirror."""
 
     def _next_hand(self):
         if not hasattr(self, "seats"):
@@ -138,7 +178,8 @@ class FastGame(Game):
     def _plan(self):
         profiles, fallbacks, python = [], [], set()
         for seat, spec in enumerate(self.specs):
-            member = None if spec.startswith("model:") else race_member(self.policies[seat])
+            policy = None if spec.startswith("model:") else self.policies[seat]
+            member = None if policy is None else race_member(policy) or rule131_member(policy)
             if member is None:  # the learner, a model opponent, or a rule deciding in Python
                 profiles.append(-1)
                 fallbacks.append(None)
@@ -148,7 +189,9 @@ class FastGame(Game):
             profiles.append(member[0])
             fallbacks.append(member[1])
         self.python_seats = frozenset(python)
-        self.mirrored = bool(python) or self.teacher is not None
+        # fp-rule-131 as the teacher labels on the C hand (_label).
+        self.teacher_member = None if self.teacher is None else rule131_member(self.teacher)
+        self.mirrored = bool(python) or (self.teacher is not None and self.teacher_member is None)
         return tuple(profiles), tuple(fallbacks)
 
     def _mirror(self):
@@ -255,6 +298,13 @@ class FastGame(Game):
         """The rule teacher's label on a learner row, as Game.advance gives it."""
         from selfplay_core.actions import action_index
 
+        if self.teacher_member is not None:
+            try:
+                row["teacher"] = hand.act(*self.teacher_member)
+            except Exception:
+                _teacher_failed(self.teacher_id)
+                self.teacher_errors += 1
+            return
         state = self._mirror().sync(hand)
         legal = state.legal_actions()
         obs = state.observation(legal)
