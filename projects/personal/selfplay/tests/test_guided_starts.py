@@ -106,3 +106,39 @@ def test_a_reshuffled_opening_keeps_the_position_and_draws_a_fresh_wall():
         drive(game, random.Random(3))
         assert game.complete and all("luck_pay" in r for r in game.rows)
     assert differed == 6
+
+
+def test_openings_collect_on_the_executions_opening_workers(monkeypatch, tmp_path):
+    import time
+    from types import SimpleNamespace
+
+    import torch
+
+    from guided import artifacts, collection, deployment, inference, resources, starts, trial
+    from guided.networks import Actor
+
+    config = {"dim": 16, "layers": 1, "heads": 1, "lookahead": False}
+    monkeypatch.setattr(artifacts, "read_bundle", lambda _: {
+        "manifest_path": "bundle.json", "teacher": "champion", "entries": [{"id": "champion"}]})
+    monkeypatch.setattr(deployment, "load_actor", lambda path, device: (Actor(16, 1, 1), {"config": config}))
+    monkeypatch.setattr(inference, "prepare_frozen", lambda actor, device: actor)
+    monkeypatch.setattr(resources, "evaluation_resources", lambda: {"workers": 1, "tables": 1})
+    monkeypatch.setattr(torch.cuda, "get_device_properties", lambda _: SimpleNamespace(total_memory=1))
+    monkeypatch.setattr(starts, "check", lambda opening: opening)
+    monkeypatch.setattr(trial.os, "cpu_count", lambda: 64)
+    plan = {"seed": 1, "bundle": "bundle.json", "start_actor": "start.pt", "line": "rl",
+            "opponents": {"pool-rule": {"family": "rule"}},
+            "execution": {"workers": 24, "opening_workers": 16, "tables": 32}}
+    ctx = trial.Context(plan, tmp_path, time.time() + 600, False, {})
+    seen = []
+
+    def fake_collect(actor, critic, cfg, *rest, **options):
+        seen.append(cfg)
+        return [], [], {"seconds": 0.0}
+
+    monkeypatch.setattr(collection, "collect", fake_collect)
+    ctx.collect(ctx.actor, {}, samples=10, iteration=1)
+    ctx.collect(ctx.actor, {}, samples=10, iteration=2, starts=[{"focal": 0}])
+    assert (seen[0]["workers"], seen[0]["tables"]) == (24, 32)
+    assert (seen[1]["workers"], seen[1]["tables"]) == (16, trial.OPENING_TABLES)
+    assert not any("opening_workers" in cfg for cfg in seen)
