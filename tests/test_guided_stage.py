@@ -119,6 +119,9 @@ def test_every_seat_sees_the_stage_as_the_settlement_writes_it(members, monkeypa
         assert tuple(ctx.score_by_seat) == before and not ctx.in_tiebreak
     rows = [r for r in game.rows]
     assert rows and all(r["stage_game"] == info["game"] for r in rows)
+    # A hand's last learner row carries the game's four scores after that hand.
+    ends = [r for r in rows if "end_scores" in r]
+    assert ends and all(tuple(r["end_scores"]) == by_hand.get(r["hand"] + 1, tuple(game.scores)) for r in ends)
     assert all(r["stage_prior"] == [info["prior"][(1 + k) % 4] for k in range(4)] for r in rows)
     assert game.state.stage_prior == info["prior"] and game.state.stage_game == info["game"]
     copy = fork(game.state)
@@ -171,6 +174,8 @@ def test_a_fast_game_inside_a_stage_plays_the_python_game(members, monkeypatch, 
     for key in ("scalars", "planes"):
         assert [r[key].tobytes() for r in requests[0]] == [r[key].tobytes() for r in requests[1]]
     assert rows_of(games[0]) == rows_of(games[1])
+    ends = [[r.get("end_scores") for r in game.rows] for game in games]
+    assert ends[0] == ends[1] and any(ends[1])
     assert any(r.get("deviated") for r in games[1].rows)
     # The same game without the stage plays the same moves, only the scalars differ.
     plain = fastgame.FastGame(dict(cfg, stage=None), {"entries": []}, {k: None for k in by_id}, seats, seed,
@@ -179,7 +184,7 @@ def test_a_fast_game_inside_a_stage_plays_the_python_game(members, monkeypatch, 
     assert plain.scores == games[1].scores
     assert [r["planes"].tobytes() for r in plain_requests] == [r["planes"].tobytes() for r in requests[1]]
     assert all(a["scalars"].tobytes() != b["scalars"].tobytes() for a, b in zip(plain_requests, requests[1]))
-    assert not any(k.startswith("stage_") for row in plain.rows for k in row)
+    assert not any(k.startswith("stage_") or k == "end_scores" for row in plain.rows for k in row)
 
 
 def test_a_critic_feature_hook_reads_the_stage_on_both_engines(members, monkeypatch):

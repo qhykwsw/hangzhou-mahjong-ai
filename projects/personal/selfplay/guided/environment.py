@@ -166,6 +166,8 @@ class Game:
                     )
                     if self.luck:
                         self.rows[-1]["end_luck_pay"], self.rows[-1]["end_luck_deal"] = state.luck
+                    if self.stage:  # the game's four scores after the hand, by absolute seat
+                        self.rows[-1]["end_scores"] = [s / self.config.base_score for s in self.scores]
                 else:
                     # A hand in which the learner had no choice (before its first,
                     # or a later hand won before its turn) credits no decision:

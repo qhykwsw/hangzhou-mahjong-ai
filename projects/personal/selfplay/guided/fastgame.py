@@ -114,6 +114,8 @@ class FastGame(Game):
                     self.rows[-1]["reward"] += delta[self.focal] / self.config.base_score
                     if self.luck:
                         self.rows[-1]["end_luck_pay"], self.rows[-1]["end_luck_deal"] = state.luck
+                    if self.stage:  # the game's four scores after the hand, by absolute seat
+                        self.rows[-1]["end_scores"] = [s / self.config.base_score for s in self.scores]
                 else:
                     self.predecision_reward += delta[self.focal] / self.config.base_score
                 self.hands.append((*self.start, state.snapshot()["log"]))
