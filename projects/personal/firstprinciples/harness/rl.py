@@ -86,12 +86,14 @@ LIMITS = {
 # worker's start-up, and on the 4070 (10-06 benchmark, the 196 recipe's PG
 # collection) ordinary games ran 25% faster on 24 workers than on 16 while
 # openings ran 15% slower; on the 4090 (all 18 cores WSL sees) 18 workers ran
-# ordinary games 4% faster than 16 and openings were fastest on 8 to 12.
+# ordinary games 4% faster than 16 and openings were fastest on 8 to 12; on the
+# 5070 Ti (also 18 in WSL, which keeps the desktop's share) 18 workers ran them 18%
+# faster than 12 and openings were fastest on 8.
 EXECUTION = {
     "4070": {"workers": 24, "opening_workers": 16, "tables": 32, "gather_seconds": 0.002,
              "inference_history_band": 64, "fine_graph_batches": True},
     "4090": {"workers": 18, "opening_workers": 12, "tables": 32, "gather_seconds": 0.002},
-    "5070ti": {"workers": 12, "tables": 32, "gather_seconds": 0.002},
+    "5070ti": {"workers": 18, "opening_workers": 8, "tables": 32, "gather_seconds": 0.002},
 }
 HOSTS = tuple(LIMITS)
 # A recipe trains through ctx; it may not play games or run jobs by itself.
