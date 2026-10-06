@@ -108,6 +108,40 @@ def dense_deviations(rate):
     return sample
 
 
+def boosted_deviations(boost):
+    """A sample hook that deviates `boost` times as often as the policy would, at the same states.
+
+    With a stable wall and the draw luck subtracted, a deviation's paired
+    advantage is still ~11 base units of noise around a gap of a few tenths,
+    and the policy deviates at ~3.9% of its decisions (184): a step's three
+    rollouts agree on a direction at cosine ~0.03. Under cfg["vine"] the hand
+    plays the argmax and each deviation is played in a copy, so deviating more
+    often adds paired samples without moving the hand off the argmax path. A
+    decision deviates with probability min(1, boost * (1 - pi(argmax))), the
+    alternative drawn as the policy would among the non-argmax actions: on the
+    policy's own distribution of deviations, `boost` times over. Where the
+    rate is capped at 1 the row carries the weight boost * (1 - pi(argmax)) >= 1
+    that keeps each state's share what sampling the policy would give it;
+    the hook returns the log of that weight in place of a behaviour logprob
+    (targets.playout_advantages reads it, nothing else does).
+    """
+    def sample(logits, mask):
+        logp = torch.log_softmax(logits.float().masked_fill(~mask, -1e9), dim=-1)
+        probs = logp.exp()
+        best = probs.argmax(-1)
+        leave = (1.0 - probs.gather(1, best[:, None]).squeeze(1)).clamp_min(0.0)
+        rate = (boost * leave).clamp(max=1.0)
+        others = probs.scatter(1, best[:, None], 0.0)
+        others = others / others.sum(-1, keepdim=True).clamp_min(1e-12)
+        onehot = torch.zeros_like(probs).scatter(1, best[:, None], 1.0)
+        mixed = (1.0 - rate)[:, None] * onehot + rate[:, None] * others
+        actions = torch.multinomial(mixed, 1).squeeze(1)
+        weight = (boost * leave / rate.clamp_min(1e-12)).clamp_min(1.0)
+        return actions, weight.log()
+
+    return sample
+
+
 def search_rows(rows):
     """Rows for every searched window's other candidates, their Q gain over the argmax, and summary stats."""
     extra, gains = [], []
@@ -351,11 +385,20 @@ def train(ctx):
     # The framework's variance reducers (guided.walls): a stable wall keeps each
     # seat's draws when a branch calls, the draw luck is subtracted from the
     # paired differences (targets.playout_advantages), and openings reshuffle
-    # the wall past their recorded position.
-    for key in ("stable_wall", "luck", "starts_reshuffle"):
+    # the wall past their recorded position. Under vine the hand plays the
+    # argmax and each deviation is played in its copy.
+    for key in ("stable_wall", "luck", "starts_reshuffle", "vine"):
         if cfg.get(key):
             collect_cfg[key] = True
     # Policy-gradient rollouts ask for the greedy playout of every deviation.
+    # cfg["lineage_seats"]: frozen strong versions (catalog ids) take an opponent
+    # seat now and then. Every seat draws uniformly from the list, so the fixed
+    # pool, listed `pool_weight` times, keeps most seats: with seven members x 4
+    # and two versions, a seat is a version with odds 2/30 and about one game in
+    # five has one (OpenAI Five's 80/20 against past selves).
+    if cfg.get("lineage_seats"):
+        mix = cfg["lineage_seats"]
+        collect_cfg["opponents"] = list(ctx.opponents) * int(mix["pool_weight"]) + list(mix["versions"])
     pg_cfg = dict(collect_cfg, playout_baseline=bool(cfg.get("playout_baseline")))
     if cfg["teacher"] not in ctx.teachers:
         raise ValueError(f"teacher {cfg['teacher']} is not in ctx.teachers: {ctx.teachers}")
@@ -377,6 +420,10 @@ def train(ctx):
     sampler = tempered(temperature) if temperature != 1.0 else None
     if cfg.get("deviation_share"):
         sampler = dense_deviations(float(cfg["deviation_share"]))
+    if cfg.get("deviation_boost"):
+        if not cfg.get("vine"):
+            raise ValueError("deviation_boost needs vine: the hand must stay on the argmax path")
+        sampler = boosted_deviations(float(cfg["deviation_boost"]))
     step, iteration, rollouts, last = 0, 0, 0, 0.0
     hands = lambda: ctx.hands_left() is None or ctx.hands_left() > 0  # noqa: E731
     # Near the optimum each KL step moves the policy along its noise as much as

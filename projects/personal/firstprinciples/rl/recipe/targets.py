@@ -121,10 +121,17 @@ def playout_advantages(rows, cfg):
         greedy_value = playout + premium * np.where(last_hand[hand_id], 0.0, playout_next)
         ends = outcome + premium * deals_next
     adv = np.zeros(count)
+    vine = bool(cfg.get("vine"))
     for h in np.unique(hand_id[deviated]):
         points = np.flatnonzero(deviated & (hand_id == h))
-        taken = np.r_[greedy_value[points[1:]], ends[h]]
-        adv[points] = taken - greedy_value[points]
+        if vine:
+            # cfg["vine"]: the hand played the argmax throughout and each
+            # deviation was played in its copy, so the copy's value less the
+            # hand's own is the deviation's advantage, with no chaining.
+            adv[points] = greedy_value[points] - ends[h]
+        else:
+            taken = np.r_[greedy_value[points[1:]], ends[h]]
+            adv[points] = taken - greedy_value[points]
     luck_stats = {}
     if cfg.get("luck"):
         # The framework's draw luck (cfg["luck"], guided.walls): each branch's
@@ -145,12 +152,24 @@ def playout_advantages(rows, cfg):
         raw = adv[deviated].copy()
         for h in np.unique(hand_id[deviated]):
             points = np.flatnonzero(deviated & (hand_id == h))
-            taken_luck = np.r_[greedy_luck[points[1:]], end_luck[h]]
-            adv[points] -= taken_luck - greedy_luck[points]
+            if vine:
+                adv[points] -= greedy_luck[points] - end_luck[h]
+            else:
+                taken_luck = np.r_[greedy_luck[points[1:]], end_luck[h]]
+                adv[points] -= taken_luck - greedy_luck[points]
         luck_stats = {"raw_adv_sd": float(raw.std()) if len(raw) else 0.0,
                       "raw_adv_zero": float((raw == 0).mean()) if len(raw) else 0.0}
+    boost_stats = {}
+    if cfg.get("deviation_boost"):
+        # loop.boosted_deviations: a deviation where the boosted rate was capped
+        # at 1 weighs boost * (1 - pi(argmax)), the share sampling the policy
+        # would give its state (the hook's "logprob" is the log of it).
+        weight = np.exp(np.array([float(r.get("logprob", 0.0)) for r in rows]))
+        adv[deviated] *= weight[deviated]
+        boost_stats = {"boost_weight_mean": float(weight[deviated].mean()) if deviated.any() else 0.0,
+                       "boost_capped": float((weight[deviated] > 1.0 + 1e-6).mean()) if deviated.any() else 0.0}
     moved = adv[deviated]
-    stats = luck_stats | {
+    stats = luck_stats | boost_stats | {
         "premium": premium, "deviation_rate": float(deviated.mean()),
         "deviation_adv_mean": float(moved.mean()) if len(moved) else 0.0,
         "deviation_adv_sd": float(moved.std()) if len(moved) else 0.0,
