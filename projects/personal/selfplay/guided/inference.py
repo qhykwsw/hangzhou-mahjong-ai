@@ -140,9 +140,17 @@ class ActorGraphs:
     distribution and, for argmax, in value. Shapes beyond the buckets run eagerly.
 
     A recipe's sample hook (collection's hooks["sample"]) is arbitrary Python,
-    so it is not captured: its decision replays a graph of the logits alone,
-    and the hook then runs on the batch's rows of the graph's output, on the
-    same stream, before any later replay may overwrite it (hooked_decision).
+    so by default it is not captured: its decision replays a graph of the
+    logits alone, and the hook then runs on the batch's rows of the graph's
+    output, on the same stream, before any later replay may overwrite it
+    (hooked_decision). A hook marked ``capturable = True`` declares itself
+    graph-safe: tensor operations only, no host synchronization, row by row
+    (it also sees the padding rows of a shape, which never reach a caller),
+    and its constants fixed for the life of the hook. It is then captured
+    with the forward, one graph per shape, and only the three answer columns
+    are read back. Its random draws come from the default CUDA generator,
+    whose graph-safe Philox offset advances on every replay, as the captured
+    multinomial of an unhooked sample does.
     """
 
     BATCH_BUCKETS = (1, 2, 4, 8, 16, 32, 64, 128)
@@ -167,7 +175,9 @@ class ActorGraphs:
         # four uploads, the replay, a sample hook's launch, the readback and
         # event, first captures, and batches outside the graph shapes (run eagerly).
         self.seconds = dict.fromkeys(("fill", "upload", "replay", "hook", "readback", "capture", "eager"), 0.0)
-        self.counts = {"graphed": 0, "hooked": 0, "eager": 0, "captures": 0}
+        # "hooked" counts graphed decisions of a sample hook, "in_graph" those
+        # whose hook was captured with the forward (no separate hook launch).
+        self.counts = {"graphed": 0, "hooked": 0, "in_graph": 0, "eager": 0, "captures": 0}
 
     def shape(self, rows):
         size = next((b for b in self.batch_buckets if b >= len(rows)), None)
@@ -230,12 +240,32 @@ class ActorGraphs:
         with torch.autocast("cuda", torch.float16, cache_enabled=False):
             return model(planes, scalars, events).float()
 
+    @staticmethod
+    def _hooked(model, planes, scalars, events, mask, hook):
+        # The forward and a capturable hook's decision, as one graph.
+        return hooked_decision(ActorGraphs._logits(model, planes, scalars, events, mask), mask, hook)
+
+    def _capture(self, compute, model, static):
+        """Warm up and capture ``compute(model, *static)`` into a graph sharing the pool; (output, graph)."""
+        side = torch.cuda.Stream()
+        side.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(side):
+            for _ in range(2):
+                compute(model, *static)
+        torch.cuda.current_stream().wait_stream(side)
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph, pool=self.pool):
+            out = compute(model, *static)
+        self.pool = graph.pool()
+        return out, graph
+
     def decide(self, key, model, rows, sample, hook=None):
         """Launch (action, log-probability, argmax) per row: the action sampled from the policy, or its argmax.
 
         With a sample hook (and ``sample``) the hook chooses the action and its
         logprob column from the logits and mask of the batch's rows
-        (hooked_decision), as the collection parent's eager path does.
+        (hooked_decision), as the collection parent's eager path does; a hook
+        marked ``capturable`` runs inside the graph (see the class).
 
         Returns a Decided whose result() waits for the device. The answers are
         copied straight out of the graph into a pinned buffer on the same
@@ -273,29 +303,28 @@ class ActorGraphs:
             mask[i] = row["mask"]
         mark = time.perf_counter()
         self.seconds["fill"] += mark - start
-        # A hooked decision replays the logits alone (the hook is not captured).
-        mode = "logits" if hook is not None else sample
-        compute = self._logits if hook is not None else (
-            lambda *inputs: self._decide(*inputs, sample))
+        # A hooked decision replays the logits alone, unless the hook is
+        # capturable: then hook and forward are one graph per hook (the entry
+        # keeps the hook alive, so its id cannot name another one later).
+        in_graph = hook is not None and getattr(hook, "capturable", False) is True
+        if in_graph:
+            mode = ("hooked", id(hook))
+            compute = lambda *inputs: self._hooked(*inputs, hook)  # noqa: E731
+        elif hook is not None:
+            mode, compute = "logits", self._logits
+        else:
+            mode = sample
+            compute = lambda *inputs: self._decide(*inputs, sample)  # noqa: E731
         entry = self.graphs.get((key, size, width, count, mode))
         if entry is None:
             static = [t.to(device) for t in tensors]
-            side = torch.cuda.Stream()
-            side.wait_stream(torch.cuda.current_stream())
-            with torch.cuda.stream(side):
-                for _ in range(2):
-                    compute(model, *static)
-            torch.cuda.current_stream().wait_stream(side)
-            graph = torch.cuda.CUDAGraph()
-            with torch.cuda.graph(graph, pool=self.pool):
-                out = compute(model, *static)
-            self.pool = graph.pool()
-            entry = self.graphs[(key, size, width, count, mode)] = (static, out, graph)
+            out, graph = self._capture(compute, model, static)
+            entry = self.graphs[(key, size, width, count, mode)] = (static, out, graph, hook)
             now = time.perf_counter()
             self.seconds["capture"] += now - mark
             self.counts["captures"] += 1
             mark = now
-        static, out, graph = entry
+        static, out, graph, _ = entry
         for target, source in zip(static, tensors):
             target.copy_(source, non_blocking=True)
         now = time.perf_counter()
@@ -303,7 +332,10 @@ class ActorGraphs:
         graph.replay()
         mark = time.perf_counter()
         self.seconds["replay"] += mark - now
-        if hook is not None:
+        if in_graph:
+            self.counts["hooked"] += 1
+            self.counts["in_graph"] += 1
+        elif hook is not None:
             # On the replay's stream, so the hook reads these logits before any
             # later replay can overwrite the graphs' shared output memory.
             n = len(rows)

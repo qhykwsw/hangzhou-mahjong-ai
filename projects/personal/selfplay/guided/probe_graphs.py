@@ -84,7 +84,7 @@ def main():
         report = {"device": torch.cuda.get_device_name(0), "batch": args.batch}
         tensors = next(iter(graphs.hosts.values()))[0][0]
         report["pinned"] = all(t.is_pinned() for t in tensors)
-        static, out, graph = next(iter(graphs.graphs.values()))
+        static, out, graph, _ = next(iter(graphs.graphs.values()))
         # Uploads and replay issued while the device spins for about 50 ms.
         spin()
         start = time.perf_counter()
