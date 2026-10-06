@@ -31,7 +31,8 @@ GRACE_SECONDS = {"train": 120, "smoke": 60}
 DEFAULT_LIMITS = {"gpu_memory_fraction": 0.85, "ram_fraction": 0.75}
 # What a harness may fix per host through plan["execution"]: throughput only.
 OPENING_TABLES = 8
-EXECUTION_OPTIONS = {"workers", "tables", "gather_seconds", "inference_history_band", "fine_graph_batches"}
+EXECUTION_OPTIONS = {"workers", "opening_workers", "tables", "gather_seconds", "inference_history_band",
+                     "fine_graph_batches"}
 
 
 def _meminfo_total():
@@ -269,10 +270,16 @@ class Context:
         if set(execution) - EXECUTION_OPTIONS:
             raise ValueError("unknown collection execution option")
         run_cfg |= execution
+        opening_workers = run_cfg.pop("opening_workers", None)
         if starts:
             # Openings play on the Python engine, whose rule seats fill their
             # caches and cost a core each: a few tables per worker suffice.
             run_cfg["tables"] = min(int(run_cfg["tables"]), OPENING_TABLES)
+            # Their calls are short and every worker pays its start-up (the
+            # runtime, the rule packages, its share of the openings) in each:
+            # a host may run them on fewer workers than its ordinary games.
+            if opening_workers:
+                run_cfg["workers"] = int(opening_workers)
         samples = int(samples)
         if self.hand_budget is not None:
             # Near the end of the budget, ask only for the rows the hands left
@@ -401,7 +408,9 @@ def train(root, smoke=False):
     # the parent, the collection workers and multiprocessing's helper are the
     # whole process group, and the GPU allocator stays under its cap.
     execution = plan.get("execution") or {}
-    max_processes = int(execution["workers"]) + 3 if execution.get("workers") else None
+    # Steady collection runs the workers plus two; start-up briefly adds a few more.
+    max_processes = (max(int(execution["workers"]), int(execution.get("opening_workers") or 0)) + 6
+                     if execution.get("workers") else None)
 
     def breach():
         rss, processes = _group_usage(pgid)

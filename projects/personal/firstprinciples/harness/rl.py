@@ -82,8 +82,12 @@ LIMITS = {
 # Collection execution per host (the recipe's own choices are ignored): 80% of
 # the cores the host lends, 32 tables each, 2 ms to gather a batch, and the
 # host's inference scheduling (the CPU-bound hosts keep the coarser batches).
+# Openings run on `opening_workers` where set: their short calls pay every
+# worker's start-up, and on the 4070 (10-06 benchmark, the 196 recipe's PG
+# collection) ordinary games ran 25% faster on 24 workers than on 16 while
+# openings ran 15% slower.
 EXECUTION = {
-    "4070": {"workers": 16, "tables": 32, "gather_seconds": 0.002,
+    "4070": {"workers": 24, "opening_workers": 16, "tables": 32, "gather_seconds": 0.002,
              "inference_history_band": 64, "fine_graph_batches": True},
     "4090": {"workers": 16, "tables": 32, "gather_seconds": 0.002},
     "5070ti": {"workers": 12, "tables": 32, "gather_seconds": 0.002},
@@ -157,6 +161,8 @@ def host_resources():
             row = (f"{host}：显存上限为整卡的 {limit['gpu_memory_fraction']:.0%}、内存上限为本机的 {limit['ram_fraction']:.0%}、"
                    f"CPU {limit['cpu_capacity']} 核")
         row += f"，采集 {run['workers']} 进程 × {run['tables']} 桌"
+        if run.get("opening_workers"):
+            row += f"（开局 {run['opening_workers']} 进程）"
         if not record:
             rows.append(f"  {row}｜还没有训练回执")
             continue
