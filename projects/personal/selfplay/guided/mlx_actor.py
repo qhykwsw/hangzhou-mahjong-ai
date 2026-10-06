@@ -27,6 +27,11 @@ class Actor:
             for k, v in actor.state_dict().items()
         }
         self.positions = mx.array(actor.encoder.positions.detach().cpu().numpy())
+        # The prefixes of wider rows this Actor reads, and whether it embeds
+        # the events' last field (guided.networks.HistoryEncoder).
+        self.planes = actor.encoder.tile_in.in_features
+        self.scalars = actor.encoder.state_in.in_features
+        self.timed_events = actor.encoder.timed_events
         self.dim, self.heads, self.layers = actor.dim, actor.heads, actor.layers
         self.max_events = actor.encoder.max_events
         mx.eval(self.w, self.positions)
@@ -51,9 +56,12 @@ class Actor:
         w = self.w
         valid = events[..., 0] != 0
         events = mx.where(valid[..., None], events, 0)
+        tail = events[..., 4] if self.timed_events else mx.zeros_like(events[..., 4])
         history = sum(
-            w[f"encoder.event_embeddings.{i}.weight"][events[..., i]] for i in range(5)
-        )
+            w[f"encoder.event_embeddings.{i}.weight"][events[..., i]] for i in range(4)
+        ) + w["encoder.event_embeddings.4.weight"][tail]
+        planes = planes[:, : self.planes]
+        scalars = scalars[:, : self.scalars]
         history = history + self.positions[valid.astype(mx.int32).cumsum(1)]
         tiles = (
             self.linear(planes.transpose(0, 2, 1), "encoder.tile_in")

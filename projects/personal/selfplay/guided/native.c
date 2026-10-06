@@ -1614,8 +1614,447 @@ static PyObject *py_game_profile(PyObject *self, PyObject *args) {
     return py_race_profile(self, args);
 }
 
+/* ---------- encoding v3 (guided/encoding.py): shape paths and a solitary lookahead ---------- */
+
+/* Per discard of a hand that discards (a waiting-length hand for each tile
+ * it can let go): the plain and seven-pairs paths apart (_fast's raw shanten
+ * is their minimum), whether the hand is a baotou wait and how many draws
+ * lead to one, and a lookahead of the learner's own next draws. A waiting
+ * hand alone gets only the lookahead (the reference row). Draws come
+ * uniformly from the tiles the learner has not seen (opponents' hands
+ * included, so the lookahead is optimistic), and other seats are ignored. */
+enum { V3_PLANES = 29, V3_LOOK = 20, V3_KS = 5, V3_MEMO = 1024 };
+static const int v3_ks[V3_KS - 1] = {1, 2, 3, 5};
+
+typedef struct {
+    uint64_t k0, k1;
+    long copies, value;
+    int baotou, used;
+} v3_slot;
+
+typedef struct {
+    v3_slot slot[V3_MEMO];
+} v3_memo;
+
+/* Seven pairs' raw distance, as shanten_uncached computes it (8 with melds open). */
+static int v3_seven(const int *c, int opened) {
+    if (opened) return 8;
+    int pairs = 0, singles = 0;
+    for (int i = 0; i < WHITE; i++) {
+        pairs += c[i] / 2;
+        singles += c[i] % 2;
+    }
+    int room = 7 - pairs, capped = singles < room ? singles : room;
+    return 14 - (2 * pairs + capped) - c[WHITE] - 1;
+}
+
+/* The plain path's raw distance: four melds and a pair, whites filling in. */
+static int v3_plain(const int *c, int opened) {
+    int natural[NTILES];
+    memcpy(natural, c, sizeof(natural));
+    natural[WHITE] = 0;
+    return shape_value(natural, opened) - c[WHITE];
+}
+
+/* Copies, availability-weighted fan and baotou of a waiting hand, memoised per call. */
+static v3_slot *v3_wait(v3_memo *m, int *c, int opened, const int *avail, int chain, int piao, int you_cai) {
+    uint64_t k0, k1;
+    shanten_key(c, opened, &k0, &k1);
+    uint64_t h = (k0 * 0x9E3779B97F4A7C15ULL) ^ (k1 * 0xC2B2AE3D27D4EB4FULL);
+    int i = (int)((h ^ (h >> 31)) & (V3_MEMO - 1));
+    for (int probe = 0; probe < V3_MEMO; probe++, i = (i + 1) & (V3_MEMO - 1)) {
+        v3_slot *s = &m->slot[i];
+        if (s->used && s->k0 == k0 && s->k1 == k1) return s;
+        if (!s->used) {
+            analysis_row row;
+            analyze_values(c, avail, opened, chain, piao, you_cai, &row);
+            s->k0 = k0;
+            s->k1 = k1;
+            s->copies = row.copies;
+            s->value = row.value;
+            s->baotou = c[WHITE] > 0 && baotou_cached(c, opened);
+            s->used = 1;
+            return s;
+        }
+    }
+    return NULL; /* never: one call fills far fewer slots */
+}
+
+/* P(no hit in k draws without replacement) with `hits` of `pool` copies hitting (hits may be fractional). */
+static double v3_miss(double pool, double hits, int k) {
+    double p = 1.0;
+    for (int i = 0; i < k; i++) {
+        if (pool - i <= 0) break;
+        double stay = (pool - hits - i) / (pool - i);
+        p *= stay > 0 ? stay : 0.0;
+    }
+    return p;
+}
+
+/* P(at least `need` successes in n trials of probability p). */
+static double v3_at_least(int n, double p, int need) {
+    if (need <= 0) return 1.0;
+    if (need > n || p <= 0) return 0.0;
+    double total = 0.0, coef = 1.0;
+    for (int i = 0; i <= n; i++) {
+        if (i > 0) coef = coef * (n - i + 1) / i;
+        if (i >= need) total += coef * pow(p, i) * pow(1.0 - p, n - i);
+    }
+    return total < 1.0 ? total : 1.0;
+}
+
+/* Draws (availability-weighted) after which some discard leaves a baotou wait.
+ * A baotou wait is ready and holds a white; a tile added never lengthens the
+ * raw distance, so only draws after which the hand is at most ready qualify. */
+static long v3_baotou_outs(int *c, int opened, const int *avail, int baotou) {
+    long outs = 0;
+    if (baotou) { /* letting the drawn tile go keeps the wait */
+        for (int x = 0; x < NTILES; x++)
+            if (avail[x] > 0 && c[x] < 4) outs += avail[x];
+        return outs;
+    }
+    int8_t after[NTILES];
+    memcpy(after, draw_distances(c, opened)->draw, sizeof(after));
+    for (int x = 0; x < NTILES; x++) {
+        if (avail[x] <= 0 || c[x] >= 4 || after[x] > 0) continue;
+        if (!c[WHITE] && x != WHITE) continue;
+        c[x]++;
+        int found = 0;
+        for (int y = 0; y < NTILES && !found; y++) {
+            if (!c[y]) continue;
+            c[y]--;
+            found = c[WHITE] && shanten_raw(c, opened) <= 0 && baotou_cached(c, opened);
+            c[y]++;
+        }
+        c[x]--;
+        if (found) outs += avail[x];
+    }
+    return outs;
+}
+
+typedef struct {
+    int refine;          /* one away: walk each readying draw and its best discard */
+    double wins, fan;    /* otherwise these mean winning copies and fan once ready */
+    double got_wins, got_fan, got_mass; /* what a refined walk found */
+} v3_ready;
+
+/* The lookahead of a waiting hand: P(ready), P(baotou wait), P(self-drawn win), E[fan | win]
+ * within each k of v3_ks and `draws`, into out[20] (k-major). Returns the hand's raw distance. */
+static int v3_look(v3_memo *m, int *c, int opened, const int *avail, int chain, int piao, int you_cai,
+                   int draws, long *baotou_outs, analysis_row *row, v3_ready *r, float *out) {
+    analyze_values(c, avail, opened, chain, piao, you_cai, row);
+    int d = row->distance;
+    double pool = 0.0;
+    for (int x = 0; x < NTILES; x++)
+        if (avail[x] > 0 && c[x] < 4) pool += avail[x];
+    int baotou = c[WHITE] > 0 && baotou_cached(c, opened);
+    long outs = d <= 1 ? v3_baotou_outs(c, opened, avail, baotou) : 0;
+    *baotou_outs = outs;
+    double ukeire = (double)row->ukeire, wins = (double)row->copies, fan = 0.0, mean_wins = 0.0;
+    r->got_mass = 0.0;
+    if (d <= 0) {
+        fan = row->copies ? (double)row->value / row->copies : 0.0;
+    } else if (d == 1 && r->refine) {
+        /* Each draw that makes the hand ready, then its best discard by copies (fan on ties). */
+        const draw_slot *table = draw_distances(c, opened);
+        int8_t ready[NTILES];
+        memcpy(ready, table->draw, sizeof(ready)); /* nested lookups may replace the slot */
+        double mass = 0.0, copies = 0.0, value = 0.0;
+        for (int x = 0; x < NTILES; x++) {
+            if (avail[x] <= 0 || c[x] >= 4 || ready[x] > 0) continue;
+            c[x]++;
+            long best_copies = -1, best_value = 0;
+            for (int y = 0; y < NTILES; y++) {
+                if (!c[y]) continue;
+                c[y]--;
+                if (shanten_raw(c, opened) <= 0) {
+                    v3_slot *s = v3_wait(m, c, opened, avail, chain, piao, you_cai);
+                    if (s && (s->copies > best_copies || (s->copies == best_copies && s->value > best_value))) {
+                        best_copies = s->copies;
+                        best_value = s->value;
+                    }
+                }
+                c[y]++;
+            }
+            c[x]--;
+            if (best_copies < 0) continue;
+            mass += avail[x];
+            copies += (double)avail[x] * best_copies;
+            value += (double)avail[x] * best_value;
+        }
+        ukeire = mass;
+        mean_wins = mass > 0 ? copies / mass : 0.0;
+        fan = copies > 0 ? value / copies : 0.0;
+        r->got_wins = mean_wins;
+        r->got_fan = fan;
+        r->got_mass = mass;
+    } else {
+        mean_wins = r->wins;
+        fan = r->fan;
+    }
+    for (int i = 0; i < V3_KS; i++) {
+        int k = i < V3_KS - 1 ? v3_ks[i] : draws;
+        if (k > draws) k = draws;
+        double ready_p, baotou_p, win_p;
+        if (d <= 0) {
+            ready_p = 1.0;
+            win_p = 1.0 - v3_miss(pool, wins, k);
+        } else if (d == 1) {
+            ready_p = 1.0 - v3_miss(pool, ukeire, k);
+            win_p = 0.0;
+            for (int j = 1; j < k; j++) {
+                double first = v3_miss(pool, ukeire, j - 1) * (pool - j + 1 > 0 ? ukeire / (pool - j + 1) : 0.0);
+                win_p += first * (1.0 - v3_miss(pool - j, mean_wins, k - j));
+            }
+        } else {
+            /* Two or more away: each improving draw at the first one's rate;
+             * once ready, the mean winning copies of r. */
+            double rate = pool > 0 ? ukeire / pool : 0.0, before = 0.0;
+            ready_p = v3_at_least(k, rate, d);
+            win_p = 0.0;
+            for (int j = d; j < k; j++) {
+                double by = v3_at_least(j, rate, d);
+                win_p += (by - before) * (1.0 - v3_miss(pool - j, mean_wins, k - j));
+                before = by;
+            }
+        }
+        baotou_p = baotou ? 1.0 : (d <= 1 ? 1.0 - v3_miss(pool, (double)outs, k) : 0.0);
+        out[4 * i] = (float)ready_p;
+        out[4 * i + 1] = (float)baotou_p;
+        out[4 * i + 2] = (float)win_p;
+        out[4 * i + 3] = (float)(win_p > 0 ? log2(1.0 + fan) / 9.0 : 0.0);
+    }
+    return d;
+}
+
+/* v3_shape(hand counts, open melds, available, chain, piao, you_cai, own draws left,
+ *          planes float32[29,34], reference float32[20]) -> best discard or -1.
+ * Planes per discard t (zero for a waiting hand): 0-2 the plain path's
+ * (8 - shanten) / 9, accepted copies / 40, winning copies / 12; 3-5 the same
+ * for seven pairs; 6 a baotou wait; 7 baotou outs / 40; 8-27 the lookahead.
+ * The reference is the lookahead of the best discard (v1's order: distance,
+ * accepted copies, availability-weighted fan) or of the waiting hand itself.
+ * A discard one away from ready is walked draw by draw (V3_WALKS best ones in
+ * v1's order); the others, and those two or more away, take the walked ones'
+ * mean winning copies and fan once ready (or the ready discards' own, or 4
+ * copies at fan 1). */
+enum { V3_WALKS = 3 };
+
+static int v3_better(const analysis_row *a, const analysis_row *b) {
+    return a->distance < b->distance ||
+           (a->distance == b->distance && (a->ukeire > b->ukeire ||
+            (a->ukeire == b->ukeire && a->value > b->value)));
+}
+
+static PyObject *py_v3_shape(PyObject *self, PyObject *args) {
+    PyObject *hand_obj, *avail_obj, *planes_obj, *ref_obj;
+    int opened, chain, piao, you_cai, draws, c[NTILES], avail[NTILES];
+    if (!PyArg_ParseTuple(args, "OiOiiiiOO", &hand_obj, &opened, &avail_obj, &chain, &piao, &you_cai, &draws,
+                          &planes_obj, &ref_obj)) return NULL;
+    if (opened < 0 || opened > 4) {
+        PyErr_SetString(PyExc_ValueError, "open_melds must be 0..4");
+        return NULL;
+    }
+    if (parse_counts(hand_obj, c) < 0 || parse_vector(avail_obj, avail, 1000000, "available") < 0) return NULL;
+    if (draws < 0) draws = 0;
+    Py_buffer pv, rv;
+    if (PyObject_GetBuffer(planes_obj, &pv, PyBUF_WRITABLE | PyBUF_C_CONTIGUOUS | PyBUF_FORMAT) < 0) return NULL;
+    if (PyObject_GetBuffer(ref_obj, &rv, PyBUF_WRITABLE | PyBUF_C_CONTIGUOUS | PyBUF_FORMAT) < 0) {
+        PyBuffer_Release(&pv);
+        return NULL;
+    }
+    if (pv.len != (Py_ssize_t)(V3_PLANES * NTILES * sizeof(float)) || strcmp(pv.format, "f") != 0 ||
+        rv.len != (Py_ssize_t)(V3_LOOK * sizeof(float)) || strcmp(rv.format, "f") != 0) {
+        PyBuffer_Release(&pv);
+        PyBuffer_Release(&rv);
+        PyErr_SetString(PyExc_ValueError, "buffers must be contiguous float32[29,34] and float32[20]");
+        return NULL;
+    }
+    float *planes = (float *)pv.buf, *ref = (float *)rv.buf;
+    memset(planes, 0, pv.len);
+    memset(ref, 0, rv.len);
+    int size = 0;
+    for (int t = 0; t < NTILES; t++) size += c[t];
+    v3_memo *m = PyMem_Calloc(1, sizeof(v3_memo));
+    if (!m) {
+        PyBuffer_Release(&pv);
+        PyBuffer_Release(&rv);
+        return PyErr_NoMemory();
+    }
+    int best = -1;
+    if (size == 13 - 3 * opened) {
+        analysis_row row;
+        long outs;
+        v3_ready r = {1, 4.0, 1.0, 0.0, 0.0, 0.0};
+        v3_look(m, c, opened, avail, chain, piao, you_cai, draws, &outs, &row, &r, ref);
+    } else if (size == 14 - 3 * opened) {
+        analysis_row rows[NTILES];
+        int order[NTILES], n = 0;
+        double ready_wins = 0.0, ready_value = 0.0, ready_n = 0.0;
+        for (int t = 0; t < NTILES; t++) {
+            if (!c[t]) continue;
+            c[t]--;
+            /* The two paths, each with its own accepted and winning draws. */
+            const draw_slot *table = draw_distances(c, opened);
+            int least = table->distance;
+            int8_t after[NTILES];
+            memcpy(after, table->draw, sizeof(after));
+            int seven = v3_seven(c, opened);
+            int plain = opened || seven > least ? least : v3_plain(c, opened);
+            long plain_ukeire = 0, plain_wins = 0, seven_ukeire = 0, seven_wins = 0;
+            for (int x = 0; x < NTILES; x++) {
+                if (avail[x] <= 0 || c[x] >= 4) continue;
+                c[x]++;
+                int seven_x = v3_seven(c, opened), least_x = after[x];
+                int plain_x = opened || seven_x > least_x ? least_x : v3_plain(c, opened);
+                if (plain_x < plain) plain_ukeire += avail[x];
+                if (!opened && seven_x < seven) seven_ukeire += avail[x];
+                if (least_x < 0 && fan_value(c, x, opened, chain, piao, you_cai, 0) > 0) {
+                    if (plain_x < 0) plain_wins += avail[x];
+                    if (!opened && seven_x < 0) seven_wins += avail[x];
+                }
+                c[x]--;
+            }
+            float *col = planes + t;
+            col[0] = (8 - plain) / 9.0f;
+            col[NTILES] = (plain_ukeire < 40 ? plain_ukeire : 40) / 40.0f;
+            col[2 * NTILES] = (plain_wins < 12 ? plain_wins : 12) / 12.0f;
+            col[3 * NTILES] = (8 - seven) / 9.0f;
+            col[4 * NTILES] = (seven_ukeire < 40 ? seven_ukeire : 40) / 40.0f;
+            col[5 * NTILES] = (seven_wins < 12 ? seven_wins : 12) / 12.0f;
+            col[6 * NTILES] = c[WHITE] > 0 && baotou_cached(c, opened) ? 1.0f : 0.0f;
+            analyze_values(c, avail, opened, chain, piao, you_cai, &rows[t]);
+            if (rows[t].distance <= 0 && rows[t].copies > 0) {
+                ready_wins += rows[t].copies;
+                ready_value += rows[t].value;
+                ready_n += 1.0;
+            }
+            /* Insertion into v1's order. */
+            int at = n++;
+            while (at > 0 && v3_better(&rows[t], &rows[order[at - 1]])) {
+                order[at] = order[at - 1];
+                at--;
+            }
+            order[at] = t;
+            c[t]++;
+        }
+        best = n ? order[0] : -1;
+        double walked_wins = 0.0, walked_value = 0.0, walked_mass = 0.0;
+        double base_wins = ready_n > 0 ? ready_wins / ready_n : 4.0;
+        double base_fan = ready_wins > 0 ? ready_value / ready_wins : 1.0;
+        for (int pass = 0; pass < 2; pass++) {
+            v3_ready r = {pass == 0, base_wins, base_fan, 0.0, 0.0, 0.0};
+            if (pass == 1 && walked_mass > 0) {
+                r.wins = walked_wins / walked_mass;
+                r.fan = walked_wins > 0 ? walked_value / walked_wins : 1.0;
+            }
+            for (int i = pass == 0 ? 0 : V3_WALKS; i < (pass == 0 ? (n < V3_WALKS ? n : V3_WALKS) : n); i++) {
+                int t = order[i];
+                float look[V3_LOOK];
+                analysis_row row;
+                long outs;
+                c[t]--;
+                v3_look(m, c, opened, avail, chain, piao, you_cai, draws, &outs, &row, &r, look);
+                c[t]++;
+                if (pass == 0 && r.got_mass > 0) {
+                    walked_wins += r.got_wins * r.got_mass;
+                    walked_value += r.got_fan * r.got_wins * r.got_mass;
+                    walked_mass += r.got_mass;
+                }
+                float *col = planes + t;
+                col[7 * NTILES] = (outs < 40 ? outs : 40) / 40.0f;
+                for (int j = 0; j < V3_LOOK; j++) col[(8 + j) * NTILES] = look[j];
+                if (t == best) memcpy(ref, look, sizeof(look));
+            }
+        }
+    }
+    PyMem_Free(m);
+    PyBuffer_Release(&pv);
+    PyBuffer_Release(&rv);
+    return PyLong_FromLong(best);
+}
+
+static int v3_age_bucket(int turns) {
+    return turns < 5 ? turns : turns < 7 ? 5 : turns < 10 ? 6 : 7;
+}
+
+/* v3_events(events int16[L,5] (this hand's, relative seats), tails int16[L], rivers float32[4,34])
+ *   -> (discards, last discarder or -1, turns since each seat's last call (-1 without one),
+ *       whether the learner's last event is its chi or peng).
+ * Tails: forced * 8 + the age bucket of the turns (discards after / 4) since the
+ * event, forced 1 for a discard in a catch round by a seat other than its owner
+ * (a white discard opens the round, its owner's other discard closes it; the
+ * others can only let the drawn tile go), 2 for the discard right after the same
+ * seat's chi or peng (from the hand: no draw came in between). Rivers: per seat,
+ * exp(-0.2 * turns since) of each discard nobody claimed, at its tile. */
+static PyObject *py_v3_events(PyObject *self, PyObject *args) {
+    PyObject *events_obj, *tails_obj, *rivers_obj;
+    if (!PyArg_ParseTuple(args, "OOO", &events_obj, &tails_obj, &rivers_obj)) return NULL;
+    Py_buffer ev, tv, rv;
+    if (PyObject_GetBuffer(events_obj, &ev, PyBUF_C_CONTIGUOUS | PyBUF_FORMAT) < 0) return NULL;
+    if (PyObject_GetBuffer(tails_obj, &tv, PyBUF_WRITABLE | PyBUF_C_CONTIGUOUS | PyBUF_FORMAT) < 0) {
+        PyBuffer_Release(&ev);
+        return NULL;
+    }
+    if (PyObject_GetBuffer(rivers_obj, &rv, PyBUF_WRITABLE | PyBUF_C_CONTIGUOUS | PyBUF_FORMAT) < 0) {
+        PyBuffer_Release(&ev);
+        PyBuffer_Release(&tv);
+        return NULL;
+    }
+    Py_ssize_t n = ev.len / (Py_ssize_t)(5 * sizeof(int16_t));
+    if (ev.itemsize != 2 || ev.len != n * 5 * 2 || tv.itemsize != 2 || tv.len != n * 2 ||
+        rv.len != (Py_ssize_t)(4 * NTILES * sizeof(float)) || strcmp(rv.format, "f") != 0) {
+        PyBuffer_Release(&ev);
+        PyBuffer_Release(&tv);
+        PyBuffer_Release(&rv);
+        PyErr_SetString(PyExc_ValueError, "expected int16[L,5] events, int16[L] tails and float32[4,34] rivers");
+        return NULL;
+    }
+    const int16_t *e = (const int16_t *)ev.buf;
+    int16_t *tails = (int16_t *)tv.buf;
+    float *rivers = (float *)rv.buf;
+    memset(tails, 0, tv.len);
+    memset(rivers, 0, rv.len);
+    int total = 0;
+    for (Py_ssize_t i = 0; i < n; i++)
+        if (e[5 * i] == EV_DISCARD) total++;
+    int owner = -1, seen = 0, last_discarder = -1, previous[5] = {0, 0, 0, 0, 0};
+    long last_call[4] = {-1, -1, -1, -1}, last_kind = 0, last_seat = -1;
+    for (Py_ssize_t i = 0; i < n; i++) {
+        int kind = e[5 * i], seat = e[5 * i + 1], tile = e[5 * i + 2];
+        if (!kind) continue;
+        int after = total - seen - (kind == EV_DISCARD);
+        int forced = 0;
+        if (kind == EV_DISCARD) {
+            if (owner >= 0 && seat != owner) forced = 1;
+            else if (seat >= 0 && seat < 5 && (previous[seat] == EV_CHI || previous[seat] == EV_PENG)) forced = 2;
+            if (tile == WHITE) owner = seat;
+            else if (seat == owner) owner = -1;
+            int next = i + 1 < n ? e[5 * (i + 1)] : 0;
+            int claimed = next == EV_CHI || next == EV_PENG || next == EV_GANG;
+            if (!claimed && tile >= 0 && tile < NTILES && seat >= 0 && seat < 4)
+                rivers[seat * NTILES + tile] += (float)exp(-0.2 * (after / 4.0));
+            last_discarder = seat;
+            seen++;
+        } else if ((kind == EV_CHI || kind == EV_PENG || kind == EV_GANG) && seat >= 0 && seat < 4) {
+            last_call[seat] = total - seen;
+        }
+        if (seat >= 0 && seat < 5) previous[seat] = kind;
+        last_kind = kind;
+        last_seat = seat;
+        tails[i] = (int16_t)(forced * 8 + v3_age_bucket(after / 4));
+    }
+    PyBuffer_Release(&ev);
+    PyBuffer_Release(&tv);
+    PyBuffer_Release(&rv);
+    return Py_BuildValue("(ii(llll)i)", total, last_discarder, last_call[0], last_call[1], last_call[2],
+                         last_call[3], last_seat == 0 && (last_kind == EV_CHI || last_kind == EV_PENG));
+}
+
 static PyMethodDef native_methods[] = {
     {"race_profile", py_game_profile, METH_VARARGS, "Register a race member's profile here (the runtime's race_profile arguments)."},
+    {"v3_shape", py_v3_shape, METH_VARARGS, "Encoding v3's per-discard shape paths, baotou and lookahead planes and the reference lookahead."},
+    {"v3_events", py_v3_events, METH_VARARGS, "Encoding v3's event tails, decayed rivers and call timing."},
     {NULL, NULL, 0, NULL},
 };
 

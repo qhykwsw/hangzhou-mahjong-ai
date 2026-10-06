@@ -54,12 +54,15 @@ class HistoryEncoder(nn.Module):
     """Tile, state and event tokens through a pre-norm transformer.
 
     ``planes`` and ``scalars`` are the input sizes of the encoding it is built
-    for (guided.encoding.INPUTS). Later encodings append planes, so it reads
-    the first ``planes`` of whatever it is given.
+    for (guided.encoding.INPUTS). Later encodings append planes and scalars,
+    so it reads the first ``planes`` and ``scalars`` of whatever it is given.
+    ``event_tail`` rows embed the events' last field (guided.encoding.EVENT_TAILS):
+    before v3 that field is always 0 and an encoder built for 4 rows reads it as
+    0 whatever it is given.
     """
 
     def __init__(self, dim, layers, heads, max_events=4096, *, state_only=False,
-                 planes=N_PLANES, scalars=N_SCALARS):
+                 planes=N_PLANES, scalars=N_SCALARS, event_tail=4):
         super().__init__()
         if dim % heads or dim < 2:
             raise ValueError("dim must be divisible by heads and at least 2")
@@ -70,8 +73,9 @@ class HistoryEncoder(nn.Module):
         self.tile_embedding = nn.Parameter(torch.empty(34, dim))
         self.state_in = nn.Linear(scalars, dim)
         self.event_embeddings = nn.ModuleList(
-            nn.Embedding(size, dim) for size in (7, 5, 35, 35, 4)
+            nn.Embedding(size, dim) for size in (7, 5, 35, 35, event_tail)
         )
+        self.timed_events = event_tail > 4
         self.type_embedding = nn.Parameter(torch.empty(3, dim))
         nn.init.normal_(self.tile_embedding, std=0.02)
         nn.init.normal_(self.type_embedding, std=0.02)
@@ -114,12 +118,14 @@ class HistoryEncoder(nn.Module):
             raise ValueError(
                 f"history exceeds {self.max_events} events; refusing truncation"
             )
+        tail = events[..., 4] if self.timed_events else torch.zeros_like(events[..., 4])
         event_tokens = sum(
             embedding(events[..., field])
-            for field, embedding in enumerate(self.event_embeddings)
-        )
+            for field, embedding in enumerate(self.event_embeddings[:4])
+        ) + self.event_embeddings[4](tail)
         event_tokens = event_tokens + self.positions[valid.long().cumsum(1)]
         planes = planes[:, : self.tile_in.in_features]
+        scalars = scalars[:, : self.state_in.in_features]
         tiles = self.tile_in(planes.float().transpose(1, 2)) + self.tile_embedding
         state = self.state_in(scalars.float())[:, None]
         tokens = torch.cat(
@@ -145,11 +151,19 @@ class HistoryEncoder(nn.Module):
         return encoded[:, 34], encoded[:, :34]
 
 
+def actor_of(encoding, dim, layers, heads):
+    """An Actor built for ``encoding``'s inputs (guided.encoding.INPUTS and EVENT_TAILS)."""
+    from .encoding import EVENT_TAILS, inputs
+
+    planes, scalars = inputs(encoding)
+    return Actor(dim, layers, heads, planes=planes, scalars=scalars, event_tail=EVENT_TAILS[encoding])
+
+
 class Actor(nn.Module):
-    def __init__(self, dim=128, layers=4, heads=4, *, planes=N_PLANES, scalars=N_SCALARS):
+    def __init__(self, dim=128, layers=4, heads=4, *, planes=N_PLANES, scalars=N_SCALARS, event_tail=4):
         super().__init__()
         self.dim, self.layers, self.heads = dim, layers, heads
-        self.encoder = HistoryEncoder(dim, layers, heads, planes=planes, scalars=scalars)
+        self.encoder = HistoryEncoder(dim, layers, heads, planes=planes, scalars=scalars, event_tail=event_tail)
         self.discard_head = nn.Linear(dim, 1)
         self.claim_head = nn.Linear(dim, 4)
         self.state_head = nn.Linear(dim, 65)

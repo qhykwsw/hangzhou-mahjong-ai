@@ -50,7 +50,7 @@ def load_actor(source, device="cuda"):
     """
     import torch
     from .encoding import ENCODING, INPUTS
-    from .networks import Actor
+    from .networks import actor_of
 
     source = Path(source)
     selected = torch.device(device)
@@ -74,8 +74,7 @@ def load_actor(source, device="cuda"):
         if encoding not in INPUTS:
             raise ValueError("incompatible observation encoding")
         metadata = {"format": FORMAT, "encoding": encoding, "config": config}
-    planes, scalars = INPUTS[metadata["encoding"]]
-    actor = Actor(config["dim"], config["layers"], config["heads"], planes=planes, scalars=scalars)
+    actor = actor_of(metadata["encoding"], config["dim"], config["layers"], config["heads"])
     actor.load_state_dict(weights, strict=True)
     for value in actor.state_dict().values():
         if not bool(torch.isfinite(value).all()):
