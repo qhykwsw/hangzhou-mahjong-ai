@@ -118,8 +118,8 @@ class SocketClient:
         """Whether ``model`` reads risk_beta, asked of the service once (only for a row that has one).
 
         A service from before v4 answers 404 and one that cannot load the
-        model 400: both mean no. Without an answer the request goes plain and
-        the next one asks again.
+        model 400: both mean no. Without an answer it is no as well, kept for
+        the model: a service that does not answer must not cost a wait per decision.
         """
         if model not in self.reads_risk:
             import http.client
@@ -132,6 +132,7 @@ class SocketClient:
                 response = connection.getresponse()
                 data = response.read()
             except (OSError, http.client.HTTPException):
+                self.reads_risk[model] = False
                 return False
             finally:
                 connection.close()
