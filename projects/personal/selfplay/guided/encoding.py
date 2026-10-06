@@ -29,7 +29,7 @@ not come from the v1 row but from the observation's stage, so encode leaves
 it on the row of a semifinal or final observation as ``risk_beta`` (no key
 elsewhere: an input of 0) and augment appends it; the C engine's rows get it
 with the stage's other scalars (guided.stage.rewrite), and match workers'
-binary requests carry it (selfplay_core.wire).
+binary requests carry it to a model that reads it (selfplay_core.wire).
 """
 
 import math

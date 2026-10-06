@@ -433,8 +433,8 @@ class Service:
             if any(p.get("lookahead") != meta["config"]["lookahead"] for p in requests):
                 raise ValueError("encoding does not match the model's lookahead")
             # Match workers send v1 rows (selfplay_core.wire), with risk_beta in a
-            # semifinal or final; a model of a wider encoding gets them extended
-            # here (guided.encoding.augment).
+            # semifinal or final to a model that reads it (inputs); a model of a
+            # wider encoding gets them extended here (guided.encoding.augment).
             return [
                 augment(p["encoded"] if p.get("_binary") else decode(p["encoded"]), encoding)
                 for p in requests
@@ -509,6 +509,15 @@ class Service:
             if self.inflight:
                 self.wait()
         return [answers[i] for i in range(len(payloads))]
+
+    def inputs(self, model):
+        """What a match worker's binary request to ``model`` carries beyond the v1 row (selfplay_core.wire):
+        risk_beta for an encoding that reads it (guided-current-hand-v4)."""
+        from .encoding import ENCODING, RISK, inputs
+
+        _, meta = self.models.get(model)
+        encoding = meta.get("encoding", ENCODING)
+        return {"encoding": encoding, "risk_beta": inputs(encoding)[1] > RISK}
 
     def load(self, model):
         """Load a model and run every padded shape once, so play never pays for it."""
@@ -753,6 +762,11 @@ def serve(service, port, host="127.0.0.1", code=""):
                             reply(
                                 connection, 200, service.load(json.loads(body)["model"])
                             )
+                        except Exception as exc:
+                            reply(connection, 400, {"error": str(exc)[:2000]})
+                    elif method == "POST" and path == "/inputs":
+                        try:
+                            reply(connection, 200, service.inputs(json.loads(body)["model"]))
                         except Exception as exc:
                             reply(connection, 400, {"error": str(exc)[:2000]})
                     elif method == "BINARY" and path == "/act":

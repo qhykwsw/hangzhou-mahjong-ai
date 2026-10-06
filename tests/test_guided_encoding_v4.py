@@ -1,10 +1,11 @@
 """Encoding v4 is v3 and the stage's risk coefficient: both engines write the same rows, free play holds 0,
-match workers' requests carry it, and an extended Actor keeps every decision."""
+match workers' requests carry it to a v4 model only, and an extended Actor keeps every decision."""
 
 import base64
 import math
 from pathlib import Path
 import random
+import struct
 import sys
 
 import numpy as np
@@ -249,13 +250,14 @@ def test_model_service_extends_v1_requests_with_their_coefficient(sample):
                              "cpu")
         without, _ = decide(actor, *(blind[k] for k in ("planes", "scalars", "events", "mask")))
     assert valid and not torch.equal(expected, without)
-    # Match workers' binary requests: a semifinal or final row carries its coefficient, a plain row the plain body.
+    # Match workers' binary requests to a model that reads it: a semifinal or final row's coefficient after the
+    # plain body (SocketClient appends Body.risk), a plain row the plain body.
     bodies = [pack("0" * 64, r, lookahead=True) for r in rows]
-    plain_size = len(pack("0" * 64, {k: v for k, v in rows[1].items() if k != "risk_beta"}, lookahead=True))
-    assert len(bodies[1]) == plain_size + 2 and "risk_beta" not in rows[0]
-    binary = [unpack(body) for body in bodies]
+    assert len(bodies[1].risk) == 2 and bodies[0].risk == b"" and "risk_beta" not in rows[0]
+    binary = [unpack(body + body.risk) for body in bodies]
     assert [a["index"] for a in service.decide("wide", binary)] == expected.tolist()
-    for bad in (bodies[1] + b"x", bodies[1][:-2] + np.float16(np.nan).tobytes(), bodies[1][:-2] + np.float16(1.5).tobytes()):
+    extended = bodies[1] + bodies[1].risk
+    for bad in (extended + b"x", bodies[1] + np.float16(np.nan).tobytes(), bodies[1] + np.float16(1.5).tobytes()):
         with pytest.raises(ValueError):
             unpack(bad)
     # The JSON endpoint's base64 rows likewise.
@@ -263,3 +265,82 @@ def test_model_service_extends_v1_requests_with_their_coefficient(sample):
         k: base64.b64encode(np.ascontiguousarray(v if k != "risk_beta" else np.float16(v)).tobytes()).decode()
         for k, v in r.items()}} for r in rows]
     assert [a["index"] for a in service.decide("wide", payloads)] == expected.tolist()
+
+
+def main_body(sha, row):
+    """A match worker's request as selfplay_core.wire packed it before v4."""
+    arrays = [np.asarray(row[k], dtype=d) for k, d in (
+        ("planes", "<f2"), ("scalars", "<f2"), ("events", "<i2"), ("mask", "?"))]
+    return struct.pack("<4s64sBI", b"MJE1", sha.encode("ascii"), True, len(arrays[2])) + b"".join(
+        a.tobytes() for a in arrays)
+
+
+def test_only_a_v4_model_gets_the_coefficient_on_the_wire(sample, monkeypatch):
+    """Match seats (mahjong_ai's ModelPolicy, unchanged) against the service: inside a stage a v1, v2 or v3
+    model's requests are byte for byte those from before v4, which a service from before v4 accepts; only a v4
+    model's carry the coefficient."""
+    import socket
+    import threading
+    import time
+    import urllib.request
+    from types import SimpleNamespace
+
+    torch = pytest.importorskip("torch")
+    from guided.model_server import Service, serve
+    from guided.networks import actor_of
+    from mahjong_ai.execution import model_seat
+    from selfplay_core import wire
+
+    torch.set_num_threads(1)
+    torch.manual_seed(80)
+    shas = {encoding: str(n) * 64 for n, encoding in enumerate((ENCODING, ENCODING_V2, ENCODING_V3, ENCODING_V4), 1)}
+    models = {sha: (actor_of(encoding, 16, 1, 4).eval(), {"config": {"lookahead": True}, "encoding": encoding})
+              for encoding, sha in shas.items()}
+    service = Service(SimpleNamespace(device="cpu", get=lambda name: models[name]))
+    asked = []
+    service_inputs = service.inputs
+    service.inputs = lambda model: (asked.append(model), service_inputs(model))[1]
+    received = []
+    unpack = wire.unpack
+    monkeypatch.setattr(wire, "unpack", lambda body: (received.append(bytes(body)), unpack(body))[1])
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    threading.Thread(target=serve, args=(service, port), daemon=True).start()
+    url = f"http://127.0.0.1:{port}"
+    for _ in range(200):
+        try:
+            with urllib.request.urlopen(url + "/health", timeout=1):
+                break
+        except OSError:
+            time.sleep(0.02)
+    monkeypatch.setenv(model_seat.SERVER_ENV, url)
+    monkeypatch.setenv(model_seat.ENCODER_ENV, str(PROJECT))
+    monkeypatch.setattr(model_seat, "_ENCODER", [])
+
+    def play(sha, observations):
+        received.clear()
+        policy = model_seat.ModelPolicy(sha, "v")
+        for obs in observations:
+            assert policy.act(obs) in obs.legal_actions
+        policy.close()
+        assert policy.stats["errors"] == policy.stats["fallback_actions"] == 0
+        return list(received)
+
+    staged = [obs for plain, semifinal, final, _ in sample[:20] for obs in (plain, semifinal, final)]
+    rows = [encode(obs) for obs in staged]
+    assert sum("risk_beta" in r for r in rows) == 40
+    for encoding in (ENCODING, ENCODING_V2, ENCODING_V3):
+        sha = shas[encoding]
+        assert play(sha, staged) == [main_body(sha, r) for r in rows]
+    assert asked == [shas[ENCODING], shas[ENCODING_V2], shas[ENCODING_V3]]  # once per seat, on its first staged row
+    sha = shas[ENCODING_V4]
+    want = [main_body(sha, r) + (np.float16(r["risk_beta"]).tobytes() if "risk_beta" in r else b"") for r in rows]
+    assert play(sha, staged) == want and want != [main_body(sha, r) for r in rows]
+    # Outside a stage no seat asks: the traffic is what it was before v4.
+    asked.clear()
+    plain = [obs for obs, *_ in sample[20:30]]
+    assert play(shas[ENCODING_V3], plain) == [main_body(shas[ENCODING_V3], encode(obs)) for obs in plain] and not asked
+    # A service that cannot say what a model reads (one from before v4 answers 404) gets the plain body.
+    service.inputs = lambda model: (_ for _ in ()).throw(KeyError(model))
+    assert play(sha, staged) == [main_body(sha, r) for r in rows]
