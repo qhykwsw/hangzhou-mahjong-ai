@@ -107,6 +107,10 @@ class Game:
         # guided.walls: training hands on a stable wall, and the learner's draw luck on its rows.
         self.stable = bool(cfg.get("stable_wall")) and train
         self.luck = bool(cfg.get("luck")) and train
+        # cfg["stage"] (guided.stage): the game is placed inside a tournament stage.
+        from .stage import start
+
+        self.stage = start(cfg, seed)
         self.searched, self.window = 0, None
         self.shadows = []
         self.unfinished = False
@@ -140,6 +144,10 @@ class Game:
             from .walls import train_hand
 
             train_hand(self.state, stable=self.stable, luck_seat=self.focal if self.luck else None)
+        if self.stage:
+            from .stage import attach
+
+            attach(self.state, self.stage)
 
     def advance(self):
         from mahjong_ai.domain.types import RoundResult
@@ -199,6 +207,8 @@ class Game:
                 continue
             seat = state.turn
             obs = state.observation(legal)
+            if self.stage:
+                obs = staged(obs, self.stage, state, self.config.rounds)
             if seat in self.policies:
                 action = self.policies[seat].act(obs)
                 if action not in legal:
@@ -221,6 +231,10 @@ class Game:
                 row.update(hook(self.cfg.get("critic_features"), oracle)(state, seat))
                 if self.luck:
                     row["luck_pay"], row["luck_deal"] = state.luck
+                if self.stage:
+                    from .stage import row_fields
+
+                    row.update(row_fields(self.stage, seat))
                 if self.teacher:
                     # A teacher that fails on a decision (raises, or answers
                     # illegally) leaves that row unlabelled instead of
@@ -316,6 +330,13 @@ def _teacher_failed(teacher, what=None):
     print(f"teacher {teacher} failed on a decision; unlabelled from now on where it fails:\n{detail}", file=sys.stderr, flush=True)
 
 
+def staged(obs, info, state, rounds):
+    """The observation inside the game's stage (guided.stage), from the hand's own scores and number."""
+    from .stage import observe
+
+    return observe(obs, info, state.scores, state.hand_no, rounds)
+
+
 def fork(state):
     """A copy of a hand to play on.
 
@@ -369,6 +390,8 @@ class Shadow:
                 continue
             seat = state.turn
             obs = state.observation(legal)
+            if game.stage:
+                obs = staged(obs, game.stage, state, game.config.rounds)
             if seat in game.policies:
                 action = game.policies[seat].act(obs)
                 if action not in legal:

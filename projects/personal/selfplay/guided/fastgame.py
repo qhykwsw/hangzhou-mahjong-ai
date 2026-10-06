@@ -128,6 +128,10 @@ class FastGame(Game):
                 self._next_hand()
                 continue
             row = self.encode(state, seat)
+            if self.stage:
+                from .stage import rewrite
+
+                rewrite(row, self.stage, self.scores, self.hand_no, self.config.rounds, seat)
             row.update(
                 hand=self.hand_no,
                 action=0,
@@ -144,6 +148,10 @@ class FastGame(Game):
                 row.update(state.oracle(seat) if not features else hook(features, None)(StateView(self, state), seat))
                 if self.luck:
                     row["luck_pay"], row["luck_deal"] = state.luck
+                if self.stage:
+                    from .stage import row_fields
+
+                    row.update(row_fields(self.stage, seat))
             self.pending = (row, state.legal(), seat)
             return {
                 "row": row,
@@ -185,6 +193,7 @@ class FastShadow:
         self.game, self.state, self.row = game, state, row
         self.dealer, self.pending, self.done = game.dealer, None, False
         self.start_scores = list(game.scores)  # the game's scores before this hand
+        self.hand_no = game.hand_no  # the game may move on to its next hand before this copy ends
         state.step(move)
 
     def advance(self):
@@ -193,6 +202,10 @@ class FastShadow:
         if seat is not None:
             self.pending = state.legal()
             row = game.encode(state, seat)
+            if game.stage:
+                from .stage import rewrite
+
+                rewrite(row, game.stage, self.start_scores, self.hand_no, game.config.rounds, seat)
             row["teacher"] = -1
             return {"row": row, "slot": GREEDY if seat == game.focal else game.specs[seat], "train": False, "bc": False}
         self.done, self.state = True, None
@@ -267,6 +280,9 @@ class StateView:
         self.dealer, self.turn, self.hand_no = snap["dealer"], snap["turn"], snap["hand_no"]
         self.hands = [list(h) for h in snap["hands"]]
         self.wall = list(snap["wall"])
+        if game.stage:  # guided.stage's fields, as the Python hand carries them
+            self.stage_prior, self.stage_game, self.stage_kind = (
+                game.stage["prior"], game.stage["game"], game.stage["kind"])
 
     @property
     def melds(self):
