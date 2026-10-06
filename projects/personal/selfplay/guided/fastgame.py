@@ -1,18 +1,21 @@
 """The training game on the C engine (native.c): the same games, rows and requests, faster.
 
-A training game whose rule seats are all fixed pool members deciding whole
-in the runtime's race_act (and without a rule teacher; a model teacher
-labels in the collection parent) plays its hands in C: the engine, every
-member's turn, the learner's encoding and the default Critic features.
-Python keeps the game's bookkeeping, the requests and the rows,
-line for line as Game and Shadow do. Any other game stays on the Python
-engine. Imported by a worker after it binds the rules runtime, before any
-rule package loads.
+A training game plays its hands in C: the engine, every fixed pool member's
+turn (members deciding whole in the runtime's race_act), the learner's
+encoding and the default Critic features. Python keeps the game's
+bookkeeping, the requests and the rows, line for line as Game and Shadow do.
+Any other rule seat (e.g. a version from the catalog) and a rule teacher
+decide on the Python engine's own Observation: the C hand stops at their
+turn, a Python hand (Mirror) replays the C hand's action log to that point,
+and the rule's action is played back into C. A table with such a seat also
+replays each finished hand in Python, for the next hand's public history.
+Imported by a worker after it binds the rules runtime, before any rule
+package loads.
 """
 
 from mahjong_ai import _fast
 
-from .environment import GREEDY, Game, hook
+from .environment import GREEDY, Game, _teacher_failed, hook, staged
 
 native = _fast.load_native(__file__)
 
@@ -52,8 +55,64 @@ def race_member(policy):
     return PROFILES[scope["PROFILE"]], scope["examined"]
 
 
+class Mirror:
+    """A C hand's Python HandState, kept at the C hand's position by replaying its action log.
+
+    Built as Game._next_hand builds the hand (wall, dealer, scores, the game's
+    public history before it, stable wall and luck, stage), so its
+    observations are the Python engine's.
+    """
+
+    def __init__(self, game, hand_no, dealer, scores, history, views):
+        from mahjong_ai.domain.engine import HandState, derive_seed
+
+        state = HandState(game.config, derive_seed(game.seed, "wall", hand_no), dealer, hand_no, scores, history,
+                          False, previous_views=views)
+        state.rounds_total = game.config.rounds
+        if game.stable or game.luck:
+            from .walls import train_hand
+
+            train_hand(state, stable=game.stable, luck_seat=game.focal if game.luck else None)
+        if game.stage:
+            from .stage import attach
+
+            attach(state, game.stage)
+        self.state, self.applied = state, 0
+
+    def sync(self, hand):
+        """The Python hand at the C hand's position."""
+        from selfplay_core.actions import action_index
+
+        log = hand.snapshot()["log"]
+        if log is None:
+            raise RuntimeError("hand too long to mirror")
+        state = self.state
+        for index in log[self.applied:]:
+            legal = state.legal_actions()
+            state.step(next(a for a in legal if action_index(a) == index), legal)
+        self.applied = len(log)
+        return state
+
+
+def python_act(game, mirror, hand, seat):
+    """A Python rule seat's turn: its action on the mirror's Observation, played on both hands."""
+    from selfplay_core.actions import action_index
+
+    state = mirror.sync(hand)
+    legal = state.legal_actions()
+    obs = state.observation(legal)
+    if game.stage:
+        obs = staged(obs, game.stage, state, game.config.rounds)
+    action = game.policies[seat].act(obs)
+    if action not in legal:
+        raise ValueError("frozen opponent returned an illegal action")
+    state.step(action, legal)
+    mirror.applied += 1
+    hand.step(action_index(action))
+
+
 class FastGame(Game):
-    """Game on native.Hand when every rule seat is a race member and no rule teacher labels."""
+    """Game on native.Hand; race members decide in C, other rule seats and a rule teacher on a Mirror."""
 
     def _next_hand(self):
         if not hasattr(self, "seats"):
@@ -74,22 +133,42 @@ class FastGame(Game):
         if self.luck:
             self.state.track_luck(self.focal)
         self.start = (self.dealer, tuple(self.scores))
+        self.mirror = None
 
     def _plan(self):
-        if self.teacher is not None:
-            return None
-        profiles, fallbacks = [], []
+        profiles, fallbacks, python = [], [], set()
         for seat, spec in enumerate(self.specs):
-            if spec.startswith("model:"):
+            member = None if spec.startswith("model:") else race_member(self.policies[seat])
+            if member is None:  # the learner, a model opponent, or a rule deciding in Python
                 profiles.append(-1)
                 fallbacks.append(None)
+                if not spec.startswith("model:"):
+                    python.add(seat)
                 continue
-            member = race_member(self.policies[seat])
-            if member is None:
-                return None
             profiles.append(member[0])
             fallbacks.append(member[1])
+        self.python_seats = frozenset(python)
+        self.mirrored = bool(python) or self.teacher is not None
         return tuple(profiles), tuple(fallbacks)
+
+    def _mirror(self):
+        """This hand's Mirror, built on first use."""
+        if self.mirror is None:
+            dealer, scores = self.start
+            self.mirror = Mirror(self, self.hand_no, dealer, list(scores), self.history, self.views)
+        return self.mirror
+
+    def _finish_round(self):
+        """Game.advance's finish_round calls, for the rule seats and teacher deciding in Python."""
+        from mahjong_ai.domain.settlement import score_ranks
+        from mahjong_ai.domain.types import RoundResult
+
+        result = RoundResult("guided", 0, self.config.stage, self.hand_no, tuple(self.scores), None, (), True,
+                             {"objective": "four-player-settlement-score-v1"}, score_ranks(self.scores))
+        for seat, policy in self.policies.items():
+            policy.finish_round(result, seat)
+        if self.teacher:
+            self.teacher.finish_round(result, self.focal)
 
     def encode(self, state, seat):
         from .encoding import augment, encode
@@ -119,15 +198,23 @@ class FastGame(Game):
                 else:
                     self.predecision_reward += delta[self.focal] / self.config.base_score
                 self.hands.append((*self.start, state.snapshot()["log"]))
+                if self.mirrored:  # the next hand's public history, as Game keeps it
+                    finished = self._mirror().sync(state)
+                    self.history, self.views = finished.events, finished.public_views()
                 if state.winner is not None:
                     self.dealer = state.winner
                 if self.hand_no == self.config.rounds:
                     # Race members keep no state across games: finish_round is a no-op.
+                    if self.mirrored:
+                        self._finish_round()
                     self.complete = True
                     self.unfinished = self.train
                     self.settled()
                     return None
                 self._next_hand()
+                continue
+            if seat in self.python_seats:
+                python_act(self, self._mirror(), state, seat)
                 continue
             row = self.encode(state, seat)
             if self.stage:
@@ -154,6 +241,8 @@ class FastGame(Game):
                     from .stage import row_fields
 
                     row.update(row_fields(self.stage, seat))
+                if self.teacher:
+                    self._label(row, state)
             self.pending = (row, state.legal(), seat)
             return {
                 "row": row,
@@ -161,6 +250,28 @@ class FastGame(Game):
                 "train": self.train and seat == self.focal,
                 "bc": self.bc,
             }
+
+    def _label(self, row, hand):
+        """The rule teacher's label on a learner row, as Game.advance gives it."""
+        from selfplay_core.actions import action_index
+
+        state = self._mirror().sync(hand)
+        legal = state.legal_actions()
+        obs = state.observation(legal)
+        if self.stage:
+            obs = staged(obs, self.stage, state, self.config.rounds)
+        # A teacher that fails on a decision leaves that row unlabelled (Game.advance).
+        try:
+            action = self.teacher.act(obs)
+        except Exception:
+            action = None
+            _teacher_failed(self.teacher_id)
+        if action in legal:
+            row["teacher"] = action_index(action)
+        else:
+            self.teacher_errors += 1
+            if action is not None:
+                _teacher_failed(self.teacher_id, f"illegal action {action}")
 
     def apply(self, response):
         if self.seats is None:
@@ -196,11 +307,18 @@ class FastShadow:
         self.dealer, self.pending, self.done = game.dealer, None, False
         self.start_scores = list(game.scores)  # the game's scores before this hand
         self.hand_no = game.hand_no  # the game may move on to its next hand before this copy ends
+        # The hand's public history, for a Mirror of the copy (built on a Python seat's first turn).
+        self.history, self.views, self.mirror = game.history, game.views, None
         state.step(move)
 
     def advance(self):
         game, state = self.game, self.state
         seat = state.run(*game.seats)
+        while seat is not None and seat in game.python_seats:
+            if self.mirror is None:
+                self.mirror = Mirror(game, self.hand_no, self.dealer, self.start_scores, self.history, self.views)
+            python_act(game, self.mirror, state, seat)
+            seat = state.run(*game.seats)
         if seat is not None:
             self.pending = state.legal()
             row = game.encode(state, seat)

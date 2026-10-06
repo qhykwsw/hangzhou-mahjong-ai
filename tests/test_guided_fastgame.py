@@ -302,20 +302,94 @@ def reads_events(state, seat):
     return features
 
 
-def test_other_rule_seats_stay_on_the_python_engine(members, monkeypatch):
-    class Other:
-        def reset(self, seed):
-            pass
+class PythonRule:
+    """A rule deciding in Python (not a race member): a member's choice, now and then a seeded
+    random one or one read from the game's public history, so the call order and the
+    Observation's every part matter; it also records what it saw and its finish_round."""
 
-        def act(self, obs):
-            return obs.legal_actions[-1]
+    def __init__(self, member):
+        self.member, self.seen, self.finished = member, [], []
 
-    by_id = {"m0": members[0], "other": Other()}
-    monkeypatch.setattr(artifacts, "build_policy", lambda bundle, cid: by_id[cid])
-    cfg = configuration(rounds=16, lookahead=False)
-    game = fastgame.FastGame(cfg, {"entries": []}, {k: None for k in by_id}, ["model:current", "m0", "other", "m0"],
-                             seed_for(3, "other"), focal=0, train=True)
-    assert game.seats is None and isinstance(game.state, HandState)
+    def reset(self, seed):
+        self.rng = random.Random(seed)
+
+    def act(self, obs):
+        legal = obs.legal_actions
+        self.seen.append((len(obs.public_events), obs.stage.round_no, tuple(obs.stage.effective_scores),
+                          obs.stage.effective_horizon, obs.wall_remaining, len(legal)))
+        roll = self.rng.random()
+        if roll < 0.15:
+            return legal[self.rng.randrange(len(legal))]
+        if roll < 0.25:
+            return legal[len(obs.public_events) % len(legal)]
+        return self.member.act(obs)
+
+    def finish_round(self, result, seat):
+        self.finished.append((seat, result))
+
+
+def rule_table(members, monkeypatch, python_ids):
+    """build_policy for a table: members m0.., and fresh PythonRule seats per game under ``python_ids``."""
+    by_id = {f"m{i}": m for i, m in enumerate(members)}
+    built = []
+
+    def build(bundle, cid):
+        if cid in python_ids:
+            rule = PythonRule(members[python_ids[cid]])
+            built.append((cid, rule))
+            return rule
+        return by_id[cid]
+
+    monkeypatch.setattr(artifacts, "build_policy", build)
+    return {k: None for k in [*by_id, *python_ids]}, built
+
+
+@pytest.mark.parametrize("extra", [
+    {},
+    {"stable_wall": True, "luck": True, "critic_features": "guided.encoding:oracle"},
+    {"vine": True, "stable_wall": True, "luck": True},
+    {"stage": {"kind": "advancement", "games": 10, "per_game_sd": 70}, "critic_features": "test_guided_fastgame:reads_events"},
+    {"encoding": "guided-current-hand-v2", "stage": {"kind": "final", "games": 10, "per_game_sd": 70}},
+    {"encoding": "guided-current-hand-v3", "vine": True},
+])
+def test_python_rule_seats_play_the_python_game_on_the_c_engine(members, monkeypatch, extra):
+    entries, built = rule_table(members, monkeypatch, {"py": 2, "py2": 4})
+    cfg = configuration(rounds=16, lookahead=True, gae_lambda=0.95) | {"playout_baseline": True} | extra
+    for n, seats in enumerate([["model:current", "py", "m1", "m3"], ["m0", "py", "model:current", "py2"]]):
+        seed = seed_for(43, "fast-python-seats", n, str(sorted(extra)))
+        focal = seats.index("model:current")
+        built.clear()
+        games = []
+        for cls in (Game, fastgame.FastGame):
+            games.append(cls(cfg, {"entries": []}, entries, seats, seed, focal=focal, train=True))
+        rules = [[rule for _, rule in built[:len(built) // 2]], [rule for _, rule in built[len(built) // 2:]]]
+        assert games[1].seats is not None and games[1].python_seats and not isinstance(games[1].state, HandState)
+        counts = [play(game) for game in games]
+        assert counts[0] == counts[1] > 50
+        assert games[0].scores == games[1].scores and games[0].hand_no == games[1].hand_no == 16
+        assert games[0].predecision_reward == games[1].predecision_reward
+        assert rows_of(games[0]) == rows_of(games[1])
+        assert any(row.get("deviated") for row in games[1].rows)
+        for python, fast in zip(*rules):
+            assert python.seen == fast.seen and len(fast.seen) > 50
+            assert python.finished == fast.finished and len(fast.finished) == 1
+        # the rule saw the previous hands' events too
+        assert max(seen[0] for rule in rules[1] for seen in rule.seen) > 300
+
+
+def test_a_python_rule_teacher_labels_on_the_c_engine(members, monkeypatch):
+    entries, built = rule_table(members, monkeypatch, {"teach": 1})
+    cfg = configuration(rounds=16, lookahead=True, gae_lambda=0.95) | {"playout_baseline": True, "vine": True}
+    seats = ["m0", "model:current", "m2", "m3"]
+    games = [cls(cfg, {"entries": []}, entries, seats, seed_for(47, "fast-teacher"), focal=1, teacher="teach",
+                 train=True) for cls in (Game, fastgame.FastGame)]
+    assert games[1].seats is not None and not games[1].python_seats and games[1].mirrored
+    counts = [play(game) for game in games]
+    assert counts[0] == counts[1] > 50
+    assert rows_of(games[0]) == rows_of(games[1])
+    assert all(row["teacher"] >= 0 for row in games[1].rows)
+    assert games[0].teacher_errors == games[1].teacher_errors == 0
+    assert built[0][1].seen == built[1][1].seen and built[0][1].finished == built[1][1].finished
 
 
 def test_encode_into_writes_the_same_bytes_into_row_store_columns(members):
@@ -430,10 +504,10 @@ def test_a_model_teacher_keeps_the_c_game_and_labels_from_the_answers(members, m
     assert game.complete and len(labels) == len(game.rows) > 50
     assert [row["teacher"] for row in game.rows] == labels
     assert all(row["label_version"] == "model:teacher:frozen" for row in game.rows)
-    # A rule teacher acts in the game, which then stays on the Python engine.
+    # A rule teacher acts in the game, on the C hand's Mirror (test_a_python_rule_teacher_labels_on_the_c_engine).
     ruled = fastgame.FastGame(cfg, {"entries": []}, {k: None for k in by_id}, seats, seed_for(31, "model-teacher"),
                               focal=1, teacher="m1", train=True)
-    assert ruled.teacher is by_id["m1"] and ruled.seats is None
+    assert ruled.teacher is by_id["m1"] and ruled.seats is not None and ruled.mirrored
 
 
 # guided.walls: the stable wall and the learner's draw luck, on both engines.
