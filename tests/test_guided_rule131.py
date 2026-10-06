@@ -23,7 +23,7 @@ pytest.importorskip("mahjong_ai._fast", reason="C accelerator not built")
 
 from guided import artifacts, fastgame  # noqa: E402  (fastgame first: profiles register through it)
 from guided.config import configuration  # noqa: E402
-from guided.environment import Game  # noqa: E402
+from guided.environment import Game, rule_seat_kinds  # noqa: E402
 from guided.statistics import seed_for  # noqa: E402
 from mahjong_ai.domain.engine import HandState, derive_seed  # noqa: E402
 from mahjong_ai.domain.types import RoundConfig  # noqa: E402
@@ -123,6 +123,9 @@ def test_131_seats_play_the_python_game_in_c(members, monkeypatch, extra):
         assert games[0].scores == games[1].scores and games[0].hand_no == games[1].hand_no == 8
         assert games[0].predecision_reward == games[1].predecision_reward
         assert rows_of(games[0]) == rows_of(games[1])
+        # What the collection reports: every 131 seat decided in C, none by callback.
+        assert rule_seat_kinds(games[1]) == {"c": 3, "callback": 0}
+        assert rule_seat_kinds(games[0]) == {"python_engine": 3}
 
 
 def test_131_teaches_on_the_c_hand(members, monkeypatch):

@@ -292,6 +292,9 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
             {
                 "seconds": time.monotonic() - started,
                 "workers": reports,
+                # Rule seats of the finished training games by where they decided (environment.rule_seat_kinds).
+                "rule_seats": {kind: sum(r.get("rule_seats", {}).get(kind, 0) for r in reports)
+                               for kind in ("c", "callback", "python_engine")},
                 "samples": len(all_rows),
                 "games": len(records),
                 "inference_batches": len(inference_sizes) or len(batch_sizes),
