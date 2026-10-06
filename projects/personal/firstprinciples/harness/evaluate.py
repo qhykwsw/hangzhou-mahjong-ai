@@ -424,12 +424,17 @@ def lineups(pool):
 
 
 def assignments(pool, attempt_id, blocks):
-    """Four games per block: the attempt in each seat, opponents in fixed order."""
+    """Four games per block: the attempt in each seat, opponents in fixed order.
+
+    With ``one_seat`` (harness.stage) a block is a single match, the attempt
+    taking the seats in turn across blocks, so the block's readout is that
+    match's own place.
+    """
     triples = lineups(pool)
     out = []
     for block in blocks:
         others = list(triples[block % len(triples)])
-        for focal in range(4):
+        for focal in ([block // len(triples) % 4] if pool.get("one_seat") else range(4)):
             players = list(others)
             players.insert(focal, attempt_id)
             out.append(dict(index=len(out), block=block, players=players, focal=focal))
@@ -824,9 +829,11 @@ def _tasks(pool, attempt_id, spec, blocks, seed, label, host):
         yield root, task
 
 
-def _collect(value, scores, stats):
+def _collect(value, scores, stats, places=None):
     focal = value["focal"]
     scores.update(zip(focal["group_blocks"], focal["field_score_group_means"]))
+    if places is not None:  # one match per block: its place, from the mean of 4 - place
+        places.update((b, 4 - g) for b, g in zip(focal["group_blocks"], focal["group_means"]))
     for key in stats:
         stats[key] += int(focal.get(key) or 0)
 
@@ -857,10 +864,11 @@ def _play_local(pool, attempt_id, spec, blocks, seed, label):
         service.warm(weights)
         env[SERVER_ENV], env[ENCODER_ENV] = service.url(), str(service.project)
     scores, stats, running = {}, {"timeouts": 0, "fallback_actions": 0, "errors": 0}, []
+    places = {} if pool.get("one_seat") else None
     for root, task in _tasks(pool, attempt_id, spec, blocks, seed, label, "local"):
         result = root / "result.json"
         if result.exists() and read_json(result).get("status") == "completed":
-            _collect(read_json(result), scores, stats)
+            _collect(read_json(result), scores, stats, places)
             continue
         root.mkdir(parents=True, exist_ok=True)
         result.unlink(missing_ok=True)
@@ -874,8 +882,8 @@ def _play_local(pool, attempt_id, spec, blocks, seed, label):
         value = read_json(root / "result.json") if (root / "result.json").exists() else {}
         if value.get("status") != "completed":
             raise RuntimeError(f"{root.name}: {value.get('status')} {str(value.get('error'))[:300]}")
-        _collect(value, scores, stats)
-    return scores, stats
+        _collect(value, scores, stats, places)
+    return scores, (stats if places is None else dict(stats, places=places))
 
 
 def _play(pool, attempt_id, spec, blocks, seed, label, host):
@@ -893,6 +901,7 @@ def _play(pool, attempt_id, spec, blocks, seed, label, host):
         if not dispatcher(host).adopt(job, root):
             dispatcher(host).submit(job, root, task, pool["runtime_path"], env)
     scores, stats = {}, {"timeouts": 0, "fallback_actions": 0, "errors": 0}
+    places = {} if pool.get("one_seat") else None
     pending, failures = list(roots), {}
     while pending:
         time.sleep(POLL_SECONDS)
@@ -917,9 +926,9 @@ def _play(pool, attempt_id, spec, blocks, seed, label, host):
                 dispatcher(host).submit(f"{attempt_id}/{root.name}", root, read_json(root / "task.json"),
                                         pool["runtime_path"], env)
                 continue
-            _collect(value, scores, stats)
+            _collect(value, scores, stats, places)
             pending.remove(root)
-    return scores, stats
+    return scores, (stats if places is None else dict(stats, places=places))
 
 
 def paired(a, b, blocks):
