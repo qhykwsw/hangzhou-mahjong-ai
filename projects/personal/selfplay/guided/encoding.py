@@ -21,6 +21,15 @@ scalars; and per event the rule-forced discards (a catch round's draw-discard,
 the discard after one's own chi or peng) with the event's age in turns. An
 Actor of an earlier encoding reads the prefixes it was built for and the
 events' last field as 0 (networks.HistoryEncoder).
+
+guided-current-hand-v4 appends one scalar to v3: the stage's risk coefficient
+beta / BETA_MAX in [-1, 1] (guided.stage_value: -V''/V' of the chance of
+advancing, in the learner's own stage score). It is the one input that does
+not come from the v1 row but from the observation's stage, so encode leaves
+it on the row of a semifinal or final observation as ``risk_beta`` (no key
+elsewhere: an input of 0) and augment appends it; the C engine's rows get it
+with the stage's other scalars (guided.stage.rewrite), and match workers'
+binary requests carry it (selfplay_core.wire).
 """
 
 import math
@@ -40,6 +49,8 @@ from selfplay_core.encoding import (
     P_REMAINING,
     encode as base_encode,
 )
+
+from .stage_value import risk_of
 
 # The engine silently falls back to pure Python without the native extension,
 # which makes shape features about an order of magnitude slower. Fail instead.
@@ -63,18 +74,22 @@ except ImportError as error:
 ENCODING = "guided-current-hand-v1"
 ENCODING_V2 = "guided-current-hand-v2"
 ENCODING_V3 = "guided-current-hand-v3"
+ENCODING_V4 = "guided-current-hand-v4"
 CALL_PLANES = 16
 V3_PLANES = 38
 V3_SCALARS = 35
+# v4's scalar, after v3's: beta / BETA_MAX (guided.stage_value).
+RISK = N_SCALARS + V3_SCALARS
 # (planes, scalars) an Actor of each encoding takes.
 INPUTS = {
     ENCODING: (N_PLANES, N_SCALARS),
     ENCODING_V2: (N_PLANES + CALL_PLANES, N_SCALARS),
     ENCODING_V3: (N_PLANES + CALL_PLANES + V3_PLANES, N_SCALARS + V3_SCALARS),
+    ENCODING_V4: (N_PLANES + CALL_PLANES + V3_PLANES, RISK + 1),
 }
 # Rows of the events' last field an Actor of each encoding embeds: 0 before
-# v3; v3 holds forced * 8 + age bucket (v3_inputs).
-EVENT_TAILS = {ENCODING: 4, ENCODING_V2: 4, ENCODING_V3: 24}
+# v3; v3 and v4 hold forced * 8 + age bucket (v3_inputs).
+EVENT_TAILS = {ENCODING: 4, ENCODING_V2: 4, ENCODING_V3: 24, ENCODING_V4: 24}
 
 # selfplay_core's scalars: the score context (11), the horizon (4 + stage
 # kinds), the seats (4 dealer, 4 god discarder, none, catch round, restricted),
@@ -106,12 +121,16 @@ def encode(obs, lookahead=True):
             min(event.tiles) if event.kind == "chi" and event.tiles else 34,
             0,
         )
-    return {
+    row = {
         "planes": base.planes.astype(np.float16),
         "scalars": base.scalars.astype(np.float16),
         "events": result,
         "mask": base.mask,
     }
+    risk = risk_of(obs.stage, obs.base_score)
+    if risk is not None:  # a semifinal or final: v4's scalar (augment)
+        row["risk_beta"] = risk
+    return row
 
 
 def call_planes(row):
@@ -360,12 +379,15 @@ def augment(row, encoding):
     """A v1 row (or one already of ``encoding``) as the input of an Actor of ``encoding``.
 
     A row of a wider encoding than ``encoding`` is returned as it is: an Actor
-    reads the prefixes it was built for (networks.HistoryEncoder).
+    reads the prefixes it was built for (networks.HistoryEncoder). v4's scalar
+    is the row's ``risk_beta`` (encode), 0 without one.
     """
     want = inputs(encoding)
     have = (len(row["planes"]), len(row["scalars"]))
     if have[0] >= want[0] and have[1] >= want[1]:
         return row
+    if have == INPUTS[ENCODING_V3]:  # only v4 is wider
+        return dict(row, scalars=np.concatenate([np.asarray(row["scalars"], dtype=np.float16), _risk(row)]))
     v1 = row if have[0] == N_PLANES else dict(row, planes=np.asarray(row["planes"])[:N_PLANES])
     if have[0] not in (N_PLANES, N_PLANES + CALL_PLANES) or have[1] != N_SCALARS:
         raise ValueError(f"a row of {have[0]} planes cannot become {encoding}")
@@ -378,12 +400,15 @@ def augment(row, encoding):
     planes.append(added.astype(np.float16))
     events = np.array(row["events"], dtype=np.int16).reshape(-1, 5)
     events[:, 4] = tails
-    return dict(
-        row,
-        planes=np.concatenate(planes),
-        scalars=np.concatenate([np.asarray(row["scalars"], dtype=np.float16), extra.astype(np.float16)]),
-        events=events,
-    )
+    scalars = [np.asarray(row["scalars"], dtype=np.float16), extra.astype(np.float16)]
+    if encoding == ENCODING_V4:
+        scalars.append(_risk(row))
+    return dict(row, planes=np.concatenate(planes), scalars=np.concatenate(scalars), events=events)
+
+
+def _risk(row):
+    """v4's scalar of a row: its risk_beta, 0 without one."""
+    return np.asarray([row.get("risk_beta", 0.0)], dtype=np.float16)
 
 
 def encode_v2(obs, lookahead=True):
@@ -392,6 +417,10 @@ def encode_v2(obs, lookahead=True):
 
 def encode_v3(obs, lookahead=True):
     return augment(encode(obs, lookahead), ENCODING_V3)
+
+
+def encode_v4(obs, lookahead=True):
+    return augment(encode(obs, lookahead), ENCODING_V4)
 
 
 def inputs(encoding):
@@ -404,7 +433,7 @@ def inputs(encoding):
 def encoder(encoding):
     """The observation encoder of ``encoding``: encoder(name)(obs, lookahead) -> row."""
     inputs(encoding)
-    return {ENCODING: encode, ENCODING_V2: encode_v2, ENCODING_V3: encode_v3}[encoding]
+    return {ENCODING: encode, ENCODING_V2: encode_v2, ENCODING_V3: encode_v3, ENCODING_V4: encode_v4}[encoding]
 
 
 def widest(encodings):

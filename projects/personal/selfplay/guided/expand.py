@@ -1,13 +1,14 @@
 """Extend an exported Actor to a wider observation encoding without changing a decision.
 
     python -m guided.expand <Actor artifact dir or guided-v1 checkpoint> <models root> \
-        [--encoding guided-current-hand-v3]
+        [--encoding guided-current-hand-v3 | guided-current-hand-v4]
 
 A wider encoding appends planes and scalars and may give the events' last
 field values (guided.encoding). The extended Actor's new input columns of
-encoder.tile_in and encoder.state_in start at zero, every row of the last
-event embedding becomes its row 0 (the only one an earlier encoding uses), and
-every other tensor is copied, so on a row of the wider encoding it computes
+encoder.tile_in and encoder.state_in start at zero (v4's risk coefficient
+among them), every row of the last event embedding of a v1 or v2 Actor becomes
+its row 0 (the only one those encodings use; a v3 Actor's table is already as
+wide), and every other tensor is copied, so on a row of the wider encoding it computes
 exactly what the source Actor computes on that row's prefixes; training then
 learns to use the new inputs. Writes the artifact to <models root>/<weights
 sha>/ (the model store's layout) and prints that path.

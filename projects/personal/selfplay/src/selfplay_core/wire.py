@@ -1,7 +1,10 @@
 """Binary public Actor inputs for a local inference service; numpy only.
 
 Requests carry v1 rows (guided-current-hand-v1); the service extends them for
-a model of a wider encoding (guided.encoding.augment).
+a model of a wider encoding (guided.encoding.augment). A row of a semifinal or
+final observation also carries its ``risk_beta`` (guided-current-hand-v4's
+scalar, the one input not computed from the v1 row) as one more float16 after
+the mask; rows without one keep the plain body.
 """
 import struct
 
@@ -20,6 +23,8 @@ def pack(model, row, *, lookahead):
         raise ValueError('model must be a weights SHA-256')
     arrays = [np.asarray(row[k], dtype=d) for k, d in (
         ('planes', '<f2'), ('scalars', '<f2'), ('events', '<i2'), ('mask', '?'))]
+    if 'risk_beta' in row:
+        arrays.append(np.asarray([row['risk_beta']], dtype='<f2'))
     return _HEADER.pack(_MAGIC, model, bool(lookahead), len(arrays[2])) + b''.join(a.tobytes() for a in arrays)
 
 
@@ -36,12 +41,17 @@ def unpack(body):
               ('events', '<i2', length * 5, 2, (length, 5)),
               ('mask', '?', N_ACTIONS, 1, (N_ACTIONS,))]
     expected = _HEADER.size + 2 * (N_PLANES * 34 + N_SCALARS + length * 5) + N_ACTIONS
-    if len(body) != expected:
+    if len(body) not in (expected, expected + 2):
         raise ValueError('incorrect Actor input body size')
     row, offset = {}, _HEADER.size
     for name, dtype, count, itemsize, shape in layout:
         row[name] = np.frombuffer(body, dtype=dtype, count=count, offset=offset).reshape(shape)
         offset += count * itemsize
+    if len(body) > expected:
+        risk = float(np.frombuffer(body, dtype='<f2', count=1, offset=expected)[0])
+        if not -1.0 <= risk <= 1.0:
+            raise ValueError('invalid risk coefficient')
+        row['risk_beta'] = risk
     return dict(model=model.decode('ascii'), lookahead=bool(lookahead), encoded=row, _binary=True)
 
 

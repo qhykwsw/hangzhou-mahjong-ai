@@ -432,8 +432,9 @@ class Service:
         if pre_encoded:
             if any(p.get("lookahead") != meta["config"]["lookahead"] for p in requests):
                 raise ValueError("encoding does not match the model's lookahead")
-            # Match workers send v1 rows (selfplay_core.wire); a model of a
-            # wider encoding gets them extended here (guided.encoding.augment).
+            # Match workers send v1 rows (selfplay_core.wire), with risk_beta in a
+            # semifinal or final; a model of a wider encoding gets them extended
+            # here (guided.encoding.augment).
             return [
                 augment(p["encoded"] if p.get("_binary") else decode(p["encoded"]), encoding)
                 for p in requests
@@ -556,12 +557,15 @@ def decode(data):
     from selfplay_core.actions import N_ACTIONS
 
     raw = {k: base64.b64decode(v) for k, v in data.items()}
-    return {
+    row = {
         "planes": np.frombuffer(raw["planes"], dtype=np.float16).reshape(-1, 34),
         "scalars": np.frombuffer(raw["scalars"], dtype=np.float16).reshape(-1),
         "events": np.frombuffer(raw["events"], dtype=np.int16).reshape(-1, 5),
         "mask": np.frombuffer(raw["mask"], dtype=bool).reshape(N_ACTIONS),
     }
+    if "risk_beta" in raw:  # a semifinal or final row's v4 scalar (guided.encoding), one float16
+        row["risk_beta"] = float(np.frombuffer(raw["risk_beta"], dtype=np.float16).reshape(1)[0])
+    return row
 
 
 class Connection:
