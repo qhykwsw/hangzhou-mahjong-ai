@@ -12,10 +12,11 @@ from selfplay_core.encoding import N_SCALARS
 
 
 class Slot:
-    def __init__(self, size, width, planes):
+    def __init__(self, size, width, planes, scalars=N_SCALARS, tail=4):
+        self.limits = np.array([7, 5, 35, 35, tail])
         self.views = (
             np.zeros((size, planes, 34), np.float16),
-            np.zeros((size, N_SCALARS), np.float16),
+            np.zeros((size, scalars), np.float16),
             np.zeros((size, width, 5), np.int32),
             np.zeros((size, N_ACTIONS), bool),
         )
@@ -30,7 +31,7 @@ class Slot:
             planes[i], scalars[i], mask[i] = row["planes"], row["scalars"], row["mask"]
             history = np.asarray(row["events"])
             real = history[history[:, 0] != 0]
-            if ((real < 0) | (real >= np.array([7, 5, 35, 35, 4]))).any():
+            if ((real < 0) | (real >= self.limits)).any():
                 raise ValueError("invalid event embedding index")
             events[i, : len(history)] = history
             events[i, len(history) :] = 0
@@ -48,13 +49,13 @@ class Runner:
         threading.Thread(target=self._wait, name="mlx-waiter", daemon=True).start()
 
     @staticmethod
-    def new_slot(size, width, planes):
-        return Slot(size, width, planes)
+    def new_slot(size, width, planes, scalars=N_SCALARS, tail=4):
+        return Slot(size, width, planes, scalars, tail)
 
-    def slot(self, count, length, planes):
+    def slot(self, count, length, planes, scalars=N_SCALARS, tail=4):
         from .model_server import IN_FLIGHT, bucket
 
-        shape = (*bucket(count, length), planes)
+        shape = (*bucket(count, length), planes, scalars, tail)
         if shape not in self.slots:
             self.slots[shape] = [Slot(*shape) for _ in range(IN_FLIGHT)]
         return next((s for s in self.slots[shape] if s.event is None), None)

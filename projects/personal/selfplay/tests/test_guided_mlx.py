@@ -54,6 +54,26 @@ def test_actor_of_a_wider_encoding_matches_reference():
     np.testing.assert_allclose(actual, expected, rtol=0.01, atol=0.005)
 
 
+def test_v3_actor_and_narrower_actors_on_v3_rows_match_reference():
+    """A v3 Actor embeds the events' last field; a v1 Actor given a v3 row reads its prefixes and that field as 0."""
+    from guided.encoding import ENCODING_V3, EVENT_TAILS, INPUTS
+    from guided.networks import actor_of
+
+    torch.manual_seed(595)
+    planes, scalars = INPUTS[ENCODING_V3]
+    rng = np.random.default_rng(458)
+    row = blank(planes, scalars)
+    events = np.ones((2, 6, 5), np.int32)
+    events[:, :, 4] = rng.integers(0, EVENT_TAILS[ENCODING_V3], size=(2, 6))
+    args = [rng.normal(size=(2, *row["planes"].shape)).astype(np.float16),
+            rng.normal(size=(2, *row["scalars"].shape)).astype(np.float16), events]
+    for actor in (actor_of(ENCODING_V3, 32, 1, 4).eval(), Actor(32, 1, 4).eval()):
+        with torch.inference_mode():
+            expected = actor(*(torch.from_numpy(a) for a in args)).numpy()
+        actual = np.asarray(MetalActor(actor).logits(*(mx.array(a) for a in args)))
+        np.testing.assert_allclose(actual, expected, rtol=0.01, atol=0.005)
+
+
 def test_service_two_inflight_batches_reuse_slots_without_stale_answers():
     torch.manual_seed(139)
     actor = MetalActor(Actor(32, 1, 4).eval())

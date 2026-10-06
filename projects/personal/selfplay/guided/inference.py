@@ -32,31 +32,31 @@ def policy_logits(model, planes, scalars, events):
 
 
 def widen(rows, model):
-    """Rows extended to the planes ``model`` reads, when they were encoded for a narrower encoding.
+    """Rows extended to the inputs ``model`` reads, when they were encoded for a narrower encoding.
 
     Collection workers encode for the widest encoding the trial names
     (cfg["encoding"]); this covers callers that leave it at v1.
     """
-    wanted = model.encoder.tile_in.in_features
-    if not rows or len(rows[0]["planes"]) >= wanted:
+    wanted = (model.encoder.tile_in.in_features, model.encoder.state_in.in_features)
+    if not rows or (len(rows[0]["planes"]) >= wanted[0] and len(rows[0]["scalars"]) >= wanted[1]):
         return rows
     from .encoding import INPUTS, augment
 
-    encoding = next(e for e, (planes, _) in INPUTS.items() if planes == wanted)
+    encoding = next(e for e, inputs in INPUTS.items() if inputs == wanted)
     return [augment(r, encoding) for r in rows]
 
 
 def policy_batch(rows, device):
     if not rows:
         raise ValueError("cannot infer an empty batch")
-    # Encodings differ in their number of planes (guided.encoding.INPUTS); a batch has one.
-    planes = len(rows[0]["planes"])
-    if planes < N_PLANES:
+    # Encodings differ in their numbers of planes and scalars (guided.encoding.INPUTS); a batch has one.
+    planes, scalars = len(rows[0]["planes"]), len(rows[0]["scalars"])
+    if planes < N_PLANES or scalars < N_SCALARS:
         raise ValueError("incorrect planes shape")
     batch = {}
     for key, shape, dtype in (
         ("planes", (planes, 34), np.float16),
-        ("scalars", (N_SCALARS,), np.float16),
+        ("scalars", (scalars,), np.float16),
         ("mask", (N_ACTIONS,), bool),
     ):
         values = [np.asarray(row[key], dtype=dtype) for row in rows]
@@ -158,17 +158,18 @@ class ActorGraphs:
             else None
         )
 
-    def _host(self, key, size, width, planes):
+    def _host(self, key, size, width, inputs):
         # A ring of IN_FLIGHT buffer sets per model and shape: a buffer is not
         # refilled while its earlier copy may still be on the way, and other
         # models' batches or the next round may be launched in between.
-        ring = self.hosts.get((key, size, width, planes))
+        planes, scalars = inputs
+        ring = self.hosts.get((key, size, width, inputs))
         if ring is None:
-            ring = self.hosts[(key, size, width, planes)] = []
+            ring = self.hosts[(key, size, width, inputs)] = []
             for _ in range(self.IN_FLIGHT):
                 tensors = (
                     torch.zeros((size, planes, 34), dtype=torch.float16).pin_memory(),
-                    torch.zeros((size, N_SCALARS), dtype=torch.float16).pin_memory(),
+                    torch.zeros((size, scalars), dtype=torch.float16).pin_memory(),
                     torch.zeros((size, width, 5), dtype=torch.int64).pin_memory(),
                     torch.zeros((size, N_ACTIONS), dtype=torch.bool).pin_memory(),
                 )
@@ -178,8 +179,8 @@ class ActorGraphs:
                 )
                 answers = torch.zeros((size, 3), dtype=torch.float32).pin_memory()
                 ring.append((tensors, views, answers, torch.cuda.Event()))
-        turn = self.turn.get((key, size, width, planes), 0)
-        self.turn[(key, size, width, planes)] = (turn + 1) % self.IN_FLIGHT
+        turn = self.turn.get((key, size, width, inputs), 0)
+        self.turn[(key, size, width, inputs)] = (turn + 1) % self.IN_FLIGHT
         return ring[turn]
 
     @staticmethod
@@ -223,7 +224,7 @@ class ActorGraphs:
                 )
             )
         size, width = shape
-        count = len(rows[0]["planes"])
+        count = (len(rows[0]["planes"]), len(rows[0]["scalars"]))
         tensors, (planes, scalars, events, mask), answers, done = self._host(
             key, size, width, count
         )

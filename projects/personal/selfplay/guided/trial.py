@@ -89,12 +89,11 @@ def export_actor(weights, config, output, source=None):
     """Write an Actor artifact after a strict load into the fixed architecture."""
     import torch
     from .deployment import FORMAT, load_actor
-    from .encoding import ENCODING, INPUTS
-    from .networks import Actor
+    from .encoding import ENCODING
+    from .networks import actor_of
 
     encoding = config.get("encoding", ENCODING)
-    planes, scalars = INPUTS[encoding]
-    actor = Actor(config["dim"], config["layers"], config["heads"], planes=planes, scalars=scalars)
+    actor = actor_of(encoding, config["dim"], config["layers"], config["heads"])
     actor.load_state_dict(weights, strict=True)
     for value in actor.state_dict().values():
         if not bool(torch.isfinite(value).all()):
@@ -205,12 +204,10 @@ class Context:
 
     def new_actor(self):
         """A fresh Actor with the fixed architecture (e.g. for opponent snapshots)."""
-        from .encoding import INPUTS
-        from .networks import Actor
+        from .networks import actor_of
 
         c = self.actor_config
-        planes, scalars = INPUTS[c["encoding"]]
-        return Actor(c["dim"], c["layers"], c["heads"], planes=planes, scalars=scalars).to(self.device)
+        return actor_of(c["encoding"], c["dim"], c["layers"], c["heads"]).to(self.device)
 
     def starts(self, name):
         """A frozen set of openings shipped in the recipe package (recipe/starts/<name>.json.gz)."""
@@ -286,9 +283,9 @@ class Context:
             if labels and self.label_hand_budget is not None:
                 samples = max(1, min(samples, int(self.labeled_hands_left() * per_hand) + 1))
         # Workers encode every model seat for the widest encoding at the table:
-        # later encodings append planes, and each Actor reads the prefix it was
-        # built for (guided.encoding).
-        from .encoding import INPUTS
+        # later encodings append inputs, and each Actor reads the prefixes it
+        # was built for (guided.encoding).
+        from .encoding import widest
 
         encodings = [self.actor_config["encoding"]] + [
             self._model_encodings[k] for k in chosen if k in self._model_encodings
@@ -300,7 +297,7 @@ class Context:
             "workers": max(1, min(int(run_cfg["workers"]), os.cpu_count())),
             "rounds": 16,
             "lookahead": self.actor_config["lookahead"],
-            "encoding": max(encodings, key=lambda e: INPUTS[e][0]),
+            "encoding": widest(encodings),
             "samples": samples,
             "seed": self.seed,
             "bc_only": teacher_plays,

@@ -161,10 +161,12 @@ class Slot:
     batch stays valid.
     """
 
-    def __init__(self, size, width, device, planes):
+    def __init__(self, size, width, device, planes, scalars=None, tail=4):
         import torch
         from selfplay_core.actions import N_ACTIONS
         from selfplay_core.encoding import N_SCALARS
+
+        scalars = scalars or N_SCALARS
 
         pin = device.type in ("cuda", "mps")
 
@@ -175,7 +177,7 @@ class Slot:
         self.size, self.width = size, width
         self.inputs = (
             host((size, planes, 34), torch.float16),
-            host((size, N_SCALARS), torch.float16),
+            host((size, scalars), torch.float16),
             host((size, width, 5), torch.int64),
             host((size, N_ACTIONS), torch.bool),
         )
@@ -268,16 +270,16 @@ class Runner:
                 target=self._wait, name="device-waiter", daemon=True
             ).start()
 
-    def slot(self, count, length, planes):
+    def slot(self, count, length, planes, scalars=None, tail=4):
         """A free slot of the shape for these rows; None while all are in flight."""
-        shape = (*bucket(count, length), planes)
+        shape = (*bucket(count, length), planes, scalars, tail)
         ring = self.slots.get(shape)
         if ring is None:
             ring = self.slots[shape] = [self.new_slot(*shape) for _ in range(IN_FLIGHT)]
         return next((s for s in ring if s.event is None), None)
 
-    def new_slot(self, size, width, planes):
-        return Slot(size, width, self.device, planes)
+    def new_slot(self, size, width, planes, scalars=None, tail=4):
+        return Slot(size, width, self.device, planes, scalars, tail)
 
     def launch(self, name, actor, slot):
         import torch
@@ -398,6 +400,8 @@ class Service:
             self._launch(group, [(context, request) for _, context, request in items])
 
     def _launch(self, group, items):
+        from .encoding import ENCODING, EVENT_TAILS
+
         model, pre_encoded, _ = group
         started = time.perf_counter()
         try:
@@ -406,7 +410,8 @@ class Service:
                 [request for _, request in items], meta, pre_encoded
             )
             slot = self.runner.slot(
-                len(rows), max(len(r["events"]) for r in rows), len(rows[0]["planes"])
+                len(rows), max(len(r["events"]) for r in rows), len(rows[0]["planes"]),
+                len(rows[0]["scalars"]), EVENT_TAILS[meta.get("encoding", ENCODING)],
             )
             if slot is None:
                 raise RuntimeError("no free staging slot")
@@ -506,18 +511,19 @@ class Service:
 
     def load(self, model):
         """Load a model and run every padded shape once, so play never pays for it."""
-        from .encoding import ENCODING, INPUTS
+        from .encoding import ENCODING, EVENT_TAILS, INPUTS
 
         actor, meta = self.models.get(model)
         if model in self.warmed:
             return {"ok": True}
-        planes = INPUTS[meta.get("encoding", ENCODING)][0]
+        encoding = meta.get("encoding", ENCODING)
+        planes, scalars = INPUTS[encoding]
         for size in BATCH_BUCKETS[:5]:
             for length in WARM_EVENTS:
-                row = blank(planes)
+                row = blank(planes, scalars)
                 row["events"] = row["events"].repeat(length, axis=0)
                 # A slot of its own: the ring's may be in flight for another worker.
-                slot = self.runner.new_slot(*bucket(size, length), planes)
+                slot = self.runner.new_slot(*bucket(size, length), planes, scalars, EVENT_TAILS[encoding])
                 slot.fill([row] * size)
                 self.runner.launch(model, actor, slot)
                 while not self.runner.ready(slot):
@@ -527,7 +533,7 @@ class Service:
         return {"ok": True}
 
 
-def blank(planes=None):
+def blank(planes=None, scalars=None):
     """A minimal valid Actor input, for loading a model and its kernels ahead of play."""
     import numpy as np
     from selfplay_core.actions import N_ACTIONS
@@ -537,7 +543,7 @@ def blank(planes=None):
     mask[0] = True
     return {
         "planes": np.zeros((planes or N_PLANES, 34), np.float16),
-        "scalars": np.zeros(N_SCALARS, np.float16),
+        "scalars": np.zeros(scalars or N_SCALARS, np.float16),
         "events": np.zeros((1, 5), np.int16),
         "mask": mask,
     }
@@ -548,12 +554,11 @@ def decode(data):
     import base64
     import numpy as np
     from selfplay_core.actions import N_ACTIONS
-    from selfplay_core.encoding import N_SCALARS
 
     raw = {k: base64.b64decode(v) for k, v in data.items()}
     return {
         "planes": np.frombuffer(raw["planes"], dtype=np.float16).reshape(-1, 34),
-        "scalars": np.frombuffer(raw["scalars"], dtype=np.float16).reshape(N_SCALARS),
+        "scalars": np.frombuffer(raw["scalars"], dtype=np.float16).reshape(-1),
         "events": np.frombuffer(raw["events"], dtype=np.int16).reshape(-1, 5),
         "mask": np.frombuffer(raw["mask"], dtype=bool).reshape(N_ACTIONS),
     }

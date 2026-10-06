@@ -231,6 +231,31 @@ def test_both_engines_extend_rows_for_a_wider_encoding(members, monkeypatch):
     assert any(row["planes"][N_PLANES:].any() for row in games[1].rows)
 
 
+def test_both_engines_extend_rows_for_v3(members, monkeypatch):
+    from guided.encoding import ENCODING_V3, INPUTS, N_PLANES, N_SCALARS, augment
+
+    by_id = {f"m{i}": m for i, m in enumerate(members)}
+    monkeypatch.setattr(artifacts, "build_policy", lambda bundle, cid: by_id[cid])
+    cfg = configuration(rounds=16, lookahead=True, gae_lambda=0.95) | {
+        "playout_baseline": True, "encoding": ENCODING_V3}
+    seats = ["model:current", "m1", "m3", "m5"]
+    games = [cls(cfg, {"entries": []}, {k: None for k in by_id}, seats, seed_for(37, "fast-game-v3"), train=True)
+             for cls in (Game, fastgame.FastGame)]
+    counts = [play(game) for game in games]
+    assert counts[0] == counts[1] > 50
+    assert rows_of(games[0]) == rows_of(games[1])
+    for row in games[1].rows:
+        assert row["planes"].shape == (INPUTS[ENCODING_V3][0], 34)
+        assert row["scalars"].shape == (INPUTS[ENCODING_V3][1],)
+        events = np.array(row["events"], dtype=np.int16)
+        events[:, 4] = 0  # a v1 row's last event field
+        again = augment(dict(row, planes=row["planes"][:N_PLANES], scalars=row["scalars"][:N_SCALARS],
+                             events=events), ENCODING_V3)
+        for key in ("planes", "scalars", "events"):
+            assert np.array_equal(np.asarray(again[key]), np.asarray(row[key]))
+    assert any(row["scalars"][N_SCALARS:].any() for row in games[1].rows)
+
+
 # The third fixed pool's members (fp-rule-068 whole in C): styles 10 to 16.
 MEMBER68 = MEMBER.replace("{style})", "{style}, True, True)")
 
