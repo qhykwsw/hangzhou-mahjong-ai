@@ -110,6 +110,10 @@ def free_play_versions(competition):
             match = folder / "match.json"
             ours = json.loads(match.read_text()).get("user_id") if match.exists() else None
             games = [g for p in sorted((folder / "replays").glob("*.json")) if (g := _free_play_game(p, ours))]
+            summary = folder / "summary.json"
+            if (len(games) < (json.loads(summary.read_text()).get("valid_final_snapshots") or 0)
+                    and time.time() - summary.stat().st_mtime < 3600):
+                continue  # the room's replays are still being written: read it again later
             cache[room] = {"room": room, "games": games}
             new.append(cache[room])
         if new:
