@@ -218,7 +218,9 @@ def test_continuation_options_are_checked(members, monkeypatch):
     seats = ["model:current", "m1", "m2", "m3"]
     for bad, match in [({"branch_continuation": {"learner": "model:current"}}, "cannot continue"),
                        ({"branch_continuation": {"leaner": "m1"}}, "is {'learner'"),
-                       ({"branches": 0, "branch_control": True}, "need cfg")]:
+                       ({"branches": 0, "branch_control": True}, "need cfg"),
+                       ({"branch_truncate": -1}, "positive integer"),
+                       ({"branches": 0, "branch_truncate": 2}, "need cfg")]:
         with pytest.raises(ValueError, match=match):
             Game(cfg | bad, {"entries": []}, {k: None for k in by_id}, seats, 1, train=True)
     for cls in (Game, fastgame.FastGame):
@@ -317,6 +319,96 @@ def test_131_candidates_and_their_control_continue_on_one_wall(members, monkeypa
     # differences to the control are +32 and -8.
     assert asked == [5, 9, 12]
     assert [b["playout"] for b in row["branches"]] == [24.0, -16.0] and row["branch_control"]["playout"] == -8.0
+
+
+def leaves(rows):
+    """(row, branch) -> its truncated result, over branches and controls."""
+    out = {}
+    for i, row in enumerate(rows):
+        for j, result in enumerate([*row.get("branches", ()), *([row["branch_control"]] if "branch_control" in row else [])]):
+            out[(i, j)] = result
+    return out
+
+
+@pytest.mark.parametrize("k, extra", [
+    (1, {}),
+    (3, {"vine": True, "stable_wall": True, "luck": True}),
+    (2, {"stage": {"kind": "advancement", "games": 10, "per_game_sd": 70}, "encoding": "guided-current-hand-v4"}),
+])
+def test_truncated_copies_stop_at_the_learners_kth_decision_on_both_engines(members, monkeypatch, k, extra):
+    """A truncated copy is the untruncated one cut short: its leaf row is the k-th learner request of the
+    same copy played out, its scores those before the hand; copies whose hand ends first are complete."""
+    cfg = configuration(rounds=16, lookahead=True, gae_lambda=0.95) | BASE | extra | {"branch_control": True}
+    seats = ["m0", "model:current", "m2", "m5"]
+    seed = seed_for(101, "branch-truncate", k)
+    games, _ = both(cfg | {"branch_truncate": k}, members, monkeypatch, seats, seed)
+    cut = leaves(games[1].rows)
+    # The same game without truncation, recording each copy's learner requests.
+    full = fastgame.FastGame(cfg, {"entries": []}, {f"m{i}": None for i in range(6)}, seats, seed, focal=1, train=True)
+    asked, before = {}, []
+    while True:
+        for shadow in full.shadows:
+            while not shadow.done:
+                request = shadow.advance()
+                if request is None:
+                    break
+                if request["slot"] == GREEDY and isinstance(shadow, fastgame.FastBranch):
+                    asked.setdefault(id(shadow.row), []).append(request["row"])
+                legal = [int(i) for i in np.flatnonzero(request["row"]["mask"])]
+                shadow.apply((learner(request["row"], legal)[1], -0.25, 0.0, 0))
+        request = full.advance()
+        if request is None:
+            if full.settled():
+                break
+            continue
+        before.append([score / full.config.base_score for score in full.scores])  # the game's, before this hand
+        legal = [int(i) for i in np.flatnonzero(request["row"]["mask"])]
+        choice, greedy = learner(request["row"], legal)
+        full.apply((choice, -0.5, 0.125, greedy, candidates(request["row"], legal)))
+    assert len(before) == len(full.rows)
+    whole = leaves(full.rows)
+    assert set(whole) == set(cut) and len(cut) > 30
+    stopped = 0
+    for key, result in cut.items():
+        played = whole[key]
+        if not result["truncated"]:
+            assert result == played and len(asked.get(id(played), ())) < k
+            continue
+        stopped += 1
+        leaf = asked[id(played)][k - 1]
+        assert set(result["leaf_row"]) == {"planes", "scalars", "events", "mask"}
+        assert plain(result["leaf_row"]) == plain({key_: leaf[key_] for key_ in result["leaf_row"]})
+        assert result["playout_scores"] == before[key[0]]
+        assert "playout" not in result and "playout_dealer" not in result
+        assert ("playout_luck_pay" in result) == bool(extra.get("luck"))
+    assert stopped > 20
+
+
+@needs131
+def test_a_truncated_131_continuation_counts_the_rules_decisions_on_both_engines(members, monkeypatch):
+    """With a rule in the learner's seat the copy stops at the rule's k-th decision: in C the seat leaves run
+    at each of its turns and plays fp-rule-131 by Hand.act until then."""
+    entries = tables(members, monkeypatch, {"py": 4}, {"r131": rule131})
+    cfg = configuration(rounds=8, lookahead=True, gae_lambda=0.95) | BASE | {
+        "branch_continuation": {"learner": "r131", "opponents": {"m1": "py"}}, "branch_control": True,
+        "branch_truncate": 4, "stable_wall": True, "luck": True}
+    games, slots = both(cfg, members, monkeypatch, ["m1", "m3", "model:current", "m4"],
+                        seed_for(103, "branch-truncate-131"), entries=entries)
+    plan = games[1]._branch_seats
+    assert plan.profiles[2] == -1 and 2 in plan.members and plan.python == {0}
+    assert not any(kind == "Branch" for kind, _ in slots)
+    results = list(leaves(games[1].rows).values())
+    assert sum(r["truncated"] for r in results) > 10 and sum(not r["truncated"] for r in results) > 0
+
+
+def test_a_python_rule_learner_truncates_on_both_engines(members, monkeypatch):
+    entries = tables(members, monkeypatch, {"py": 2})
+    cfg = configuration(rounds=16, lookahead=True, gae_lambda=0.95) | BASE | {
+        "branch_continuation": {"learner": "py"}, "branch_truncate": 2}
+    games, _ = both(cfg, members, monkeypatch, ["model:current", "m1", "m3", "m4"],
+                    seed_for(107, "branch-truncate-python"), entries=entries)
+    assert games[1]._branch_seats.python == {0}
+    assert sum(r["truncated"] for r in leaves(games[1].rows).values()) > 20
 
 
 def test_without_branches_no_row_carries_them_and_stray_candidates_fail(members, monkeypatch):

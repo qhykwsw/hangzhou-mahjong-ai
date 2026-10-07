@@ -43,6 +43,22 @@ With branch_control, a row with candidates also gets ``branch_control``, its
 argmax played the same way (same fork, same continuation), so a candidate's
 difference to the control is paired: same wall, same seats.
 
+    cfg["branch_truncate"] = k
+
+Each copy (the control too) then stops at the learner's k-th decision after
+the candidate (a decision: a turn with more than one legal action, whoever
+plays the learner's seat) instead of playing the hand out, unless the hand
+ends first. A stopped copy's result is
+
+    {"action", "truncated": True, "playout_scores", "leaf_row",
+     "playout_luck_pay", "playout_luck_deal" (with cfg["luck"])}
+
+``playout_scores`` the four scores so far by absolute seat (a hand pays only
+when it ends, so the scores before it), ``leaf_row`` the learner's row at the
+stop (its planes, scalars, events and mask: the legal observation's inputs,
+encoded as the game's rows are), the luck so far. A recipe values the leaf
+with its own value network in the parent; the framework does not.
+
 Both engines play the copies the same, bit for bit: Branch here on the Python
 engine, fastgame.FastBranch on the C engine.
 """
@@ -59,7 +75,7 @@ def options(cfg, train):
     """A training game's branch options, or None without cfg["branches"]."""
     width = cfg.get("branches")
     if not width:
-        stray = [key for key in ("branch_continuation", "branch_control") if cfg.get(key)]
+        stray = [key for key in ("branch_continuation", "branch_control", "branch_truncate") if cfg.get(key)]
         if stray:
             raise ValueError(f"{stray} need cfg['branches']")
         return None
@@ -79,8 +95,11 @@ def options(cfg, train):
             raise ValueError("branch continuation specs are strings")
     if "model:current" in (learner, *swaps.values()):
         raise ValueError("the sampling learner (model:current) cannot continue a branch")
+    truncate = cfg.get("branch_truncate") or 0
+    if isinstance(truncate, bool) or not isinstance(truncate, int) or truncate < 0:
+        raise ValueError("cfg['branch_truncate'] is the learner's decision a copy stops at, a positive integer")
     return SimpleNamespace(width=width, learner=GREEDY if learner == "greedy" else learner, swaps=swaps,
-                           control=bool(cfg.get("branch_control")))
+                           control=bool(cfg.get("branch_control")), truncate=truncate)
 
 
 def seat_plan(game):
@@ -139,6 +158,14 @@ def finished(result, game, scores, delta, winner, dealer):
     result["playout_scores"] = [(s + d) / base for s, d in zip(scores, delta)]
 
 
+def truncated(result, game, scores, delta, row):
+    """A copy stopped at the learner's k-th later decision: the scores so far and the learner's row there."""
+    base = game.config.base_score
+    result["truncated"] = True
+    result["playout_scores"] = [(s + d) / base for s, d in zip(scores, delta)]
+    result["leaf_row"] = {key: row[key] for key in LEAF}
+
+
 class Branch(Shadow):
     """One candidate's copy of the hand on the Python engine (see the module docstring).
 
@@ -149,6 +176,7 @@ class Branch(Shadow):
     def __init__(self, game, state, action, legal, result, plan):
         self.game, self.state, self.row, self.plan = game, state, result, plan
         self.dealer, self.pending, self.done = game.dealer, None, False
+        self.decisions = 0  # the learner's decisions since the candidate, for cfg["branch_truncate"]
         state.step(action, legal)
 
     def advance(self):
@@ -156,6 +184,7 @@ class Branch(Shadow):
 
         game, state = self.game, self.state
         encode = encoder(game.encoding)
+        cut = game.branching.truncate
         while not state.settled:
             if state.steps >= game.config.max_actions_per_hand:
                 raise RuntimeError("hand action budget exceeded")
@@ -167,6 +196,14 @@ class Branch(Shadow):
             obs = state.observation(legal)
             if game.stage:
                 obs = staged(obs, game.stage, state, game.config.rounds)
+            if cut and seat == game.focal:
+                self.decisions += 1
+                if self.decisions == cut:
+                    self.done, self.state = True, None
+                    truncated(self.row, game, state.scores, state.delta, encode(obs, game.cfg["lookahead"]))
+                    if game.luck:
+                        self.row["playout_luck_pay"], self.row["playout_luck_deal"] = state.luck
+                    return None
             kind, who = self.plan[seat]
             if kind == "rule":
                 action = who.act(obs)

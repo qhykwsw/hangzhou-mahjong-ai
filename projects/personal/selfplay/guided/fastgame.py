@@ -366,8 +366,13 @@ class FastGame(Game):
         self.shadows.append(FastBranch(self, world.fork(), index, result, self._branch_seats))
 
     def _branch_plan(self, plan):
-        """guided.branches.seat_plan's ``plan`` on the C hand: run's profiles, the seats deciding in Python, the model slots."""
-        profiles, fallbacks, python, policies, slots = [], [], set(), {}, {}
+        """guided.branches.seat_plan's ``plan`` on the C hand: run's profiles, the seats deciding in Python, the model slots.
+
+        Under cfg["branch_truncate"] a learner's seat deciding in C stops run at
+        each of its decisions (members: its member, played with Hand.act), so
+        the copy counts them.
+        """
+        profiles, fallbacks, python, policies, slots, members = [], [], set(), {}, {}, {}
         for seat, (kind, who) in enumerate(plan):
             member = None
             if kind == "model":
@@ -377,10 +382,12 @@ class FastGame(Game):
                 member = race_member(who) or rule131_member(who)
                 if member is None:
                     python.add(seat)
+                elif seat == self.focal and self.branching.truncate:
+                    members[seat], member = member, None
             profiles.append(-1 if member is None else member[0])
             fallbacks.append(None if member is None else member[1])
         return SimpleNamespace(profiles=tuple(profiles), fallbacks=tuple(fallbacks), python=frozenset(python),
-                               policies=policies, slots=slots)
+                               policies=policies, slots=slots, members=members)
 
 
 class FastShadow:
@@ -439,15 +446,29 @@ class FastBranch(FastShadow):
     """
 
     def __init__(self, game, state, move, result, plan):
-        self.plan = plan
+        self.plan, self.decisions = plan, 0
         super().__init__(game, state, move, result)
 
     def advance(self):
+        from .branches import finished, truncated
+
         game, state, plan = self.game, self.state, self.plan
+        cut = game.branching.truncate
         while True:
             seat = state.run(plan.profiles, plan.fallbacks)
             if seat is None:
                 break
+            if cut and seat == game.focal:
+                self.decisions += 1
+                if self.decisions == cut:
+                    self.done, self.state, self.mirror = True, None, None
+                    truncated(self.row, game, self.start_scores, state.delta, self.encode(state, seat))
+                    if game.luck:
+                        self.row["playout_luck_pay"], self.row["playout_luck_deal"] = state.luck
+                    return None
+                if seat in plan.members:
+                    state.step(state.act(*plan.members[seat]))
+                    continue
             if seat in plan.python:
                 if self.mirror is None:
                     self.mirror = Mirror(game, self.hand_no, self.dealer, self.start_scores, self.history, self.views)
@@ -457,8 +478,6 @@ class FastBranch(FastShadow):
             row = self.encode(state, seat)
             row["teacher"] = -1
             return {"row": row, "slot": plan.slots[seat], "train": False, "bc": False}
-        from .branches import finished
-
         self.done, self.state, self.mirror = True, None, None
         finished(self.row, game, self.start_scores, state.delta, state.winner, self.dealer)
         if game.luck:

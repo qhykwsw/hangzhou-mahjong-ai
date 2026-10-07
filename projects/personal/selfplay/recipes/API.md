@@ -136,8 +136,16 @@
   - ID 取自 `ctx.opponents`、`ctx.catalog` 或 `ctx.rules`，未知 ID 报错；不能用正在采样的学习者本身。续打里的规则每个座位各有一份策略，按本场种子重置。
 - `cfg["branch_control"] = True`：有候选的行另开一个副本，走 argmax、用同一续打策略，写进 `branch_control`（字段同 `branches` 的一项）。它和候选副本从同一个 fork 出发、同一副牌墙、同样的座位，候选减控制就是配对差。
 
+**截断**
+- `cfg["branch_truncate"] = k`（正整数）：每个副本（含控制副本）在候选之后学习座位的第 k 个决策处停下，不打完本局；本局先结束的副本照常是完整结果。
+- 「决策」指学习座位有不止一个合法动作的回合，不论续打的是 Actor 还是规则。
+- 停下的副本写 `{"action", "truncated": True, "playout_scores", "leaf_row"}`，开 `luck` 时另有到此为止的 `playout_luck_pay`、`playout_luck_deal`：
+  - `playout_scores` 是到此为止的四家分数（底分为单位）。一局只在结束时结算，所以就是本局开始前的分数。
+  - `leaf_row` 是停下时学习座位的编码行，只含合法观察的 `planes`、`scalars`、`events`、`mask`，编码与正常行相同。
+- 方案在父进程里用自己的价值网给 `leaf_row` 估值，框架不估值。
+
 **写回该行的字段**
-- `branches`：按候选顺序的列表，每项 `{"action", "truncated": False, "playout", "playout_scores", "playout_dealer", "playout_deals_next"}`，含义同偏离行的同名字段；开 `luck` 时另有 `playout_luck_pay`、`playout_luck_deal`。
+- `branches`：按候选顺序的列表，每项 `{"action", "truncated": False, "playout", "playout_scores", "playout_dealer", "playout_deals_next"}`，含义同偏离行的同名字段；开 `luck` 时另有 `playout_luck_pay`、`playout_luck_deal`。截断的项见上。
 - `branch_control`：开 `branch_control` 时，有候选的行才带。
 - 没有候选的行不带 `branches`。`finish_game` 在该场所有副本打完后才调用。
 - 副本不产生训练行、不计入 `samples` 和局数预算，但要多打：多出的推理请求约等于候选数乘以本局剩余的学习决策数。
