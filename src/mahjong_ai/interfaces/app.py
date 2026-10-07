@@ -40,7 +40,7 @@ def recipe_iteration(project):
     return None
 
 
-ONLINE_MIN_ROOMS = 20  # a room's total varies by ~180 points: fewer rooms say little about a version
+ONLINE_MIN_ROOMS = 10  # a room's total varies by ~180 points: fewer rooms say little about a version (user 10-07: from 20 to 10)
 _online_lock = threading.Lock()
 
 
