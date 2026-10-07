@@ -222,7 +222,7 @@ def test_a_close_development_difference_is_judged_by_pdl(harness, monkeypatch, d
                                                                                 "errors": 0}
 
     def measure(a, b, **kw):
-        measured.append((a, b, kw["a_spec"], kw["b_spec"], kw["seed"]))
+        measured.append((a, b, kw["a_spec"], kw["b_spec"], kw["seed"], kw["host"]))
         return dict(seed=kw["seed"], games=8, k=2, diff=pdl_diff, se=0.1, lower90=pdl_diff - E.CONFIRM_Z * 0.1,
                     parts={"hu": {"diff": pdl_diff, "se": 0.1}}, snapshots=3, seconds=1.0)
 
@@ -233,7 +233,7 @@ def test_a_close_development_difference_is_judged_by_pdl(harness, monkeypatch, d
     if pdl_diff is None:
         assert measured == [] and r["pdl"] is None
     else:
-        assert measured == [("fp-rl-007", "fp-rl-009", {"weights": "old"}, {"weights": "mine"}, 5)]
+        assert measured == [("fp-rl-007", "fp-rl-009", {"weights": "old"}, {"weights": "mine"}, 5, "4070")]
         assert r["pdl"]["against"] == "fp-rl-007" and r["pdl"]["diff"] == pdl_diff
         assert f"差 {pdl_diff:+.2f} ± 0.10" in E.report(r)
 

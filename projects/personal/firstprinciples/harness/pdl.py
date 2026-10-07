@@ -28,9 +28,11 @@ nothing. Why it is unbiased:
 Rule packages run in the worker as the development set runs them (inline,
 frozen); model versions through the host's inference service. Decisions have
 no time limit here, so a version that times out on the development set is
-measured as if it had not.
+measured as if it had not. On the Mac (host "local") the workers are local
+processes; on a GPU host they run through harness.hostrun, the RL attempts'
+measurements on the host that trained them.
 
-  python -m harness.pdl run <a> <b> [--hands 32000] [--host local] [--seed S] [--k 16]
+  python -m harness.pdl run <a> <b> [--hands 32000] [--host local|4070|4090|5070ti] [--seed S] [--k 16]
 
 Results append to .local/pdl-results.jsonl.
 """
@@ -39,6 +41,7 @@ import json
 import math
 import os
 import random
+import shutil
 import subprocess
 import sys
 import time
@@ -101,6 +104,98 @@ def summarize(results, blocks, rounds):
                 snapshots=sum(len(r["snapshots"]) for r in results), dealer_edge=edge, draw_rate=p)
 
 
+def task_of(policies, lineups, pool, blocks, w, workers, seed, k, guided):
+    return dict(policies=policies, lineups=lineups, config=pool["config"], blocks=list(range(w, blocks, workers)),
+                seed=seed, k=k, guided=guided)
+
+
+def collect(job):
+    value = E.read_json(job / "result.json") if (job / "result.json").exists() else {}
+    if value.get("status") != "completed":
+        raise RuntimeError(f"PDL {job.name}: {value.get('status')} {str(value.get('error'))[-1500:]}")
+    return value
+
+
+def on_mac(root, policies, lineups, pool, blocks, seed, k, weights):
+    """The workers as local processes; model seats through the Mac's inference service."""
+    env = dict(os.environ, PYTHONPATH=pool["runtime_path"], **E._job_env(pool))
+    if weights:
+        from mahjong_ai.execution.model_seat import ENCODER_ENV
+        from mahjong_ai.execution.model_service import SERVER_ENV, ModelService
+
+        service = E._services.setdefault("local", ModelService(root=E.MODELS, log=E.LOCAL / "model-server.log"))
+        service.warm(weights)
+        env[SERVER_ENV], env[ENCODER_ENV] = service.url(), str(service.project)
+    workers = min(E.EVAL_WORKERS["local"], blocks)
+    running = []
+    for w in range(workers):
+        job = root / f"w{w:02d}"
+        job.mkdir(parents=True, exist_ok=True)
+        (job / "result.json").unlink(missing_ok=True)
+        E.atomic_json(job / "task.json", task_of(policies, lineups, pool, blocks, w, workers, seed, k, str(GUIDED)))
+        with (job / "worker.log").open("ab") as out:
+            running.append((job, subprocess.Popen([sys.executable, "-B", str(HERE / "pdl_worker.py"), str(job)],
+                                                  cwd=E.REPO, env=env, stdin=subprocess.DEVNULL, stdout=out,
+                                                  stderr=out, start_new_session=True)))
+    for _, process in running:
+        process.wait()
+    return [collect(job) for job, _ in running]
+
+
+LAUNCH = """import json, os, pathlib, subprocess, sys
+root = pathlib.Path(__file__).resolve().parent
+env = dict(os.environ, **json.loads((root / "env.json").read_text()))
+running = []
+for job in sorted(p for p in root.iterdir() if (p / "task.json").exists()):
+    (job / "result.json").unlink(missing_ok=True)
+    out = open(job / "worker.log", "ab")
+    running.append(subprocess.Popen([sys.executable, "-B", str(root / "pdl_worker.py"), str(job)], cwd=root, env=env,
+                                    stdin=subprocess.DEVNULL, stdout=out, stderr=out))
+for p in running:
+    p.wait()
+"""
+
+
+def on_host(host, root, policies, lineups, pool, blocks, seed, k, weights):
+    """The workers on a GPU host (harness.hostrun): the pool's runtime and the rule packages mirrored there,
+    model seats through the host's inference service, the stable wall from a copy of guided/walls.py."""
+    from . import hostrun
+
+    h = E.remote_host(host)
+    name = f"pdl-{root.name}"
+    where = hostrun.target(h, name)
+    stage = root / f"on-{host}"
+    shutil.rmtree(stage, ignore_errors=True)
+    stage.mkdir(parents=True)
+    shutil.copy(HERE / "pdl_worker.py", stage)
+    shutil.copy(GUIDED / "walls.py", stage)
+    (stage / "launch.py").write_text(LAUNCH)
+    E.atomic_json(stage / "env.json", E._job_env(pool))
+    packages, mirrored = set(), {}
+    for n, spec in policies.items():
+        if spec.get("package_path"):
+            packages.add(spec["package_path"])
+            spec = dict(spec, package_path=h.remote_path(Path(spec["package_path"])))
+        mirrored[n] = spec
+    workers = min(E.EVAL_WORKERS[host], blocks)
+    for w in range(workers):
+        (stage / f"w{w:02d}").mkdir()
+        E.atomic_json(stage / f"w{w:02d}" / "task.json", task_of(mirrored, lineups, pool, blocks, w, workers, seed, k, where))
+    hostrun.push(stage, host, name)
+    hostrun.run(name, host, ["python", "launch.py"], sync=sorted(packages), models=sorted(weights))
+    alive = f"""import json,os,pathlib
+pid=int(pathlib.Path({where!r},'run.pid').read_text())
+try:
+    os.kill(pid,0); print(json.dumps(True))
+except Exception:
+    print(json.dumps(False))"""
+    while h.python(alive, timeout=120):
+        time.sleep(20)
+    jobs = [f"w{w:02d}" for w in range(workers)]
+    hostrun.fetch(name, host, [f"{j}/result.json" for j in jobs] + [f"{j}/worker.log" for j in jobs], to=stage / "out")
+    return [collect(stage / "out" / j) for j in jobs]
+
+
 def measure(a_id, b_id, *, hands=None, seed=None, host="local", k=None, a_spec=None, b_spec=None, reuse=True,
             field=None):
     """V(b) - V(a), points per game on the fixed pool (see the module docstring); appended to pdl-results.jsonl.
@@ -113,8 +208,6 @@ def measure(a_id, b_id, *, hands=None, seed=None, host="local", k=None, a_spec=N
     """
     import fcntl
 
-    if host != "local":
-        raise E.Refused("PDL 目前只在 Mac 上跑")
     hands, k = hands or HANDS, k or K
     pool = E.load_pool()
     rounds = int(pool["config"]["rounds"])
@@ -132,40 +225,16 @@ def measure(a_id, b_id, *, hands=None, seed=None, host="local", k=None, a_spec=N
     opponents, lineups = (field["members"], field["lineups"]) if field else (E.playing(pool), E.lineups(pool))
     policies = dict(opponents, **{n: E.with_timeouts(s) for n, s in specs.items()})
     root = E.LOCAL / "pdl" / (f"{a_id}--{b_id}--{seed}--{blocks}x{k}" + (f"--{field_id}" if field else ""))
-    env = dict(os.environ, PYTHONPATH=pool["runtime_path"], **E._job_env(pool))
     E.LOCAL.mkdir(parents=True, exist_ok=True)
     started = time.time()
     with (E.LOCAL / f"evaluation-{host}.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)  # one evaluation per host at a time, as E.play
         weights = {s["parameters"]["weights"] for s in policies.values() if s.get("family") == "model"}
-        if weights:
-            from mahjong_ai.execution.model_seat import ENCODER_ENV
-            from mahjong_ai.execution.model_service import SERVER_ENV, ModelService
-
-            service = E._services.setdefault("local", ModelService(root=E.MODELS, log=E.LOCAL / "model-server.log"))
-            service.warm(weights)
-            env[SERVER_ENV], env[ENCODER_ENV] = service.url(), str(service.project)
-        workers = min(E.EVAL_WORKERS[host], blocks)
-        running = []
-        for w in range(workers):
-            job = root / f"w{w:02d}"
-            job.mkdir(parents=True, exist_ok=True)
-            (job / "result.json").unlink(missing_ok=True)
-            E.atomic_json(job / "task.json", dict(policies=policies, lineups=lineups, config=pool["config"],
-                                                   blocks=list(range(w, blocks, workers)), seed=seed, k=k,
-                                                   guided=str(GUIDED)))
-            with (job / "worker.log").open("ab") as out:
-                running.append((job, subprocess.Popen([sys.executable, "-B", str(HERE / "pdl_worker.py"), str(job)],
-                                                      cwd=E.REPO, env=env, stdin=subprocess.DEVNULL, stdout=out,
-                                                      stderr=out, start_new_session=True)))
-        results = []
-        for job, process in running:
-            process.wait()
-            value = E.read_json(job / "result.json") if (job / "result.json").exists() else {}
-            if value.get("status") != "completed":
-                raise RuntimeError(f"PDL {job.name}: {value.get('status')} {str(value.get('error'))[-1500:]}")
-            results.append(value)
-    entry = dict(a=a_id, b=b_id, pool=pool["id"], field=field_id, seed=seed, hands=blocks * 4 * rounds, games=blocks * 4, k=k,
+        if host != "local":
+            results = on_host(host, root, policies, lineups, pool, blocks, seed, k, weights)
+        else:
+            results = on_mac(root, policies, lineups, pool, blocks, seed, k, weights)
+    entry = dict(a=a_id, b=b_id, pool=pool["id"], field=field_id, host=host, seed=seed, hands=blocks * 4 * rounds, games=blocks * 4, k=k,
                  versions=versions,
                  seconds=time.time() - started, at=time.time(), **summarize(results, blocks, rounds))
     with results_path().open("a") as f:

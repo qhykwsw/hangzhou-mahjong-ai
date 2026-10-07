@@ -1131,7 +1131,7 @@ def judge(pool, line, attempt_id, spec, scores, champion, host, seed=None):
     """The verdict against the line's best version: (status, pdl, confirm, the best compared with).
 
     Below the best by CLOSE or more: discarded. Within CLOSE: the paired
-    performance difference on fresh walls (harness.pdl, on the Mac), the best
+    performance difference on fresh walls (harness.pdl, on the attempt's host), the best
     version continuing at each of the attempt's decisions where it would act
     otherwise. Further above: the confirmation set, both versions replaying the
     same fresh walls. A best version that changes meanwhile is compared on the
@@ -1147,8 +1147,8 @@ def judge(pool, line, attempt_id, spec, scores, champion, host, seed=None):
         if diff <= -CLOSE:
             return "discard", None, None, champion
         if diff <= CLOSE:
-            free_host(attempt_id)
-            e = pdl.measure(champion["id"], attempt_id, seed=seed, a_spec=champion["spec"], b_spec=spec)
+            # On the attempt's own host: the Mac for the rule line, the GPU host that trained an RL attempt.
+            e = pdl.measure(champion["id"], attempt_id, seed=seed, a_spec=champion["spec"], b_spec=spec, host=host)
         else:
             if mine is None:
                 mine, _ = play(pool, attempt_id, spec, range(CONFIRM_BLOCKS), seed, "confirm", host)
