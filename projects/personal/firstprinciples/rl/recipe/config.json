@@ -8,9 +8,9 @@
   "critic_learning_rate": 0.0003,
   "resident_rows": true,
   "gradient_graphs": true,
-  "distill_steps": 0,
-  "distill_learning_rate": 0.0002,
-  "distill_epochs": 4,
+  "distill_steps": 4,
+  "distill_learning_rate": 5e-05,
+  "distill_epochs": 1,
   "teacher": "fp-rule-062",
   "chunks_per_step": 3,
   "playout_baseline": true,
@@ -34,5 +34,6 @@
       "fp-rl-184",
       "fp-rule-131"
     ]
-  }
+  },
+  "anchor_version": "fp-rl-196"
 }
