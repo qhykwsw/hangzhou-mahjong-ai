@@ -28,7 +28,10 @@ def candidates(row, legal):
 
 
 def play(game, slots=None):
-    """Drive a game and its copies as the worker does, the scripted learner answering (with candidates)."""
+    """Drive a game and its copies as the worker does, the scripted learner answering (with candidates).
+
+    ``slots`` collects (kind of copy, slot) of the copies' requests.
+    """
     requests = 0
     while True:
         for shadow in game.shadows:
@@ -37,7 +40,7 @@ def play(game, slots=None):
                 if request is None:
                     break
                 if slots is not None:
-                    slots.append(request["slot"])
+                    slots.append((type(shadow).__name__.removeprefix("Fast"), request["slot"]))
                 legal = [int(i) for i in np.flatnonzero(request["row"]["mask"])]
                 shadow.apply((learner(request["row"], legal)[1], -0.25, 0.0, 0))
                 requests += 1
@@ -64,7 +67,7 @@ def plain(value):
 
 
 def both(cfg, members, monkeypatch, seats, seed, *, entries=None):
-    """The same game on the Python and the C engine, played out; (games, request counts)."""
+    """The same game on the Python and the C engine, played out; (games, the copies' request slots)."""
     if entries is None:
         by_id = {f"m{i}": m for i, m in enumerate(members)}
         monkeypatch.setattr(artifacts, "build_policy", lambda bundle, cid: by_id[cid])
@@ -73,11 +76,13 @@ def both(cfg, members, monkeypatch, seats, seed, *, entries=None):
     games = [cls(cfg, {"entries": []}, entries, seats, seed, focal=focal, train=True)
              for cls in (Game, fastgame.FastGame)]
     assert games[1].seats is not None
-    counts = [play(game) for game in games]
+    slots = [[], []]
+    counts = [play(game, seen) for game, seen in zip(games, slots)]
     assert counts[0] == counts[1] > 50
+    assert slots[0] == slots[1]
     assert games[0].scores == games[1].scores
     assert plain(games[0].rows) == plain(games[1].rows)
-    return games, counts
+    return games, slots[1]
 
 
 BASE = {"playout_baseline": True, "branches": 3}
@@ -161,6 +166,157 @@ def test_a_candidate_copy_is_the_hand_it_continues(members, monkeypatch):
             else:
                 assert deviation == same
         assert checked > 5
+
+
+def tables(members, monkeypatch, python_ids, extra=None):
+    """build_policy for members m0.., PythonRule seats under ``python_ids`` and ``extra`` ids; the entries."""
+    entries, _ = rule_table(members, monkeypatch, python_ids)
+    build = artifacts.build_policy
+    extra = extra or {}
+    monkeypatch.setattr(artifacts, "build_policy", lambda bundle, cid: extra[cid]() if cid in extra else build(bundle, cid))
+    return entries | {k: None for k in extra}
+
+
+@pytest.mark.parametrize("extra", [{}, {"vine": True, "stable_wall": True, "luck": True},
+                                   {"stage": {"kind": "final", "games": 10, "per_game_sd": 70}}])
+def test_a_rule_continuation_and_its_control_play_the_same_on_both_engines(members, monkeypatch, extra):
+    """The learner continues as a race member (in C), one opponent becomes another member, one a rule
+    deciding in Python; every row with candidates also gets its argmax under the same continuation."""
+    entries = tables(members, monkeypatch, {"py": 3})
+    cfg = configuration(rounds=16, lookahead=True, gae_lambda=0.95) | BASE | extra | {
+        "branch_continuation": {"learner": "m2", "opponents": {"m1": "m5", "m4": "py"}}, "branch_control": True}
+    games, slots = both(cfg, members, monkeypatch, ["m4", "model:current", "m1", "m0"],
+                        seed_for(73, "branch-continuation", str(sorted(extra))), entries=entries)
+    plan = games[1]._branch_seats
+    assert plan.python == {0} and plan.slots == {} and -1 not in plan.profiles[1:]
+    # The copies ask the parent nothing: every seat of the continuation is a rule.
+    assert not any(kind == "Branch" for kind, _ in slots)
+    branched = [row for row in games[1].rows if "branches" in row]
+    assert len(branched) > 20
+    for row in branched:
+        control = row["branch_control"]
+        assert control["action"] == learner(row, list(np.flatnonzero(row["mask"])))[1]
+        assert control["truncated"] is False and "playout" in control
+    assert not any("branch_control" in row for row in games[1].rows if "branches" not in row)
+    # The continuation's Python rule saw the same Observations on both engines.
+    python, fast = games[0]._branch_seats[0][1], games[1]._branch_seats.policies[0]
+    assert python.seen == fast.seen and len(fast.seen) > 50
+
+
+def test_a_model_continuation_asks_the_parent_under_its_slot(members, monkeypatch):
+    cfg = configuration(rounds=16, lookahead=True, gae_lambda=0.95) | BASE | {
+        "branch_continuation": {"learner": "model:snapshot", "opponents": {"m3": "model:cheap"}}}
+    _, slots = both(cfg, members, monkeypatch, ["model:current", "m1", "m3", "m5"], seed_for(79, "branch-model"))
+    assert {slot for kind, slot in slots if kind == "Branch"} == {"model:snapshot", "model:cheap"}
+    assert {slot for kind, slot in slots if kind == "Shadow"} == {GREEDY}
+
+
+def test_continuation_options_are_checked(members, monkeypatch):
+    by_id = {f"m{i}": m for i, m in enumerate(members)}
+    monkeypatch.setattr(artifacts, "build_policy", lambda bundle, cid: by_id[cid])
+    cfg = configuration(rounds=16, lookahead=True) | BASE
+    seats = ["model:current", "m1", "m2", "m3"]
+    for bad, match in [({"branch_continuation": {"learner": "model:current"}}, "cannot continue"),
+                       ({"branch_continuation": {"leaner": "m1"}}, "is {'learner'"),
+                       ({"branches": 0, "branch_control": True}, "need cfg")]:
+        with pytest.raises(ValueError, match=match):
+            Game(cfg | bad, {"entries": []}, {k: None for k in by_id}, seats, 1, train=True)
+    for cls in (Game, fastgame.FastGame):
+        with pytest.raises(ValueError, match="unknown branch continuation"):
+            cls(cfg | {"branch_continuation": {"learner": "nowhere"}}, {"entries": []}, {k: None for k in by_id},
+                seats, 1, train=True)
+
+
+RULE131 = Path(__import__("os").environ.get("RULE131_PACKAGE")
+               or PROJECT.parents[2] / "projects/personal/firstprinciples/.local/attempts/fp-rule-131/package")
+needs131 = pytest.mark.skipif(not fastgame._is_rule131(str(RULE131)), reason="fp-rule-131's frozen package is not here")
+
+
+def rule131():
+    from test_guided_rule131 import rule131 as load
+
+    return load()
+
+
+@needs131
+@pytest.mark.parametrize("extra", [{}, {"vine": True, "stable_wall": True, "luck": True}])
+def test_a_131_continuation_and_its_control_play_the_same_on_both_engines(members, monkeypatch, extra):
+    entries = tables(members, monkeypatch, {}, {"r131": rule131})
+    cfg = configuration(rounds=8, lookahead=True, gae_lambda=0.95) | BASE | extra | {
+        "branch_continuation": {"learner": "r131", "opponents": None}, "branch_control": True}
+    games, slots = both(cfg, members, monkeypatch, ["m1", "m3", "model:current", "m4"],
+                        seed_for(83, "branch-131", str(sorted(extra))), entries=entries)
+    plan = games[1]._branch_seats
+    assert not plan.python and plan.profiles[2] == fastgame.rule131_member(plan.policies[2])[0]
+    assert -1 not in plan.profiles and not any(kind == "Branch" for kind, _ in slots)
+    assert sum("branch_control" in row for row in games[1].rows) > 10
+
+
+@needs131
+def test_131_candidates_and_their_control_continue_on_one_wall(members, monkeypatch):
+    """A one-hand game, by hand: at the learner's first discard (no kong, no win) with three plain
+    discards (not the white) the answer names the lowest as its argmax and the next two as candidates. Each copy starts
+    from that very hand (the remaining wall the same tiles in the same order in all three), plays its
+    discard, then fp-rule-131 plays the learner's seat in C and the members the others, to the end:
+    each result is the hand an independent replay of that discard reaches from the same fork, so a
+    candidate's playout minus the control's compares two discards on one wall and one continuation."""
+    entries = tables(members, monkeypatch, {}, {"r131": rule131})
+    cfg = configuration(rounds=1, lookahead=True, gae_lambda=0.95) | {
+        "playout_baseline": True, "stable_wall": True, "branches": 2,
+        "branch_continuation": {"learner": "r131"}, "branch_control": True}
+    seats = ["model:current", "m1", "m3", "m4"]
+    member = fastgame.rule131_member(rule131())
+    rows = []
+    for cls in (Game, fastgame.FastGame):
+        game = cls(cfg, {"entries": []}, entries, seats, seed_for(89, "branch-131-by-hand", 0), focal=0, train=True)
+        asked = None
+        while True:
+            for shadow in game.shadows:
+                while not shadow.done:
+                    request = shadow.advance()
+                    assert request is None or request["slot"] == GREEDY  # only the deviation copies ask
+                    if request is None:
+                        break
+                    legal = [int(i) for i in np.flatnonzero(request["row"]["mask"])]
+                    shadow.apply((legal[0], 0.0, 0.0, 0))
+            request = game.advance()
+            if request is None:
+                if game.settled():
+                    break
+                continue
+            legal = [int(i) for i in np.flatnonzero(request["row"]["mask"])]
+            plain_discards = [i for i in legal if i < 33]  # not the white: its discard draws at once
+            if asked is None and len(plain_discards) >= 3 and max(legal) < 34:
+                asked = plain_discards[:3]
+                if cls is fastgame.FastGame:
+                    fork = game.state.fork()
+                    copies_start = len(game.shadows)
+                game.apply((asked[0], -0.5, 0.0, asked[0], tuple(asked[1:])))
+                if cls is fastgame.FastGame:
+                    walls = [s.state.snapshot()["wall"] for s in game.shadows[copies_start:]]
+                    assert len(walls) == 3 and walls[0] == walls[1] == walls[2] == fork.snapshot()["wall"]
+                continue
+            game.apply((legal[0], -0.5, 0.0, legal[0], ()))
+        assert asked is not None
+        rows.append(next(row for row in game.rows if "branches" in row))
+    assert plain(rows[0]) == plain(rows[1])
+    row = rows[1]
+    assert [b["action"] for b in row["branches"]] == asked[1:] and row["branch_control"]["action"] == asked[0]
+    # The independent replays from the same fork: 131 in the learner's seat, the members in the others'.
+    plans = [member] + [fastgame.race_member(members[int(s[1:])]) for s in seats[1:]]
+    profiles, fallbacks = tuple(p for p, _ in plans), tuple(f for _, f in plans)
+    for result in (*row["branches"], row["branch_control"]):
+        hand = fork.fork()
+        hand.step(result["action"])
+        assert hand.run(profiles, fallbacks) is None
+        base = game.config.base_score
+        assert result["playout"] == hand.delta[0] / base
+        assert result["playout_scores"] == [d / base for d in hand.delta]
+    # The example by hand: the argmax discards tile 5, the candidates tiles 9 and 12; on the same wall the
+    # first candidate's hand ends +24 for the learner, the second's -16, the argmax's -8, so the paired
+    # differences to the control are +32 and -8.
+    assert asked == [5, 9, 12]
+    assert [b["playout"] for b in row["branches"]] == [24.0, -16.0] and row["branch_control"]["playout"] == -8.0
 
 
 def test_without_branches_no_row_carries_them_and_stray_candidates_fail(members, monkeypatch):

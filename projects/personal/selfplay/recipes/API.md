@@ -129,8 +129,16 @@
 - 每个候选从同一决策点各 fork 一份，走该候选；之后学习座位走当前 Actor 的 argmax，其余座位照常（规则照常决策，模型对手取 argmax），牌墙、稳定牌墙与运气记录沿用对局本身的。
 - 对局本身和单个偏离副本的行为不变；两种引擎（Python 的 `Game`、C 的 `FastGame`）逐位一致。
 
+**续打策略与控制副本**
+- `cfg["branch_continuation"] = {"learner": "greedy" | ID, "opponents": {ID: ID} | None}`：副本走完候选之后怎么打。
+  - `learner` 是学习座位：`"greedy"`（默认，当前 Actor 的 argmax）、一个规则版本 ID（如 `"fp-rule-131"`，race 成员和 fp-rule-131 在 C 里决策，其他规则在 Python 里决策），或 `ctx.catalog`／`ctx.opponents` 里的模型（父进程取它的 argmax），也可以是 `history` 里的 `"model:名字"`。
+  - `opponents` 把对局里某个对手（键按 `cfg["opponents"]` 的 ID 写）换成另一个规则或模型，用于抽象对手、便宜对手续打；没列出的座位照对局本身打。
+  - ID 取自 `ctx.opponents`、`ctx.catalog` 或 `ctx.rules`，未知 ID 报错；不能用正在采样的学习者本身。续打里的规则每个座位各有一份策略，按本场种子重置。
+- `cfg["branch_control"] = True`：有候选的行另开一个副本，走 argmax、用同一续打策略，写进 `branch_control`（字段同 `branches` 的一项）。它和候选副本从同一个 fork 出发、同一副牌墙、同样的座位，候选减控制就是配对差。
+
 **写回该行的字段**
 - `branches`：按候选顺序的列表，每项 `{"action", "truncated": False, "playout", "playout_scores", "playout_dealer", "playout_deals_next"}`，含义同偏离行的同名字段；开 `luck` 时另有 `playout_luck_pay`、`playout_luck_deal`。
+- `branch_control`：开 `branch_control` 时，有候选的行才带。
 - 没有候选的行不带 `branches`。`finish_game` 在该场所有副本打完后才调用。
 - 副本不产生训练行、不计入 `samples` 和局数预算，但要多打：多出的推理请求约等于候选数乘以本局剩余的学习决策数。
 

@@ -112,10 +112,13 @@ class Game:
 
         self.stage = start(cfg, seed)
         # cfg["branches"] (guided.branches): a recipe's candidates at a learning decision, each played out in a copy.
-        from .branches import options
+        from .branches import options, seat_plan
 
         self.branching = options(cfg, train)
-        self._branch_seats = None
+        # A branch continuation's rule versions come from where the seats' do;
+        # how each seat plays in the copies is settled once, for the whole game.
+        self._sources = (entries, external) if self.branching else None
+        self._branch_seats = seat_plan(self) if self.branching else None
         self.searched, self.window = 0, None
         self.shadows = []
         self.unfinished = False
@@ -331,13 +334,11 @@ class Game:
     def _branch_copy(self, world, index, legal, result):
         """A copy of ``world`` playing the candidate ``index`` (guided.branches.Branch)."""
         from selfplay_core.actions import action_index
-        from .branches import Branch, seat_plan
+        from .branches import Branch
 
         move = next((a for a in legal if action_index(a) == index), None)
         if move is None:
             raise ValueError("a branch candidate is not a legal action")
-        if self._branch_seats is None:
-            self._branch_seats = seat_plan(self)
         self.shadows.append(Branch(self, fork(world), move, legal, result, self._branch_seats))
 
     def settled(self):

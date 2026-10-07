@@ -193,6 +193,10 @@ class FastGame(Game):
         # fp-rule-131 as the teacher labels on the C hand (_label).
         self.teacher_member = None if self.teacher is None else rule131_member(self.teacher)
         self.mirrored = bool(python) or (self.teacher is not None and self.teacher_member is None)
+        if self.branching is not None:
+            # The copies' seats on the C hand; their Python seats read the game's public history too.
+            self._branch_seats = self._branch_plan(self._branch_seats)
+            self.mirrored = self.mirrored or bool(self._branch_seats.python)
         return tuple(profiles), tuple(fallbacks)
 
     def _mirror(self):
@@ -359,16 +363,12 @@ class FastGame(Game):
             return super()._branch_copy(world, index, legal, result)
         if index not in legal:
             raise ValueError("a branch candidate is not a legal action")
-        if self._branch_seats is None:
-            self._branch_seats = self._branch_plan()
         self.shadows.append(FastBranch(self, world.fork(), index, result, self._branch_seats))
 
-    def _branch_plan(self):
-        """guided.branches.seat_plan for the C hand: run's profiles, the seats deciding in Python, the model slots."""
-        from .branches import seat_plan
-
+    def _branch_plan(self, plan):
+        """guided.branches.seat_plan's ``plan`` on the C hand: run's profiles, the seats deciding in Python, the model slots."""
         profiles, fallbacks, python, policies, slots = [], [], set(), {}, {}
-        for seat, (kind, who) in enumerate(seat_plan(self)):
+        for seat, (kind, who) in enumerate(plan):
             member = None
             if kind == "model":
                 slots[seat] = who
