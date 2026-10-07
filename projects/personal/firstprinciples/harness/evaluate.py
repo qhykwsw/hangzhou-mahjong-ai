@@ -1096,20 +1096,13 @@ def evaluate(line, spec, description, attempt_id=None, design_seconds=None, host
     reference = line == "reference"
     host = host or EVAL_HOST[line]
     started = time.time()
-    confirm = pdl = proxy = None
+    confirm = pdl = None
     scores, stats = play(pool, attempt_id, spec, range(DEV_BLOCKS), pool["dev_seed"], "dev", host)
     champion = None if reference else best(pool["id"], line)
     if champion is None:
         verdict = "reference" if reference else "keep"
-        if not reference:
-            proxy = proxy_tables(attempt_id, spec, host)  # a line's first version: on record, nothing to pair with
     else:
         verdict, pdl, confirm, champion = judge(pool, line, attempt_id, spec, scores, champion, host, confirm_seed)
-        if verdict == "keep":
-            # The lines build the semifinal and final version against strong opponents
-            # (user, 10-05); a new best version's proxy tables are on record only, for
-            # the qualifier version (harness.qualifier) to measure itself against.
-            proxy = proxy_tables(attempt_id, spec, host, champion)
     score, se = mean_se(scores[k] for k in range(DEV_BLOCKS))
     record = dict(
         id=attempt_id, line=line, pool=pool["id"], status=verdict, description=description, host=host,
@@ -1121,9 +1114,17 @@ def evaluate(line, spec, description, attempt_id=None, design_seconds=None, host
     ) | (extra or {})
     if verdict == "keep":
         record["reference"] = against_platform(record)
-    if proxy is not None:
-        record["proxy"] = proxy
     append_record(record)
+    if verdict == "keep":
+        # The lines build the semifinal and final version against strong opponents
+        # (user, 10-05); a new best version's proxy tables are on record only, for
+        # the qualifier version (harness.qualifier) to measure itself against. They
+        # are played after the record is out (the line's best, the catalog and the
+        # lines page do not wait for them, user 10-07) and the record is appended
+        # again with them; a line's first version has nothing to pair with.
+        record = record | {"proxy": proxy_tables(attempt_id, spec, host, champion)}
+        with records_path().open("a") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
     return record
 
 
