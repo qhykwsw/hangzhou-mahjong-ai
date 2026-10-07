@@ -469,3 +469,13 @@ def test_the_graph_path_feeds_the_learner_the_rows_oracle(rules, monkeypatch):
     session = SimpleNamespace(resolve=lambda actor, history, options, factory: (graphs, actor))
     check_oracle_collection(monkeypatch, session=session)
     assert any(len(key[3]) == 3 for key in graphs.graphs) and any(len(key[3]) == 2 for key in graphs.graphs)
+
+
+def test_the_gpu_probe_passes_on_the_cpu_stand_in():
+    """guided.probe_oracle_graphs (the CUDA check for the maintainer) on CpuGraphs, so its logic stays sound."""
+    from guided.probe_oracle_graphs import check, passed
+
+    torch.manual_seed(23)
+    actor = trained(Actor(32, 2, 4)).eval()
+    report = check(actor, CpuGraphs(), "cpu", 8)
+    assert passed(report) and report["argmax_agree"] == report["refreshed"] == report["plain_agree"] == 1.0
