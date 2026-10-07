@@ -376,106 +376,6 @@ def distill(actor, rows, opt, size, device, rng, epochs, *, batch_source=None, p
     return stats
 
 
-def distill_anchored(actor, anchor, rows, opt, size, device, rng, epochs, claim_weight, claim_focus=1.0,
-                     only_where_ahead=False, chi_only=False):
-    """The teacher at the claim windows, the start Actor's own distribution elsewhere.
-
-    cfg["respond_only"] (second form): 201 relabelled every other row with the
-    start Actor's argmax and fitted those hard labels, and lost 1.0 a game: a
-    policy-gradient Actor has many near ties, its argmax in fp32 and under
-    bf16 autocast disagree on ~2% of rows, and fitting those labels redraws
-    the fine logit structure the policy gradient left. Here a claim window
-    (a chi or a peng legal, no kong, no win) keeps the rule teacher's label
-    (cross entropy, weight `claim_weight`), and every other row is pulled to
-    the frozen start Actor's own distribution, KL(start || current), with both
-    networks under the same autocast, so an untouched Actor has zero loss
-    there.
-    """
-    from selfplay_core.actions import CHI, GANG_EXPOSED, HU, PASS, PENG
-
-    from mahjong_ai.domain.types import StageKind
-
-    teacher = np.array([r["teacher"] for r in rows])
-    claim = np.array([bool(np.asarray(r["mask"])[CHI:GANG_EXPOSED].any()) and not np.asarray(r["mask"])[GANG_EXPOSED:HU + 1].any()
-                      for r in rows]) & (teacher >= 0)
-    # Where the rule line found the gap largest (R55 and its breakdown): holding
-    # two whites, or one step or less from ready. Those claim rows weigh
-    # `claim_focus` times more. selfplay_core's scalars: the own fan state
-    # starts after the score context, horizon, seats and wall (whites held at
-    # +5), the shape summary's (8 - shanten) / 9 at +32.
-    base = 11 + 4 + len(StageKind) + 11 + 6
-    whites = np.array([round(float(r["scalars"][base + 5]) * 4) for r in rows])
-    shanten = np.array([8 - round(float(r["scalars"][base + 32]) * 9) for r in rows])
-    focus = claim & ((whites >= 2) | (shanten <= 1))
-    weight_np = np.where(focus, claim_weight * float(claim_focus), claim_weight)
-    actor.eval()
-    total, claim_ce, claim_agree, kl_sum, start_differs, n_target = 0.0, 0.0, 0.0, 0.0, 0, 0
-    for epoch in range(epochs):
-        order = rng.permutation(len(rows))
-        for s in range(0, len(order), size):
-            idx = order[s : s + size]
-            mb = make_batch([rows[i] for i in idx], device)
-            with torch.autocast("cuda", dtype=torch.bfloat16):
-                logits = actor(*actor_args(mb))
-                with torch.no_grad():
-                    ref = anchor(*actor_args(mb))
-            logp = masked_log_probs(logits, mb["mask"])
-            ref_logp = masked_log_probs(ref, mb["mask"]).detach()
-            is_claim = torch.as_tensor(claim[idx], device=device)
-            label = torch.as_tensor(np.where(claim[idx], teacher[idx], 0), device=device)
-            if only_where_ahead:
-                # cfg["respond_where_ahead"]: the teacher's label only where the
-                # rule line measured it ahead of 196 (R56, and 205's breakdown):
-                # which chi, given the start Actor chis, and passing at two
-                # from ready where the start Actor chis. Every other claim row
-                # keeps the start Actor's own distribution, as the rest do.
-                start = ref_logp.argmax(-1)
-                start_chi = (start >= CHI) & (start < PENG)
-                two = torch.as_tensor(shanten[idx] == 2, device=device)
-                is_claim = is_claim & start_chi & (((label >= CHI) & (label < PENG)) | (two & (label == PASS)))
-            ce = -logp.gather(1, label[:, None]).squeeze(1)
-            kl = (ref_logp.exp() * (ref_logp - logp)).masked_fill(~mb["mask"], 0.0).sum(1)
-            if chi_only:
-                # cfg["respond_chi_only"]: only which chi, where the start Actor
-                # chis and the teacher chis too. The target is the start Actor's
-                # own distribution with its whole chi mass moved onto the
-                # teacher's chi, so chi against pass or peng stays where the
-                # start Actor had it: 207's cross entropy over all actions also
-                # raised chi as a whole, and passes nearby turned into chis.
-                start = ref_logp.argmax(-1)
-                is_claim = is_claim & (start >= CHI) & (start < PENG) & (label >= CHI) & (label < PENG)
-                ref_p = ref_logp.exp()
-                chi = torch.zeros_like(ref_p, dtype=torch.bool)
-                chi[:, CHI:PENG] = True
-                target = ref_p.masked_fill(chi, 0.0).scatter(1, label[:, None], (ref_p * chi).sum(1, keepdim=True))
-                ce = (target * (target.clamp_min(1e-30).log() - logp)).masked_fill(~mb["mask"], 0.0).sum(1)
-            w = torch.as_tensor(weight_np[idx], device=device, dtype=ce.dtype)
-            loss = torch.where(is_claim, w * ce, kl).mean()
-            opt.zero_grad(set_to_none=True)
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(actor.parameters(), 1.0)
-            opt.step()
-            if epoch == 0:
-                total += float(len(idx))
-                n_claim = int(is_claim.sum())
-                n_target += n_claim
-                if n_claim:
-                    claim_ce += float(ce[is_claim].detach().sum())
-                    if chi_only:  # the chi it would pick, among the chis
-                        chosen = logp.masked_fill(~chi, -1e9).argmax(-1)
-                    else:
-                        chosen = logp.argmax(-1)
-                    claim_agree += float((chosen == label)[is_claim].sum())
-                    start_differs += int((ref_logp.argmax(-1) != label)[is_claim].sum())
-                kl_sum += float(kl[~is_claim].detach().sum())
-    opt.zero_grad(set_to_none=True)
-    n_claim = max(1, n_target)
-    return {"claim_rows": int(claim.sum()), "target_rows": n_target, "claim_focus_rows": int(focus.sum()),
-            "claim_ce": claim_ce / n_claim, "claim_agreement": claim_agree / n_claim,
-            "claim_start_differs": start_differs / n_claim, "anchor_kl": kl_sum / max(1.0, total - n_target)}
-
-
-
 def train(ctx):
     cfg = dict(CONFIG)
     # Workers, tables and batching are fixed per host by the line's harness.
@@ -518,15 +418,6 @@ def train(ctx):
     # own states (DAgger, where imitation gains fastest); the rest only take
     # policy-gradient steps. Interleaving the two made each undo the other.
     opt = torch.optim.Adam(actor.parameters(), lr=float(cfg["distill_learning_rate"]), eps=1e-5)
-    # cfg["anchor_version"]: the first distill_steps fit this catalog version's
-    # own distribution (KL(anchor || pi) on the learner's states, no teacher
-    # labels), e.g. to bring a reshaped start (rl-196-suit: 196 with its suit
-    # embeddings shared, argmax agreeing on 98.6%) back to the policy it came from.
-    anchor = None
-    if cfg.get("anchor_version"):
-        from guided.deployment import load_actor
-
-        anchor = load_actor(ctx.plan["catalog"][cfg["anchor_version"]]["path"], ctx.device)[0].eval()
     permuter = SuitPermuter(ctx.device)
     chunks = max(1, int(cfg["chunks_per_step"]))
     temperature = float(cfg.get("sample_temperature", 1.0))
@@ -547,6 +438,11 @@ def train(ctx):
     tail = float(cfg.get("tail_average", 0.0))
     average, averaged, budget, last_batches = None, 0, None, None
     improver = None
+    belief = None
+    if cfg.get("belief_aux"):
+        from .belief import BeliefTrainer
+
+        belief = BeliefTrainer(actor, cfg["belief_aux"])
 
     # Openings (ctx.starts): one-hand games from recorded rare windows (a kong
     # the teacher keeps, a self-drawn win it may pass up), where ordinary play
@@ -582,7 +478,7 @@ def train(ctx):
                 got, _, _ = ctx.collect(
                     actor, play_cfg, samples=min(40000, ordinary),
                     iteration=iteration,
-                    labels=distilling and anchor is None, inference_session=session, hooks=hooks,
+                    labels=distilling, inference_session=session, hooks=hooks,
                 )
                 rows += got
             while share and len(rows) + len(opened) < target_rows and hands() and ctx.time_left() > reserve:
@@ -591,7 +487,7 @@ def train(ctx):
                 got, _, _ = ctx.collect(
                     actor, open_cfg if not distilling else play_cfg,
                     samples=min(20000, target_rows - len(rows) - len(opened)),
-                    iteration=iteration, labels=distilling and anchor is None, inference_session=session, hooks=hooks,
+                    iteration=iteration, labels=distilling, inference_session=session, hooks=hooks,
                     starts=[pool[i] for i in rng.choice(len(pool), min(len(pool), per_call), replace=False)],
                 )
                 turn += 1
@@ -614,13 +510,9 @@ def train(ctx):
             batch_source = (resident_rows(rows, ctx.device, ctx.resources["gpu_limit_bytes"], oracle=False)
                             if cfg.get("resident_rows", False) else None)
             packing_seconds = time.time() - packing_started
-            if anchor is not None:
-                stats = distill_anchored(actor, anchor, rows, opt, microbatch, ctx.device, rng,
-                                         int(cfg["distill_epochs"]), 1.0)
-            else:
-                stats = distill(actor, rows, opt, microbatch, ctx.device, rng, int(cfg["distill_epochs"]),
-                                hard=float(cfg.get("distill_hard", 0.0)), window=float(cfg.get("distill_window", 1.0)),
-                                batch_source=batch_source, permuter=permuter)
+            stats = distill(actor, rows, opt, microbatch, ctx.device, rng, int(cfg["distill_epochs"]),
+                            hard=float(cfg.get("distill_hard", 0.0)), window=float(cfg.get("distill_window", 1.0)),
+                            batch_source=batch_source, permuter=permuter)
             count = len(rows)
             del rows, batch_source
             ctx.save_actor(actor)
@@ -722,6 +614,8 @@ def train(ctx):
                        for s in range(0, len(subset), 512)]
             parts.append(stats)
             count += len(rows)
+            if belief is not None:
+                belief.add(rows, rng)
             del rows, extra, batch_source, weights, grad
             torch.cuda.empty_cache()
         if direction is None:
@@ -762,6 +656,8 @@ def train(ctx):
             stats |= natural
         stats |= kl_step(actor, params, direction, batches, goal)
         stats["kl_goal"] = goal
+        if belief is not None:
+            stats |= belief.step(actor, ctx.device, rng, batches)
         if tail > 0 and left <= tail * budget:
             averaged += 1
             with torch.no_grad():
