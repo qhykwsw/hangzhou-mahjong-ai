@@ -1022,6 +1022,11 @@ select:disabled {
 .proxyhead {
   margin-top: 8px;
 }
+/* A long note beside a chart's heading wraps itself, not the heading. */
+.proxyhead h2 {
+  flex: none;
+  white-space: nowrap;
+}
 .proxypanel + .proxypanel {
   margin-top: 14px;
 }

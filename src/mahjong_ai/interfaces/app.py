@@ -75,8 +75,9 @@ def free_play_versions(competition):
     """Each version's free-play record, from the strongest-entrant runner's rooms (read-only view).
 
     The runner's log names each room's version. A finished room's games are read
-    from its replays once and kept in ``online-rooms.jsonl``. Games with an AFK
-    opponent are left out of the readout; its SE is clustered by room. Versions
+    from its replays once and kept in ``online-rooms.jsonl``. The readout is given
+    without the games where an opponent was AFK and over all games (``all_``),
+    each with an SE clustered by room. Versions
     with fewer than ONLINE_MIN_ROOMS rooms are listed but not scored.
     """
     log = competition / "free-play-strongest.log"
@@ -135,13 +136,15 @@ def free_play_versions(competition):
         spread = sum((sum(g[0] for g in c) - mean * len(c)) ** 2 for c in clean)
         se = (spread * len(clean) / (len(clean) - 1)) ** 0.5 / n
         every = [g for _, _, games in played for g in games]
+        all_mean = sum(g[0] for g in every) / len(every)
+        all_spread = sum((sum(g[0] for g in games) - all_mean * len(games)) ** 2 for _, _, games in played)
         room_ranks = [ranks[room] for room, _, _ in played if room in ranks]
         rows.append({
             "version": version, "rooms": len(played), "games": len(every), "clean_games": n,
             "mean": mean, "se": se, "per_hand": total / sum(g[2] for c in clean for g in c),
             "place": sum(g[1] for c in clean for g in c) / n,
             "first": sum(g[1] == 1 for c in clean for g in c) / n,
-            "all_mean": sum(g[0] for g in every) / len(every),
+            "all_mean": all_mean, "all_se": (all_spread * len(played) / (len(played) - 1)) ** 0.5 / len(every),
             "room_rank": sum(room_ranks) / len(room_ranks) if room_ranks else None,
             "from": min(s for _, s, _ in played), "to": max(s for _, s, _ in played),
             "playing": version in playing})
