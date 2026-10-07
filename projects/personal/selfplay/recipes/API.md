@@ -4,7 +4,7 @@
 
 ## 固定不变
 
-- Actor 的网络结构和观察编码。`ctx.actor` 从本方案线的固定起点加载；返回的权重必须能严格载入同一结构，否则本次尝试记为崩溃。起点可以带可选结构（起点 `meta.json` 的 `config`，如信念头、花色共享嵌入，见 [guided README](../guided/README.md) 的「Actor 的可选结构」），`ctx.new_actor()` 与导出沿用它；带信念头（`belief_head`）时 `actor(..., return_belief=True)` 另返回三家对手手牌的 3×34 logits，方案可用行里的 `oracle_planes` 经 `guided.networks.belief_target` 监督。
+- Actor 的网络结构和观察编码。`ctx.actor` 从本方案线的固定起点加载；返回的权重必须能严格载入同一结构，否则本次尝试记为崩溃。起点可以带可选结构（起点 `meta.json` 的 `config`，如信念头、花色共享嵌入，见 [guided README](../guided/README.md) 的「Actor 的可选结构」），`ctx.new_actor()` 与导出沿用它；带信念头（`belief_head`）时 `actor(..., return_belief=True)` 另返回三家对手手牌的 3×34 logits，方案可用行里的 `oracle_planes` 经 `guided.networks.belief_target` 监督。起点带 oracle 输入（`oracle_inputs`）时见「Oracle 输入」；它只在训练里存在，导出时剥离，所以返回的权重带不带这部分参数都能导出。
 - 游戏环境、规则和奖励：每局结束时，学习座位得到该局桌面分（除以底分）。
 - 教师：默认是冻结规则包里的规则冠军（`ctx.teacher`），方案可以用 `cfg["teacher"]` 换成 `ctx.teachers` 里的任一规则，或 `ctx.catalog` 里的模型。训练对手由方案通过 `cfg["opponents"]` 选择，默认是本次迭代冻结的评估对手（最近一次共同大乱斗前三名，可能包含 RL 模型）；harness 可以在 `ctx.catalog` 里另外提供冻结版本供方案选作对手或教师；没有评估对手时用规则包里的规则代表。
 - 时间预算：从 `train` 被调用开始计时，到 `ctx.deadline` 截止；超过宽限期，进程被强制结束。只按局数限额的 harness（例如迭代线）把截止时刻设得很远，只用来防卡死。
@@ -39,7 +39,7 @@
 
 `ctx.collect` 让 `actor` 坐在一个随机座位上学习，其余三座是对手，返回 `(rows, records, resources)`：
 
-- `rows`：学习座位的每个决策。包含 Actor 输入（`planes`、`scalars`、`events`、`mask`）、`action`、`logprob`、`value`、`reward`（只在每局最后一个决策上，值为该局桌面分；学习座位整局没有决策时，该局分不记到任何行，只留在整场账本里）、`hand`（第几局，1～16）、`adv` 和 `ret`（由 `finish_game` 计算）、教师标签 `teacher`（`labels=True` 时是教师在同一局面的动作，否则为 −1；教师在某个决策上报错或给出非法动作时，这一行也是 −1，采集照常进行（纯模仿采集在这一步改由学生采样出牌，教师损失不计这一行），worker 报告里的 `teacher_errors` 计数，首次出错的堆栈写进训练日志。规则教师打标签时采集走 Python 引擎，比纯 PG 采集慢；教师是模型时，标签是它在合法动作上的 argmax，由采集父进程在学生出牌前与学生同批推理（精度与模型对手相同），不会是 −1，对局照常可走 C 引擎，`label_version` 为 `model:teacher:<ID>`），以及 `critic_features` 返回的数组。同一整场的决策按顺序连续排列。
+- `rows`：学习座位的每个决策。包含 Actor 输入（`planes`、`scalars`、`events`、`mask`）、`action`、`logprob`、`value`、`reward`（只在每局最后一个决策上，值为该局桌面分；学习座位整局没有决策时，该局分不记到任何行，只留在整场账本里）、`hand`（第几局，1～16）、`adv` 和 `ret`（由 `finish_game` 计算）、教师标签 `teacher`（`labels=True` 时是教师在同一局面的动作，否则为 −1；教师在某个决策上报错或给出非法动作时，这一行也是 −1，采集照常进行（纯模仿采集在这一步改由学生采样出牌，教师损失不计这一行），worker 报告里的 `teacher_errors` 计数，首次出错的堆栈写进训练日志。规则教师打标签时采集走 Python 引擎，比纯 PG 采集慢；教师是模型时，标签是它在合法动作上的 argmax，由采集父进程在学生出牌前与学生同批推理（精度与模型对手相同），不会是 −1，对局照常可走 C 引擎，`label_version` 为 `model:teacher:<ID>`），以及 `critic_features` 返回的数组；开 `cfg["oracle_inputs"]` 时另有该决策实际喂给 Actor 的 `oracle_input_planes`、`oracle_input_scalars`（见「Oracle 输入」）。同一整场的决策按顺序连续排列。
 - `records`：每整场一条，含四家得分和座位。
 - `resources`：采集耗时和各 worker 的场数、样本数。
 
@@ -169,6 +169,28 @@
 - 没有候选的行不带 `branches`。`finish_game` 在该场所有副本打完后才调用。
 - 副本不产生训练行、不计入 `samples` 和局数预算，但要多打：多出的推理请求约等于候选数乘以本局剩余的学习决策数。
 
+## Oracle 输入（oracle guiding）
+
+Suphx 式 oracle guiding（[ADR-0018](../../../../docs/adr/0018-oracle-guided-policy-training.md)）：Actor 在训练采集里额外读到按保留率 γ 随机遮盖的隐藏状态，方案把 γ 从 1 逐步降到 0，让策略学会不依赖它。框架部分见 `guided/oracle.py`；γ 的日程、学习率与样本筛选由方案决定。
+
+**Actor**
+- 结构选项 `"oracle_inputs": true`（`guided.networks.Actor`）。`actor(planes, scalars, events, oracle=(oracle_planes, oracle_scalars))`：`oracle_planes` 为 [n, 16, 34]，`oracle_scalars` 为 [n, 4]，在输入端经无偏置、零初始化的 `encoder.oracle_tile_in`（16→dim）加到每个牌 token，经 `encoder.oracle_state_in`（4→dim）加到状态 token。`oracle=None` 跳过这一路；无偏置，所以不给、给全零、剥离后三者 logits 逐位相同。
+- 两种得到方式：起点就带（维护者用 `python -m guided.expand <起点> <模型库> --oracle-inputs` 做，logits 与原起点逐位相同，`ctx.actor`、`ctx.new_actor()` 都带它）；或方案在训练开始时自己加：`actor = guided.networks.with_oracle_inputs(ctx.actor)`（零初始化，同设备，原 Actor 不变；之后采集、优化器都用这个新对象）。
+- 导出（`ctx.save_actor` 的快照、最终产物）一律剥离选项和参数，写出前核对剥离后的 logits 与不给 oracle、给全零 oracle 时逐位一致，不一致即报错。导出的是不读 oracle 的策略：γ 没降到 0 就导出，导出物仍合法，只是训练时它一直有 oracle 可依赖。
+- oracle 参数不随导出跨尝试保留：从某个版本 `--from` 续训时，起点没有 oracle 输入，要么用带它的固定起点，要么方案重新加（重新零初始化）。所以 γ 的整个衰减要在一次尝试里走完。
+- 评估、自由对战、比赛、模型服务、对手与教师都通过 `guided.deployment.load_actor` 或模型服务加载，二者拒绝 `meta.json` 或权重里带 oracle 通道的模型。
+
+**采集**
+- `cfg["oracle_inputs"] = {"keep": γ}`（0 ≤ γ ≤ 1），可加 `"continuations": False`。不给、`None` 或 γ = 0 时关闭：不计算、行和请求里都没有 oracle 字段，学习者按 `oracle=None` 决策，与剥离后的 Actor 完全相同（采集结果与不带这个键时逐位一致）。开启时 `actor` 必须有 oracle 输入，否则报错。
+- 训练对局里学习座位的每个决策：worker 算出该状态的 oracle 特征（`guided.encoding.oracle`，与 Critic 的 `oracle_planes`/`oracle_scalars`、配方 `critic_features` 里的同名数组同一定义；C 引擎 `Hand.oracle` 逐位相同）：16 个平面依次是下家、对家、上家暗手里各种牌张数 ≥1..4，再是牌墙的；4 个标量是三家的 (8 − 向听) / 9 与牌墙张数 / 136。548 个值各以概率 γ 保留、否则置 0（逐元素伯努利，不放大），随机流为 `seed_for(本场种子, "oracle", 局号, k)`，k 是本局里该路径上学习座位此前的决策数；两种引擎逐位一致。
+- 遮盖后的值以 float16 随推理请求发到父进程，父进程只把它喂给学习者自己的 Actor（`model:current`；CUDA 图路径有单独的图和缓冲），并留在行上：`oracle_input_planes`（float16 [16, 34]）、`oracle_input_scalars`（float16 [4]）。方案的梯度用的正是行为策略看到的输入。
+- 「学习座位」包括 playout 基线的偏离副本、分支副本里续打为 `"greedy"` 的学习座位（`GREEDY`，同一个策略），它们各自按同样的公式取 k：副本沿对局本身路径走时，抽到的遮盖与对局后续各行相同（vine 配对的公共随机数）。`"continuations": False` 时这些续打不给 oracle。对手（模型或规则）、给同一批行打标签的模型教师、规则教师和评估都拿不到 oracle。
+
+**方案的梯度**
+- 用框架的 `guided.learning.make_batch`：有行带 oracle 字段时批里多出 `oracle_input_planes`、`oracle_input_scalars`（没有的行为 0，等于不给），`guided.oracle.argument(batch)` 给出 Actor 的 `oracle` 参数，没有时为 `None`：`actor(planes, scalars, events, oracle=guided.oracle.argument(batch))`。
+- 方案自己的批（例如 `recipe/batch.py` 的 `make_batch`、`ResidentRows`）：`guided.oracle.stack(rows)` 返回 (planes [n,16,34], scalars [n,4]) 的 float16 数组（没有的行为 0），所有行都没有时返回 `None`；常驻列可按 `FIELDS = ("oracle_input_planes", float16), ("oracle_input_scalars", float16)` 加进去，前向时 `oracle=(fields["oracle_input_planes"], fields["oracle_input_scalars"])`。CUDA 图捕获的梯度回放要把这两列也作为静态输入。
+- 计算旧策略概率、KL、重要性比时同样带上行里的 oracle；γ = 0 之后的行没有这两个字段，`argument`/`stack` 给 `None`，前向即剥离后的策略。
+
 `hooks` 在主进程里对学习座位生效：
 
 - `hooks["values"](rows) -> 数组`：给出每行的价值估计，写入 `value`。采集时 Critic 为空，所以使用 PPO 的方案必须提供它。
@@ -181,7 +203,7 @@
 
 ## 约定
 
-- Actor 只能读取合法观察。隐藏信息只能进入 Critic 或训练目标，这是 ADR-0009 的训练期例外。
+- Actor 在评估和上场时只读取合法观察。隐藏信息只能进入 Critic、训练目标（ADR-0009 的训练期例外）或训练采集里学习者的 oracle 输入（ADR-0018，见「Oracle 输入」，导出时剥离）。
 - 钩子模块在对局进程里加载时，引擎运行时已经绑定，模块顶层可以导入 `mahjong_ai`。
 - 方案可以导入 `guided` 里的构件（例如 `guided.networks.HistoryEncoder`、`PopArt`），但不能修改框架文件。
 - 只能使用训练环境已有的依赖：PyTorch、NumPy 和仓库代码。

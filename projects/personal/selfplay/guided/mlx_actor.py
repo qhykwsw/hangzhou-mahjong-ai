@@ -14,6 +14,9 @@ class Actor:
     def __init__(self, actor):
         import torch
 
+        if getattr(actor.encoder, "oracle_inputs", False):
+            # Inference reads legal observations only (ADR-0018).
+            raise ValueError("refusing an Actor with oracle inputs (ADR-0018: training only)")
         half = set()
         for name, module in actor.named_modules():
             if isinstance(module, torch.nn.Linear):

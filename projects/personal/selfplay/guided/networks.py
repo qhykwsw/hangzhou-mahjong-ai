@@ -1,7 +1,11 @@
 """Training-only legal Actor and independently parameterized privileged Critic.
 
-The Actor has no oracle inputs. Padding is ignored even when histories are
-left-padded or mixed in a batch. Positional indices count real events, not pads.
+The Actor reads legal inputs only, except for one training-only option: the
+oracle inputs (``oracle_inputs``, ADR-0018, guided.oracle), the hidden state
+fed in during training collection and stripped from every export, so whatever
+is evaluated, served or deployed reads legal inputs only. Padding is ignored
+even when histories are left-padded or mixed in a batch. Positional indices
+count real events, not pads.
 """
 
 import math
@@ -52,6 +56,13 @@ class BatchFirstEncoderLayer(nn.TransformerEncoderLayer):
 
 # The event fields that hold a tile (34: none): tile and chi's lowest tile.
 TILE_FIELDS = (2, 3)
+
+# The oracle inputs (guided.encoding.oracle): per tile 16 planes, the three
+# opponents' concealed counts >= 1..4 then the wall's, and 4 scalars, the
+# opponents' shanten progress and the wall's size. Their parameters are the
+# encoder's only ones under this prefix (strip_oracle).
+ORACLE_PLANES, ORACLE_SCALARS = 16, 4
+ORACLE_PREFIX = "encoder.oracle_"
 
 
 class SuitEmbedding(nn.Module):
@@ -108,10 +119,14 @@ class HistoryEncoder(nn.Module):
     adds its sigmoid, without gradient, back to them before the next block.
     With ``suit_embedding="shared"`` the tile tokens' table and the events'
     tile tables are SuitEmbeddings instead of free rows per tile.
+    With ``oracle_inputs`` (an Actor option, see Actor) the bias-free
+    ``oracle_tile_in`` and ``oracle_state_in``, zero at the start, add the
+    oracle planes to the tile tokens and the oracle scalars to the state token.
     """
 
     def __init__(self, dim, layers, heads, max_events=4096, *, state_only=False,
-                 planes=N_PLANES, scalars=N_SCALARS, event_tail=4, belief_head=False, suit_embedding=None):
+                 planes=N_PLANES, scalars=N_SCALARS, event_tail=4, belief_head=False, suit_embedding=None,
+                 oracle_inputs=False):
         super().__init__()
         if dim % heads or dim < 2:
             raise ValueError("dim must be divisible by heads and at least 2")
@@ -176,6 +191,18 @@ class HistoryEncoder(nn.Module):
             self.belief_in = nn.Linear(3, dim)
             nn.init.zeros_(self.belief_in.weight)
             nn.init.zeros_(self.belief_in.bias)
+        self.oracle_inputs = bool(oracle_inputs)
+        if oracle_inputs:
+            # Training only (ADR-0018). Bias-free, so an all-zero oracle input
+            # adds exact zeros: no input, a zero input and the stripped Actor
+            # compute the same logits. Zero at the start, so the Actor first
+            # decides as without them; skip_init draws nothing from the random
+            # stream, so every other parameter of a new Actor is the one it
+            # gets without the option.
+            self.oracle_tile_in = nn.utils.skip_init(nn.Linear, ORACLE_PLANES, dim, bias=False)
+            self.oracle_state_in = nn.utils.skip_init(nn.Linear, ORACLE_SCALARS, dim, bias=False)
+            nn.init.zeros_(self.oracle_tile_in.weight)
+            nn.init.zeros_(self.oracle_state_in.weight)
 
     def _transform_with_belief(self, x, padding):
         """The transformer's blocks with the belief head after block belief_layer.
@@ -195,7 +222,7 @@ class HistoryEncoder(nn.Module):
             x = block(x, src_key_padding_mask=padding)
         return x, belief.transpose(1, 2)
 
-    def forward(self, planes, scalars, events, return_belief=False):
+    def forward(self, planes, scalars, events, return_belief=False, oracle=None):
         valid = events[..., 0] != 0
         # Ignore every field of padding, including arbitrary sentinel values.
         events = events.long().masked_fill(~valid[..., None], 0)
@@ -214,6 +241,12 @@ class HistoryEncoder(nn.Module):
         table = self.tile_embedding.weight if self.suit_embedding else self.tile_embedding
         tiles = self.tile_in(planes.float().transpose(1, 2)) + table
         state = self.state_in(scalars.float())[:, None]
+        if oracle is not None:
+            if not self.oracle_inputs:
+                raise ValueError("this Actor has no oracle inputs (ADR-0018: only a training Actor may have them)")
+            oracle_planes, oracle_scalars = oracle
+            tiles = tiles + self.oracle_tile_in(oracle_planes.float().transpose(1, 2))
+            state = state + self.oracle_state_in(oracle_scalars.float())[:, None]
         tokens = torch.cat(
             [
                 tiles + self.type_embedding[0],
@@ -249,9 +282,10 @@ def actor_options(config):
     """The optional Actor structures ``config`` turns on, as Actor keyword arguments.
 
     ``"belief_head": true`` adds the opponents' tile belief, ``"suit_embedding":
-    "shared"`` shares the suits' rank embeddings (Actor). Options at their
-    defaults are dropped, so an Actor without any keeps its original config,
-    weights and exported files bit for bit.
+    "shared"`` shares the suits' rank embeddings, ``"oracle_inputs": true``
+    adds the training-only oracle inputs (Actor). Options at their defaults are
+    dropped, so an Actor without any keeps its original config, weights and
+    exported files bit for bit.
     """
     options = {}
     belief = config.get("belief_head", False)
@@ -264,7 +298,51 @@ def actor_options(config):
         raise ValueError(f"unknown suit_embedding: {suits!r} (only \"shared\")")
     if suits:
         options["suit_embedding"] = suits
+    oracle = config.get("oracle_inputs", False)
+    if type(oracle) is not bool:
+        raise ValueError("oracle_inputs must be true or false")
+    if oracle:
+        options["oracle_inputs"] = True
     return options
+
+
+def has_oracle(config):
+    """Whether an Actor config (an artifact's meta.json "config") has the oracle inputs."""
+    return config.get("oracle_inputs", False) is not False
+
+
+def strip_oracle(weights, config):
+    """(weights, config) of the same Actor without its oracle inputs (ADR-0018).
+
+    Drops every parameter under ORACLE_PREFIX and the ``oracle_inputs``
+    option, whatever the config says. What is left computes exactly what the
+    Actor with them computes when it is given no oracle (or an all-zero one):
+    the oracle path only ever adds its projections, which are bias-free.
+    """
+    weights = {k: v for k, v in weights.items() if not k.startswith(ORACLE_PREFIX)}
+    return weights, {k: v for k, v in config.items() if k != "oracle_inputs"}
+
+
+def with_oracle_inputs(actor):
+    """A copy of ``actor`` with the oracle inputs added at zero: every logit as ``actor``'s, bit for bit.
+
+    The training-time step expand --oracle-inputs takes on an artifact, here
+    on a live Actor (e.g. a recipe's ctx.actor), on the same device.
+    """
+    if actor.encoder.oracle_inputs:
+        raise ValueError("the Actor already has oracle inputs")
+    encoder = actor.encoder
+    # Every tensor but the zero oracle projections is then copied: the caller's random stream stays untouched.
+    with torch.random.fork_rng(devices=[]):
+        oracle = Actor(actor.dim, actor.layers, actor.heads, planes=encoder.tile_in.in_features,
+                       scalars=encoder.state_in.in_features, event_tail=encoder.event_embeddings[4].num_embeddings,
+                       belief_head=encoder.belief_layer is not None, suit_embedding=encoder.suit_embedding,
+                       oracle_inputs=True)
+    missing, unexpected = oracle.load_state_dict(actor.state_dict(), strict=False)
+    if unexpected or any(not k.startswith(ORACLE_PREFIX) for k in missing):
+        raise ValueError(f"cannot add oracle inputs: missing {missing}, unexpected {unexpected}")
+    parameter = next(actor.parameters())
+    return oracle.to(device=parameter.device).train(actor.training)
 
 
 def actor_of(encoding, dim, layers, heads, **options):
@@ -309,23 +387,36 @@ class Actor(nn.Module):
     and the rank), so these tables were its only per-tile parameters on the
     input side; the 63 chi logits of state_head stay one row per suit.
     expand --share-suits starts one from an existing Actor (SuitEmbedding.fit).
+
+    ``oracle_inputs`` (training only, ADR-0018; guided.oracle): ``forward(...,
+    oracle=(planes [batch, 16, 34], scalars [batch, 4]))`` adds the hidden
+    state (guided.encoding.oracle: the opponents' concealed tiles, the wall)
+    at the input, ``encoder.oracle_tile_in`` (bias-free 16 -> dim) to each
+    tile token and ``encoder.oracle_state_in`` (bias-free 4 -> dim) to the
+    state token, both zero at the start. ``oracle=None`` skips them: the Actor
+    then computes exactly what it computes stripped of them (strip_oracle),
+    and so it does on an all-zero oracle. A recipe anneals the share of oracle
+    values kept from 1 to 0 so that the policy stops depending on them; every
+    export strips them (guided.trial.export_actor) and every inference loader
+    refuses an Actor that has them (guided.deployment.load_actor).
     """
 
     def __init__(self, dim=128, layers=4, heads=4, *, planes=N_PLANES, scalars=N_SCALARS, event_tail=4,
-                 belief_head=False, suit_embedding=None):
+                 belief_head=False, suit_embedding=None, oracle_inputs=False):
         super().__init__()
         self.dim, self.layers, self.heads = dim, layers, heads
         self.encoder = HistoryEncoder(dim, layers, heads, planes=planes, scalars=scalars, event_tail=event_tail,
-                                      belief_head=belief_head, suit_embedding=suit_embedding)
+                                      belief_head=belief_head, suit_embedding=suit_embedding,
+                                      oracle_inputs=oracle_inputs)
         self.discard_head = nn.Linear(dim, 1)
         self.claim_head = nn.Linear(dim, 4)
         self.state_head = nn.Linear(dim, 65)
 
-    def forward(self, planes, scalars, events, return_belief=False):
+    def forward(self, planes, scalars, events, return_belief=False, oracle=None):
         if return_belief:
-            state, tiles, belief = self.encoder(planes, scalars, events, return_belief=True)
+            state, tiles, belief = self.encoder(planes, scalars, events, return_belief=True, oracle=oracle)
         else:
-            state, tiles = self.encoder(planes, scalars, events)
+            state, tiles = self.encoder(planes, scalars, events, oracle=oracle)
         discard = self.discard_head(tiles).squeeze(-1)
         claims = self.claim_head(tiles[:, :33])
         rest = self.state_head(state)

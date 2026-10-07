@@ -22,7 +22,7 @@ from types import SimpleNamespace
 
 from mahjong_ai import _fast
 
-from .environment import GREEDY, Game, _teacher_failed, hook, staged
+from .environment import GREEDY, Game, _teacher_failed, continues, hook, staged
 
 native = _fast.load_native(__file__)
 
@@ -306,6 +306,11 @@ class FastGame(Game):
             if self.train and seat == self.focal:
                 features = self.cfg.get("critic_features")
                 row.update(state.oracle(seat) if not features else hook(features, None)(StateView(self, state), seat))
+                if self.oracle:
+                    from .oracle import decision
+
+                    # Without a critic_features hook the row's oracle_planes are the oracle's (Game.advance).
+                    decision(self, row, lambda: state.oracle(seat) if features else row)
                 if self.luck:
                     row["luck_pay"], row["luck_deal"] = state.luck
                 if self.race_luck:
@@ -447,6 +452,7 @@ class FastShadow:
         self.hand_no = game.hand_no  # the game may move on to its next hand before this copy ends
         # The hand's public history, for a Mirror of the copy (built on a Python seat's first turn).
         self.history, self.views, self.mirror = game.history, game.views, None
+        self.oracle_turn = game.oracle_turn  # the forked decision's (guided.oracle)
         state.step(move)
 
     def advance(self):
@@ -465,6 +471,10 @@ class FastShadow:
 
                 rewrite(row, game.stage, self.start_scores, self.hand_no, game.config.rounds, seat)
             row["teacher"] = -1
+            if seat == game.focal and continues(game):
+                from .oracle import continuation
+
+                continuation(self, row, self.hand_no, lambda: state.oracle(seat))
             return {"row": row, "slot": GREEDY if seat == game.focal else game.specs[seat], "train": False, "bc": False}
         self.done, self.state = True, None
         # The winner deals next; after a draw the dealer stays.
@@ -527,6 +537,10 @@ class FastBranch(FastShadow):
             self.pending = state.legal()
             row = self.encode(state, seat)
             row["teacher"] = -1
+            if seat == game.focal and plan.slots[seat] == GREEDY and continues(game):
+                from .oracle import continuation
+
+                continuation(self, row, self.hand_no, lambda: state.oracle(seat))
             return {"row": row, "slot": plan.slots[seat], "train": False, "bc": False}
         self.done, self.state, self.mirror = True, None, None
         finished(self.row, game, self.start_scores, state.delta, state.winner, self.dealer)

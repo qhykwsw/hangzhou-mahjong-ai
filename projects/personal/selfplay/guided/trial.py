@@ -86,16 +86,34 @@ def _sha256(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def export_actor(weights, config, output, source=None):
-    """Write an Actor artifact after a strict load into the fixed architecture."""
+def export_actor(weights, config, output, source=None, *, oracle_start=False):
+    """Write an Actor artifact after a strict load into the fixed architecture.
+
+    The oracle inputs (ADR-0018, guided.oracle) never leave training: an
+    Actor that has them (the option in ``config`` or their parameters in
+    ``weights``) is written stripped of both, after checking that the stripped
+    Actor's logits are bit for bit those of the Actor given no oracle and
+    given an all-zero one (what it computes at keep 0). Only expand's training
+    start (``oracle_start``) keeps them; deployment.load_actor refuses it to
+    everything but a trial's start.
+    """
     import torch
     from .deployment import FORMAT, load_actor
     from .encoding import ENCODING
-    from .networks import actor_of, actor_options
+    from .networks import ORACLE_PREFIX, actor_of, actor_options, has_oracle, strip_oracle
 
     encoding = config.get("encoding", ENCODING)
+    trained = None
+    if oracle_start:
+        if not has_oracle(config):
+            raise ValueError("an oracle start needs oracle_inputs in its config")
+    elif has_oracle(config) or any(name.startswith(ORACLE_PREFIX) for name in weights):
+        trained = weights
+        weights, config = strip_oracle(weights, config)
     actor = actor_of(encoding, config["dim"], config["layers"], config["heads"], **actor_options(config))
     actor.load_state_dict(weights, strict=True)
+    if trained is not None:
+        _check_stripped(trained, config, encoding, actor)
     for value in actor.state_dict().values():
         if not bool(torch.isfinite(value).all()):
             raise ValueError("nonfinite Actor weights")
@@ -112,8 +130,35 @@ def export_actor(weights, config, output, source=None):
         "actions": 231,
     }
     (output / "meta.json").write_text(json.dumps(meta, indent=2))
-    load_actor(output, "cpu")
+    load_actor(output, "cpu", oracle=oracle_start)
     return meta
+
+
+def _check_stripped(weights, config, encoding, stripped):
+    """Refuse an export whose stripped Actor differs from the trained one without oracle input (ADR-0018)."""
+    import torch
+    from .networks import actor_of, actor_options
+
+    # Its own random stream: a check inside training must not move the recipe's draws.
+    with torch.random.fork_rng(devices=[]):
+        trained = actor_of(encoding, config["dim"], config["layers"], config["heads"],
+                           **actor_options(config | {"oracle_inputs": True}))
+    trained.load_state_dict(weights, strict=True)
+    encoder = trained.encoder
+    generator = torch.Generator().manual_seed(0)
+    rows, length = 4, 6
+    planes = torch.rand((rows, encoder.tile_in.in_features, 34), generator=generator).half()
+    scalars = torch.rand((rows, encoder.state_in.in_features), generator=generator).half()
+    events = torch.stack([torch.randint(low, high, (rows, length), generator=generator)
+                          for low, high in ((1, 7), (0, 5), (0, 35), (0, 35),
+                                            (0, encoder.event_embeddings[4].num_embeddings))], -1)
+    zero = (torch.zeros((rows, 16, 34), dtype=torch.float16), torch.zeros((rows, 4), dtype=torch.float16))
+    with torch.no_grad():
+        want = stripped.eval()(planes, scalars, events)
+        trained.eval()
+        if not (torch.equal(trained(planes, scalars, events), want)
+                and torch.equal(trained(planes, scalars, events, oracle=zero), want)):
+            raise RuntimeError("the stripped Actor differs from the trained one without oracle input")
 
 
 class Context:
@@ -158,7 +203,9 @@ class Context:
             + [k for k in self._rule_specs if k not in self.rules]
             + [k for k in self.catalog if k in self._opponent_models and k not in only]
         )
-        self.actor, meta = load_actor(plan["start_actor"], "cuda")
+        # The start may carry the training-only oracle inputs (expand --oracle-inputs, ADR-0018);
+        # every export of this trial strips them (export_actor), every other load refuses them.
+        self.actor, meta = load_actor(plan["start_actor"], "cuda", oracle=True)
         self.actor_config = dict(meta["config"], encoding=meta.get("encoding", ENCODING))
         self.resources = (
             evaluation_resources()

@@ -98,7 +98,7 @@ engine, fastgame.FastBranch on the C engine.
 import random
 from types import SimpleNamespace
 
-from .environment import GREEDY, Shadow, hook, staged
+from .environment import GREEDY, Shadow, continues, hook, staged
 from .statistics import seed_for
 
 LEAF = ("planes", "scalars", "events", "mask")
@@ -257,10 +257,11 @@ class Branch(Shadow):
         self.game, self.state, self.row, self.plan = game, state, result, plan
         self.dealer, self.pending, self.done = game.dealer, None, False
         self.decisions = 0  # the learner's decisions since the candidate, for cfg["branch_truncate"]
+        self.oracle_turn = game.oracle_turn  # the forked decision's (guided.oracle)
         state.step(action, legal)
 
     def advance(self):
-        from .encoding import encoder
+        from .encoding import encoder, oracle
 
         game, state = self.game, self.state
         encode = encoder(game.encoding)
@@ -294,6 +295,10 @@ class Branch(Shadow):
             self.pending = legal
             row = encode(obs, game.cfg["lookahead"])
             row["teacher"] = -1
+            if seat == game.focal and who == GREEDY and continues(game):
+                from .oracle import continuation
+
+                continuation(self, row, state.hand_no, lambda: oracle(state, seat))
             return {"row": row, "slot": who, "train": False, "bc": False}
         self.done, self.state = True, None
         self.settle(state)

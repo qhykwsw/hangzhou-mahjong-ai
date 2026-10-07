@@ -120,7 +120,7 @@ def test_openings_collect_on_the_executions_opening_workers(monkeypatch, tmp_pat
     config = {"dim": 16, "layers": 1, "heads": 1, "lookahead": False}
     monkeypatch.setattr(artifacts, "read_bundle", lambda _: {
         "manifest_path": "bundle.json", "teacher": "champion", "entries": [{"id": "champion"}]})
-    monkeypatch.setattr(deployment, "load_actor", lambda path, device: (Actor(16, 1, 1), {"config": config}))
+    monkeypatch.setattr(deployment, "load_actor", lambda path, device, **_: (Actor(16, 1, 1), {"config": config}))
     monkeypatch.setattr(inference, "prepare_frozen", lambda actor, device: actor)
     monkeypatch.setattr(resources, "evaluation_resources", lambda: {"workers": 1, "tables": 1})
     monkeypatch.setattr(torch.cuda, "get_device_properties", lambda _: SimpleNamespace(total_memory=1))

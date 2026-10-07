@@ -39,7 +39,7 @@ playout baseline's continuations. Searches run on the Python engine.
 
 import copy
 
-from .environment import GREEDY, Shadow
+from .environment import GREEDY, Shadow, continues
 
 KINDS = ("kong", "fish")
 WHITE = 33
@@ -68,6 +68,7 @@ class Search:
 
         self.game, self.obs, self.legal, self.row, self.kind = game, obs, legal, row, kind
         self.real = real  # a copy of the actual hand at the window
+        self.oracle_turn = game.oracle_turn  # the window's learner decision in its hand (guided.oracle)
         self.cfg = game.search
         # A recipe's value of the next hand's start (e.g. a fitted V(dealer, hands left, scores)) replaces deal_value.
         from .environment import hook
@@ -154,7 +155,15 @@ class Probe:
         self.search, self.done, self.asked = search, False, False
         mask = np.zeros_like(search.row["mask"])
         mask[members] = True
-        self.request = {"row": dict(search.row, mask=mask, teacher=-1), "slot": GREEDY, "train": False, "bc": False}
+        row = dict(search.row, mask=mask, teacher=-1)
+        if not continues(search.game):
+            # The row's masked oracle inputs (guided.oracle) are its own decision's: a greedy question
+            # sees them only when the learner's greedy decisions do.
+            from .oracle import FIELDS
+
+            for key in FIELDS:
+                row.pop(key, None)
+        self.request = {"row": row, "slot": GREEDY, "train": False, "bc": False}
 
     def advance(self):
         if self.asked:
@@ -174,6 +183,7 @@ class WorldRollout(Shadow):
         self.search, self.m, self.index = search, m, index
         self.game, self.state, self.row = search.game, state, search.row
         self.dealer, self.pending, self.done = search.obs.stage.dealer, None, False
+        self.oracle_turn = search.oracle_turn  # the searched decision's (guided.oracle)
         state.step(move, legal)
 
     def settle(self, final):

@@ -59,6 +59,13 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
     legal actions, before the learner's move is chosen, so pure imitation
     plays it; the label goes back with the answer. The workers then run no
     teacher of their own.
+
+    Under cfg["oracle_inputs"] (guided.oracle, ADR-0018; ``actor`` must have
+    the oracle_inputs option) the learner's requests carry its masked oracle
+    inputs and the learner's model, under its slots "model:current" and
+    GREEDY, gets them (eager and CUDA-graph paths alike). No other model ever
+    does: opponents, a model teacher labelling the same rows and evaluation
+    decide on the legal inputs alone.
     """
     import torch
     from .learning import make_batch
@@ -76,6 +83,12 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
         if "branches" not in hooks:
             raise ValueError("cfg['branches'] needs hooks['branches']")
         branch_hook = fixed_width(hooks["branches"], branch_width)
+    from .oracle import argument as oracle_argument, options as oracle_options
+
+    # cfg["oracle_inputs"]: the learner's slots feed the rows' oracle inputs to the learner's Actor.
+    oracle = command["kind"] != "evaluate" and oracle_options(cfg) is not None
+    if oracle and not getattr(actor.encoder, "oracle_inputs", False):
+        raise ValueError("cfg['oracle_inputs'] needs an Actor with the oracle_inputs option (guided.oracle)")
     teacher = command.get("teacher") if command.get("labels") and command["kind"] != "evaluate" else None
     teacher_model = history[teacher] if teacher and teacher.startswith("model:") else None
     actor.eval()
@@ -260,6 +273,8 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
                 sample = command["kind"] != "evaluate" and slot != GREEDY and (
                     slot == "model:current" or not cfg.get("playout_baseline"))
                 labelled = teacher_model is not None and slot == "model:current"
+                # Only the learner's own model reads the rows' oracle inputs (guided.oracle).
+                fed = oracle and slot in ("model:current", GREEDY)
                 # The learner's sampled rows get the recipe's branch candidates.
                 branched = learning and branch_hook is not None and sample
                 rows_ = [item[2]["row"] for item in group]
@@ -272,6 +287,8 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
                         hook = {"hook": hooks["sample"]} if learning and "sample" in hooks else {}
                         if branched:
                             hook["branches"] = branch_hook
+                        if fed:  # the rows' oracle inputs, to the learner's own model only
+                            hook["oracle"] = True
                         decided = graphs.decide(slot, model, rows_, sample=sample, **hook)
                         # The teacher's argmax on the same rows, under its own
                         # slot (no seat's), so no graph buffer ring is shared.
@@ -286,7 +303,8 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
                         ).float()
                         batch["teacher"] = teacher_logits.masked_fill(~batch["mask"], -1e9).log_softmax(-1).argmax(-1)
                     logits = policy_logits(model,
-                        batch["planes"], batch["scalars"], batch["events"]
+                        batch["planes"], batch["scalars"], batch["events"],
+                        oracle_argument(batch) if fed else None,
                     ).float()
                     timers["batch"] += time.perf_counter() - mark
                     mark = time.perf_counter()

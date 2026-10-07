@@ -443,6 +443,13 @@ def widest(encodings):
 
 
 def oracle(state, seat):
+    """The hidden state from ``seat``'s side, for training only: the Critic's oracle_planes/oracle_scalars and,
+    masked, the learner Actor's oracle inputs (guided.oracle, ADR-0018); native.c's Hand.oracle is the same.
+
+    planes [16, 34]: the concealed counts >= 1..4 of the opponents in turn order after ``seat``, then the
+    wall's; scalars [4]: each opponent's (8 - shanten) / 9 (0 unless its hand has 13 or 14 tiles less 3 per
+    meld), the wall's size / 136.
+    """
     from mahjong_ai.sdk.shape import shanten
 
     planes = np.zeros((16, 34), dtype=np.float32)
