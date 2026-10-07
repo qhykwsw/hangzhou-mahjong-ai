@@ -313,6 +313,11 @@ class Context:
         pool = [
             "model:opponent:" + k if k in self._opponent_models else k for k in chosen
         ]
+        # A branch continuation (guided.branches) names IDs as cfg["opponents"] does: the workers get seat specs.
+        continued_specs, continued_models = {}, {}
+        if run_cfg.get("branch_continuation"):
+            run_cfg["branch_continuation"] = self._continuation(
+                run_cfg["branch_continuation"], continued_specs, continued_models)
         command = {
             "kind": "collect",
             "iteration": int(iteration),
@@ -323,7 +328,8 @@ class Context:
             # history_probability only draws the recipe's own snapshots.
             "history": list(history or {}),
             "pool": pool,
-            "specs": {k: v for k, v in self._rule_specs.items() if k in chosen or (labels and k == teacher)},
+            "specs": {k: v for k, v in self._rule_specs.items() if k in chosen or (labels and k == teacher)}
+            | continued_specs,
         }
         if starts:
             from .starts import check
@@ -334,6 +340,7 @@ class Context:
         }
         if taught:
             models[taught] = self._opponent_models[teacher]
+        models |= continued_models
         rows, records, resources = collect(
             actor,
             None,
@@ -357,6 +364,38 @@ class Context:
                                      "tables": run_cfg["tables"], **{k: v for k, v in resources.items() if k != "workers"}},
                                     default=float) + "\n")
         return rows, records, resources
+
+    def _continuation(self, continuation, specs, models):
+        """cfg["branch_continuation"] with the recipe's IDs as the workers' seat specs.
+
+        "greedy" and "model:" slots (e.g. the recipe's history snapshots) stay;
+        a model version becomes its "model:opponent:" slot (into ``models``),
+        a rule version stays its ID (a trial version's spec into ``specs``).
+        The opponents' keys are the seats' specs the same way.
+        """
+        if not isinstance(continuation, dict):
+            raise ValueError("cfg['branch_continuation'] is {'learner': ID, 'opponents': {ID: ID} or None}")
+
+        def seat(k):
+            return "model:opponent:" + k if k in self._opponent_models else k
+
+        def target(k):
+            if not isinstance(k, str) or k == "greedy" or k.startswith("model:"):
+                return k
+            if k in self._opponent_models:
+                models["model:opponent:" + k] = self._opponent_models[k]
+            elif k in self._rule_specs:
+                specs[k] = self._rule_specs[k]
+            elif k not in self.rules:
+                raise ValueError(f"unknown branch continuation: {k}")
+            return seat(k)
+
+        out = dict(continuation)
+        if "learner" in out:
+            out["learner"] = target(out["learner"])
+        if out.get("opponents"):
+            out["opponents"] = {seat(k): target(v) for k, v in out["opponents"].items()}
+        return out
 
     def log(self, **metrics):
         self._guard()

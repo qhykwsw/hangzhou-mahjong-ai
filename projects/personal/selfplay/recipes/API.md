@@ -116,10 +116,61 @@
 - 和残局开局（`starts`）一起用：每场一开局就是窗口，算力集中在这些局面上。
 - 损失由方案决定，例如：只在最好候选与 argmax 的配对差显著时，把 Actor 拉向最好候选，其余行用 KL 锚住冻结副本。
 
+## 分支候选（branches）
+
+`cfg["branches"] = K`（正整数，须同时开 `playout_baseline`）时，每个学习决策除了对局本身和 playout 基线的单个偏离副本，还可以由方案点名最多 K 个候选动作，各开一个副本打到本局结束。实现与字段定义见 `guided/branches.py`。
+
+**候选**
+- 父进程在学习座位选定动作之后调用 `hooks["branches"](logits, mask, actions)`，返回 (行数, K) 的整数张量，每行是要额外评估的动作编号，空位填 −1；少于 K 列自动补 −1，多于 K 列报错。`actions` 是这一步实际选中的动作（采样钩子或默认采样的结果）。
+- 走 CUDA 图时，带分支的学习决策只重放 logits 的图，采样钩子（标了 `capturable` 的也一样）和分支钩子都在图外、同一条流上对这一批的行运行，结果与 eager 路径的算法相同。
+- 默认钩子由方案提供，框架只负责调用和执行；`cfg["branches"]` 开着却没给钩子时报错。
+
+**副本**
+- 每个候选从同一决策点各 fork 一份，走该候选；之后学习座位走当前 Actor 的 argmax，其余座位照常（规则照常决策，模型对手取 argmax），牌墙、稳定牌墙与运气记录沿用对局本身的。
+- 对局本身和单个偏离副本的行为不变；两种引擎（Python 的 `Game`、C 的 `FastGame`）逐位一致。
+
+**续打策略与控制副本**
+- `cfg["branch_continuation"] = {"learner": "greedy" | ID, "opponents": {ID: ID} | None}`：副本走完候选之后怎么打。
+  - `learner` 是学习座位：`"greedy"`（默认，当前 Actor 的 argmax）、一个规则版本 ID（如 `"fp-rule-131"`，race 成员和 fp-rule-131 在 C 里决策，其他规则在 Python 里决策），或 `ctx.catalog`／`ctx.opponents` 里的模型（父进程取它的 argmax），也可以是 `history` 里的 `"model:名字"`。
+  - `opponents` 把对局里某个对手（键按 `cfg["opponents"]` 的 ID 写）换成另一个规则或模型，用于抽象对手、便宜对手续打；没列出的座位照对局本身打。
+  - ID 取自 `ctx.opponents`、`ctx.catalog` 或 `ctx.rules`，未知 ID 报错；不能用正在采样的学习者本身。续打里的规则每个座位各有一份策略，按本场种子重置。
+- `cfg["branch_control"] = True`：有候选的行另开一个副本，走 argmax、用同一续打策略，写进 `branch_control`（字段同 `branches` 的一项）。它和候选副本从同一个 fork 出发、同一副牌墙、同样的座位，候选减控制就是配对差。
+
+**截断**
+- `cfg["branch_truncate"] = k`（正整数）：每个副本（含控制副本）在候选之后学习座位的第 k 个决策处停下，不打完本局；本局先结束的副本照常是完整结果。
+- 「决策」指学习座位有不止一个合法动作的回合，不论续打的是 Actor 还是规则。
+- 停下的副本写 `{"action", "truncated": True, "playout_scores", "leaf_row"}`，开 `luck` 时另有到此为止的 `playout_luck_pay`、`playout_luck_deal`：
+  - `playout_scores` 是到此为止的四家分数（底分为单位）。一局只在结束时结算，所以就是本局开始前的分数。
+  - `leaf_row` 是停下时学习座位的编码行，只含合法观察的 `planes`、`scalars`、`events`、`mask`，编码与正常行相同。
+- 方案在父进程里用自己的价值网给 `leaf_row` 估值，框架不估值。
+
+**世界重采样**
+- `cfg["branch_resample"] = {"weights": None | "模块:函数"}`：每行的所有副本（候选与控制）不从真实牌局出发，而从按学习座位视角重发的同一个世界出发。
+- 重发的做法：
+  - 把三家的暗手牌和剩余牌墙合成一池，先排序，再用该行自己的随机流（本场种子、`"branch-world"`、行号）洗乱；按各家原来的暗手张数发回，余下的按原长度做牌墙。
+  - 先排序，所以世界只取决于学习座位看不到的那组牌，与真实谁拿了什么无关。
+- 保持不变的：
+  - 学习座位的手牌，以及所有公开信息：副露、牌河、各家张数、财神状态（抓打圈、连杠与财飘计数）、分数、本局事件。
+  - 别家的暗杠作为副露整副保留，所以牌池是学习座位的未见牌减去这些暗杠的牌。
+  - 别家过去的私有事件（发牌、摸牌）仍是原牌。只读当前手牌和公开信息的规则（race 成员、fp-rule-131）不受影响。
+- 稳定牌墙：重发的牌按牌墙顺序填进剩余位置，位置结构不变。此后各家仍从自己的位置摸牌，所以同一行的副本之间仍然配对；只是位置上的牌是重发世界的，不是真实牌墙的。运气照常累计，期望按重发后的牌墙算。
+- `weights`（在对局进程里解析）对每个重发世界调用一次 `f(row, world)`：
+  - `row` 只含该行的 `planes`、`scalars`、`events`、`mask`；
+  - `world = {"seat", "hands"（按绝对座位的四家手牌，含学习座位自己）, "wall"（按摸牌顺序）, "opened"（各家副露数）}`；
+  - 返回该世界的权重，例如信念模型给出的对手手牌似然。
+- 该行每个结果都带 `world_weight`，没有 `weights` 时为 1.0。两种引擎用同一个随机流重发，结果逐位一致。
+
+**写回该行的字段**
+- `branches`：按候选顺序的列表，每项 `{"action", "truncated": False, "playout", "playout_scores", "playout_dealer", "playout_deals_next"}`，含义同偏离行的同名字段；开 `luck` 时另有 `playout_luck_pay`、`playout_luck_deal`；重采样时另有 `world_weight`。截断的项见上。
+- `branch_control`：开 `branch_control` 时，有候选的行才带。
+- 没有候选的行不带 `branches`。`finish_game` 在该场所有副本打完后才调用。
+- 副本不产生训练行、不计入 `samples` 和局数预算，但要多打：多出的推理请求约等于候选数乘以本局剩余的学习决策数。
+
 `hooks` 在主进程里对学习座位生效：
 
 - `hooks["values"](rows) -> 数组`：给出每行的价值估计，写入 `value`。采集时 Critic 为空，所以使用 PPO 的方案必须提供它。
 - `hooks["sample"](logits, mask) -> (actions, logprobs)`：替换默认的按策略概率采样，例如调温度来增加探索。返回的 `logprobs` 必须是实际采样分布下的对数概率。
+- `hooks["branches"](logits, mask, actions) -> (行数, K) 动作编号`：`cfg["branches"]` 开启时点名每行的候选，见「分支候选」。
 
 评估时不调用任何钩子，Actor 取概率最大的动作。
 

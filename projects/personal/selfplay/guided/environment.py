@@ -111,6 +111,14 @@ class Game:
         from .stage import start
 
         self.stage = start(cfg, seed)
+        # cfg["branches"] (guided.branches): a recipe's candidates at a learning decision, each played out in a copy.
+        from .branches import options, seat_plan
+
+        self.branching = options(cfg, train)
+        # A branch continuation's rule versions come from where the seats' do;
+        # how each seat plays in the copies is settled once, for the whole game.
+        self._sources = (entries, external) if self.branching else None
+        self._branch_seats = seat_plan(self) if self.branching else None
         self.searched, self.window = 0, None
         self.shadows = []
         self.unfinished = False
@@ -273,8 +281,10 @@ class Game:
         obs, window = self.window or (None, None)
         self.window = None
         # Collection answers (action, logprob, value, argmax), and after them a
-        # model teacher's label on a learning decision; evaluation (action, logprob, value).
+        # model teacher's label on a learning decision, and last the branch
+        # candidates (a tuple) under cfg["branches"]; evaluation (action, logprob, value).
         index, logprob, value, *more = response
+        candidates = more.pop() if more and isinstance(more[-1], tuple) else None
         greedy = more[:1]
         action = next((a for a in legal if action_index(a) == index), None)
         if action is None:
@@ -293,6 +303,8 @@ class Game:
                         # The copy plays the sampled move, the hand its argmax.
                         move, action = action, move
                     self.shadows.append(Shadow(self, fork(self.state), move, legal, row))
+            if candidates is not None:
+                self._branched(row, legal, candidates, greedy)
             if window:
                 if not greedy:
                     raise ValueError("a search needs the argmax with each collection answer")
@@ -303,6 +315,38 @@ class Game:
             self.rows.append(row)
         self.pending = None
         self.state.step(action, legal)
+
+    def _branched(self, row, legal, candidates, greedy):
+        """A learning row's branch candidates from the collection parent: a copy for each (guided.branches)."""
+        if self.branching is None:
+            raise ValueError("branch candidates need cfg['branches']")
+        if not greedy:
+            raise ValueError("branches need the argmax with each collection answer")
+        if candidates:
+            from .branches import start
+
+            start(self, row, legal, candidates, greedy[0])
+
+    def _branch_world(self, row):
+        """The hand the row's branch copies start from (re-dealt under cfg["branch_resample"]), and its weight."""
+        if not self.branching.resample:
+            return self.state, None
+        from .branches import place, redeal, weigh, world_seed
+
+        world = fork(self.state)
+        hands, wall = redeal(world.hands, world.wall, self.focal, world_seed(self))
+        place(world, hands, wall, self.focal)
+        return world, weigh(self, row, hands, wall, [len(m) for m in world.melds])
+
+    def _branch_copy(self, world, index, legal, result):
+        """A copy of ``world`` playing the candidate ``index`` (guided.branches.Branch)."""
+        from selfplay_core.actions import action_index
+        from .branches import Branch
+
+        move = next((a for a in legal if action_index(a) == index), None)
+        if move is None:
+            raise ValueError("a branch candidate is not a legal action")
+        self.shadows.append(Branch(self, fork(world), move, legal, result, self._branch_seats))
 
     def settled(self):
         """Complete, with every greedy continuation played out; the rows are then finished once."""
