@@ -678,8 +678,8 @@ class Race:
             kept = self.keep_kong(obs, choice, opened, available)
             if kept is not None:
                 return kept
-        if choice.action == "gang" and not at_win and obs.phase == "draw" and obs.hand.count(WHITE) == 1 and _fast.shanten_raw(list(_fast.counts(tuple(obs.hand))), opened) > 1:
-            # One white held: keep the kong tiles and throw the best other tile.
+        if choice.action == "gang" and not at_win and obs.phase == "draw" and obs.hand.count(WHITE) <= 1 and _fast.shanten_raw(list(_fast.counts(tuple(obs.hand))), opened) > 1:
+            # One white or none held: keep the kong tiles and throw the best other tile.
             kong_tiles = {a.tile for a in obs.legal_actions if a.action == "gang"}
             keeps = [i for i, a in enumerate(obs.legal_actions) if a.action == "discard" and a.tile not in kong_tiles]
             if keeps:
