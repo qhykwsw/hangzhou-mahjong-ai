@@ -190,14 +190,17 @@
     return `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="代理桌成绩">${parts.join("")}</svg>`;
   }
 
-  // Free play (the strongest-entrant runner): each version that played enough rooms,
-  // its table score per game without games where an opponent was AFK, 95% interval by room.
+  // Free play (the strongest-entrant runner): each version that played enough rooms, its
+  // table score per room (the platform's "场": 10 games of 8 hands) from its mean per game
+  // without games where an opponent was AFK, 95% interval by room.
+  const ROOM_GAMES = 10;
   function onlineChart(online) {
+    const room = (v) => v * ROOM_GAMES;
     const rows = (online?.versions || []).slice().sort((a, b) => b.mean - a.mean);
     const short = (v) => (v.startsWith("heuristic-") ? v.split("--").pop() : v.replace(/^fp-/, ""));
     const few = (online?.omitted || []).map((r) => `${short(r.version)} ${r.rooms} 房`).join("、");
     $("onlineNote").textContent = online?.enabled
-      ? `各版本线上每场桌面分（剔除有对手挂机的场次），横线为按房聚类的 95% 区间；线上对手随时间变化，不同时期上场的版本不完全可比。`
+      ? `各版本线上每房的桌面分，即平台积分里的「一场」（10 场、80 手，四家合计为零），由每场均分 ×10 折算；剔除有对手挂机的场次，横线为按房聚类的 95% 区间；线上对手随时间变化，不同时期上场的版本不完全可比。`
         + `不足 ${online.min_rooms} 房的版本不画${few ? `（${few}）` : ""}`
       : "";
     if (!rows.length) return '<p class="muted">还没有足够的线上对局。</p>';
@@ -205,9 +208,9 @@
     const narrow = W < 600;
     const L = narrow ? 150 : 240, R = 16, T = 18, B = 26, row = 26;
     const H = T + B + row * rows.length;
-    const lo = Math.min(0, ...rows.map((r) => r.mean - 1.96 * r.se));
-    const hi = Math.max(0, ...rows.map((r) => r.mean + 1.96 * r.se));
-    const pad = Math.max(0.5, (hi - lo) * 0.06);
+    const lo = Math.min(0, ...rows.map((r) => room(r.mean - 1.96 * r.se)));
+    const hi = Math.max(0, ...rows.map((r) => room(r.mean + 1.96 * r.se)));
+    const pad = Math.max(5, (hi - lo) * 0.06);
     const x0 = lo - pad, x1 = hi + pad;
     const X = (v) => L + ((v - x0) / (x1 - x0)) * (W - L - R);
     const parts = [];
@@ -223,12 +226,13 @@
       const color = r.version.startsWith("fp-rl-") ? "var(--blue)" : r.version.startsWith("fp-rule-") ? "var(--teal)" : "#8a979c";
       const label = `${short(r.version)}（${r.rooms} 房${r.playing ? "，上场中" : ""}）`;
       const tip = `${r.version}\n${day(r.from)}–${day(r.to)}，${r.rooms} 房，${r.clean_games} 场（共 ${r.games} 场，其余有对手挂机）\n`
-        + `每场 ${signed(r.mean)} ± ${r.se.toFixed(2)}，每手 ${signed(r.per_hand)}；平均名次 ${r.place.toFixed(2)}，单场第一 ${(r.first * 100).toFixed(0)}%\n`
-        + `含挂机场次每场 ${signed(r.all_mean)}${r.room_rank == null ? "" : `；房间平均名次 ${r.room_rank.toFixed(2)}`}`;
+        + `每房 ${signed(room(r.mean), 1)} ± ${room(r.se).toFixed(1)}；每场（8 手）${signed(r.mean)}，每手 ${signed(r.per_hand)}\n`
+        + `单场平均名次 ${r.place.toFixed(2)}，单场第一 ${(r.first * 100).toFixed(0)}%${r.room_rank == null ? "" : `；房间平均名次 ${r.room_rank.toFixed(2)}`}\n`
+        + `含挂机场次每房 ${signed(room(r.all_mean), 1)}`;
       parts.push(`<text x="${L - 8}" y="${y + 4}" class="label" text-anchor="end"${r.playing ? ' font-weight="600"' : ""}>${esc(label)}<title>${esc(tip)}</title></text>`);
-      parts.push(`<line x1="${X(r.mean - 1.96 * r.se)}" x2="${X(r.mean + 1.96 * r.se)}" y1="${y}" y2="${y}" stroke="${color}" stroke-width="2"><title>${esc(tip)}</title></line>`);
-      parts.push(`<circle cx="${X(r.mean)}" cy="${y}" r="5" fill="${color}"><title>${esc(tip)}</title></circle>`);
-      parts.push(`<text x="${X(r.mean)}" y="${y - 8}" class="axis" text-anchor="middle">${signed(r.mean, 1)}</text>`);
+      parts.push(`<line x1="${X(room(r.mean - 1.96 * r.se))}" x2="${X(room(r.mean + 1.96 * r.se))}" y1="${y}" y2="${y}" stroke="${color}" stroke-width="2"><title>${esc(tip)}</title></line>`);
+      parts.push(`<circle cx="${X(room(r.mean))}" cy="${y}" r="5" fill="${color}"><title>${esc(tip)}</title></circle>`);
+      parts.push(`<text x="${X(room(r.mean))}" y="${y - 8}" class="axis" text-anchor="middle">${signed(room(r.mean), 0)}</text>`);
     });
     return `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="线上自由对战成绩">${parts.join("")}</svg>`;
   }
