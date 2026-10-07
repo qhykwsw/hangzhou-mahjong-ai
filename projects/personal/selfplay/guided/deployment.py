@@ -45,15 +45,22 @@ def _actor_config(config):
     return result | actor_options(config)
 
 
-def load_actor(source, device="cuda"):
+def load_actor(source, device="cuda", *, oracle=False):
     """Local checkpoints are trusted pickle inputs; exported weights use safe load.
 
     Service deployment accepts only exported directories. Loading a training
     checkpoint here is for local export/benchmark, never an HTTP-supplied path.
+
+    An Actor with the training-only oracle inputs (ADR-0018, guided.oracle:
+    ``oracle_inputs`` in its config, or any oracle parameter) is refused unless
+    ``oracle``: only a trial's training start (guided.trial.Context) and
+    expand ask for one. Everything that evaluates, serves, deploys or plays
+    against an Actor loads it here without, so none of them can ever feed or
+    read the hidden state, even if an export had failed to strip it.
     """
     import torch
     from .encoding import ENCODING, INPUTS
-    from .networks import actor_of, actor_options
+    from .networks import ORACLE_PREFIX, actor_of, actor_options, has_oracle
 
     source = Path(source)
     selected = torch.device(device)
@@ -65,18 +72,24 @@ def load_actor(source, device="cuda"):
             raise ValueError("incompatible Actor artifact or observation encoding")
         if _sha256(source / "actor.pt") != metadata.get("weights_sha256"):
             raise ValueError("Actor weight checksum mismatch")
+        if has_oracle(metadata["config"]) and not oracle:
+            raise ValueError(f"refusing an Actor with oracle inputs (ADR-0018: training only): {source}")
         config = _actor_config(metadata["config"])
         weights = torch.load(source / "actor.pt", map_location="cpu", weights_only=True)
     else:
         state = torch.load(source, map_location="cpu", weights_only=False)
         if state.get("format") != "guided-v1":
             raise ValueError("expected a guided-v1 training checkpoint")
+        if has_oracle(state["config"]) and not oracle:
+            raise ValueError(f"refusing an Actor with oracle inputs (ADR-0018: training only): {source}")
         config = _actor_config(state["config"])
         weights = state["actor"]
         encoding = state["config"].get("encoding", ENCODING)
         if encoding not in INPUTS:
             raise ValueError("incompatible observation encoding")
         metadata = {"format": FORMAT, "encoding": encoding, "config": config}
+    if not oracle and any(name.startswith(ORACLE_PREFIX) for name in weights):
+        raise ValueError(f"refusing Actor weights with oracle parameters (ADR-0018: training only): {source}")
     actor = actor_of(metadata["encoding"], config["dim"], config["layers"], config["heads"], **actor_options(config))
     actor.load_state_dict(weights, strict=True)
     for value in actor.state_dict().values():

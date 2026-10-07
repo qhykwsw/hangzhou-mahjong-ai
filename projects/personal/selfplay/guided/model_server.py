@@ -92,6 +92,12 @@ class Models:
         path = (self.root / name).resolve()
         if not path.is_relative_to(self.root) or not (path / "meta.json").is_file():
             raise ValueError(f"unknown model artifact: {name}")
+        from .networks import has_oracle
+
+        # Inference reads legal observations only (ADR-0018): an Actor with the
+        # training-only oracle inputs is never served (load_actor refuses it too).
+        if has_oracle(json.loads((path / "meta.json").read_text()).get("config") or {}):
+            raise ValueError(f"refusing to serve an Actor with oracle inputs (ADR-0018): {name}")
         with self.lock:
             if name not in self.loaded:
                 actor, meta = load_actor(

@@ -135,6 +135,11 @@ class Game:
         # how each seat plays in the copies is settled once, for the whole game.
         self._sources = (entries, external) if self.branching else None
         self._branch_seats = seat_plan(self) if self.branching else None
+        # cfg["oracle_inputs"] (guided.oracle, ADR-0018): the learner's decisions see the masked hidden state;
+        # oracle_turn is the learner's decision in the hand the copies of the pending one fork from.
+        from .oracle import options as oracle_options
+
+        self.oracle, self.oracle_turn = oracle_options(cfg, train), 0
         self.searched, self.window = 0, None
         self.shadows = []
         self.unfinished = False
@@ -275,6 +280,11 @@ class Game:
             )
             if self.train and seat == self.focal:
                 row.update(hook(self.cfg.get("critic_features"), oracle)(state, seat))
+                if self.oracle:
+                    from .oracle import decision
+
+                    # Without a critic_features hook the row's oracle_planes are the oracle's.
+                    decision(self, row, lambda: oracle(state, seat) if self.cfg.get("critic_features") else row)
                 if self.luck:
                     row["luck_pay"], row["luck_deal"] = state.luck
                 if self.race_luck:
@@ -421,6 +431,11 @@ def staged(obs, info, state, rounds):
     return observe(obs, info, state.scores, state.hand_no, rounds)
 
 
+def continues(game):
+    """Whether the learner's greedy continuations in the game's copies see the oracle too (guided.oracle)."""
+    return game.oracle is not None and game.oracle[1]
+
+
 def fork(state):
     """A copy of a hand to play on.
 
@@ -458,10 +473,11 @@ class Shadow:
     def __init__(self, game, state, action, legal, row):
         self.game, self.state, self.row = game, state, row
         self.dealer, self.pending, self.done = game.dealer, None, False
+        self.oracle_turn = game.oracle_turn  # the forked decision's (guided.oracle)
         state.step(action, legal)
 
     def advance(self):
-        from .encoding import encoder
+        from .encoding import encoder, oracle
 
         game, state = self.game, self.state
         encode = encoder(game.encoding)
@@ -482,6 +498,10 @@ class Shadow:
             self.pending = legal
             row = encode(obs, game.cfg["lookahead"])
             row["teacher"] = -1
+            if seat == game.focal and continues(game):
+                from .oracle import continuation
+
+                continuation(self, row, state.hand_no, lambda: oracle(state, seat))
             return {"row": row, "slot": GREEDY if seat == game.focal else game.specs[seat], "train": False, "bc": False}
         self.done, self.state = True, None
         self.settle(state)
@@ -663,15 +683,18 @@ def worker(conn, cfg, bundle_path, panel_path, worker_index, command):
             next_id += 1
             return True
 
+        from .oracle import FIELDS as ORACLE_FIELDS
+
         def inputs(request):
             if not command.get("policy_inputs_only"):
                 return request
             # Rollout/privileged fields stay in the worker's owned row and are
             # sent once with the completed game. Actor inference never reads
             # them; BC also needs its label.
-            return dict(request, row={
-                key: request["row"][key] for key in ("planes", "scalars", "events", "mask", "teacher")
-            })
+            row = {key: request["row"][key] for key in ("planes", "scalars", "events", "mask", "teacher")}
+            # The learner's masked oracle inputs (guided.oracle) go with its request.
+            row.update((key, request["row"][key]) for key in ORACLE_FIELDS if key in request["row"])
+            return dict(request, row=row)
 
         for _ in range(cfg["tables"]):
             add_game()

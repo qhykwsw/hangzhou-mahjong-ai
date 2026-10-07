@@ -42,11 +42,12 @@
 | `learning` / `networks` / `encoding` | PPO 与教师交叉熵、Actor 与带隐藏信息的 PopArt Critic、含本手完整公开历史的合法观察编码 |
 | `environment` / `collection` | CPU worker 驱动完整对局，父进程集中做 GPU 推理 |
 | `branches` | 训练采集的分支候选（`cfg["branches"]`）：父进程的 `hooks["branches"]` 给学习决策点名候选，worker 为每个候选 fork 一份打到本局结束，结果写进该行的 `branches`；Python 引擎的 `Branch` 与 C 引擎的 `fastgame.FastBranch` 逐位一致。接口见 [recipes/API.md](../recipes/API.md) |
+| `oracle` | oracle guiding（[ADR-0018](../../../../docs/adr/0018-oracle-guided-policy-training.md)，默认关闭）：`cfg["oracle_inputs"] = {"keep": γ}` 时，训练对局里学习座位的每个决策带上按 γ 逐元素遮盖的隐藏状态（三家暗手与牌墙，`encoding.oracle`），父进程只喂给学习者自己的 Actor；C 与 Python 引擎逐位一致。CUDA 图路径在 GPU 主机上用 `python -m guided.probe_oracle_graphs [--actor <起点>]` 核对（输出 `"ok": true`）。接口见 [recipes/API.md](../recipes/API.md) |
 | `walls` / `opponents` | 只在训练对局生效、默认关闭：稳定牌墙与学习座位的摸牌运气（即时与竞速两种 AIVAT 控制变量，`cfg["luck_kind"]`），训练对手的 race profile 抖动（`opponent_jitter`）与平台超时默认动作（`opponent_timeout`）；C 与 Python 引擎逐位一致，cfg 格式见[方案接口](../recipes/API.md) |
 | `evaluation` / `statistics` / `inference` | 共同牌墙、四座轮换的配对评估，指导强度函数，评估专用的 Actor 批量推理 |
 | `artifacts` / `sync` | 教师包的导出、校验与跨机发布 |
 | `deployment` | Actor 导出、基准测试与独立 HTTP 推理服务 |
-| `expand` | 把导出的 Actor 扩成更宽的观察编码：新的平面和标量输入列置零，事件末字段的嵌入表每行取原第 0 行，其余参数照抄，决策逐位不变，产物按权重 SHA-256 写进模型库；`--belief-head` 另加信念头、`--share-suits` 改成花色共享嵌入（见下文 Actor 可选结构，后者会稍微改变决策） |
+| `expand` | 把导出的 Actor 扩成更宽的观察编码：新的平面和标量输入列置零，事件末字段的嵌入表每行取原第 0 行，其余参数照抄，决策逐位不变，产物按权重 SHA-256 写进模型库；`--belief-head` 另加信念头、`--share-suits` 改成花色共享嵌入、`--oracle-inputs` 做带零初始化 oracle 输入的训练起点（见下文 Actor 可选结构，`--share-suits` 会稍微改变决策） |
 | `resources` / `tune_evaluation` | 按 CPU 亲和性、cgroup 配额与可用显存给出初始并发，再在固定赛程上实测校准 |
 | `brawl` / `brawl_pipeline` | 5、8、10 或 11 个冻结策略的均衡大乱斗；流水线按校准、混合对局冒烟、计分比赛顺序执行，遇错停止 |
 | `trial` / `recipe_jobs` | 训练方案迭代：远端框架在固定时限和显存、内存上限内调用 `recipe.train(ctx)`，对手取研究冻结的评估对手（规则版本按各自运行时隔离运行）；训练出的 Actor 拉回 Mac 交给研究框架评估。Mac 侧任务负责部署、上传方案、脱离运行与轮询，主机不可达时无限期等待，主机重启时记为主机故障、从头重跑 |
@@ -126,6 +127,7 @@ PYTHONPATH=../../../src:src:. ../../../.venv/bin/python -m guided.platform_datas
 - Actor 的可选结构记在导出 `meta.json` 的 `config` 里（`networks.actor_options`），缺省时权重、输出和导出文件与没有这些选项时逐位相同；`model_server` 的 MLX 后端实现同一方程。
   - `"belief_head": true`（至少两层）：主干第 `layers // 2` 个块之后，从 34 个牌 token 预测三家对手（按出牌顺序）每种牌的暗手张数，输出 3×34 的 logits，sigmoid 为张数 / 4；sigmoid 停梯度后经 `encoder.belief_in` 线性投影加回牌 token，再进后面的块。`forward(..., return_belief=True)` 返回 `(logits, belief)`，训练用行里的 `oracle_planes` 监督（`networks.belief_target`，ADR-0009 允许训练标签读隐藏状态）；策略损失不经注入回传到头。头只读合法观察，推理仍是一次前向、只返回 logits。`expand --belief-head` 把现有 Actor 扩成带头的版本：头的输出层和注入层置零，隐层取固定种子，logits 逐位不变。
   - `"suit_embedding": "shared"`：Actor 里按牌的嵌入表（牌 token 的 `encoder.tile_embedding`、事件的牌与吃牌两张表）改为「点数嵌入 + 花色嵌入」（`networks.SuitEmbedding`）：万、筒、条共用 9 行点数，各加一个花色向量，7 张字牌和事件的「无牌」单独一行。Actor 其余部分本来就按牌共享（`tile_in`、出牌头、鸣牌头对每个牌 token 一样，平面里有花色独热和点数），所以这几张表是输入侧仅有的逐牌参数；`state_head` 的 63 个吃牌 logits 仍按花色各一行。参数形状变了，不能逐位扩展：`expand --share-suits` 从现有 Actor 起步，取原表的最小二乘加性拟合（点数取三个花色的平均，花色取该花色各点数的平均减总平均，字牌与「无牌」照抄），丢掉的只是原表里点数加花色之外的部分。MLX 后端加载时按同一公式算好整表。
+  - `"oracle_inputs": true`（只用于训练，[ADR-0018](../../../../docs/adr/0018-oracle-guided-policy-training.md)）：`forward(planes, scalars, events, oracle=(planes [n,16,34], scalars [n,4]))` 在输入端把隐藏状态加进来：`encoder.oracle_tile_in`（无偏置 16→dim）加到每个牌 token，`encoder.oracle_state_in`（无偏置 4→dim）加到状态 token，两者初始为零。`oracle=None` 跳过这一路，与剥离后的 Actor 逐位相同；全零输入也逐位相同（无偏置）。所有导出（`trial.export_actor`，含快照与最终产物）都剥离选项和参数，写出前核对剥离后的 logits 与不给 oracle、给全零 oracle 时逐位一致；`deployment.load_actor` 与 `model_server` 拒绝 `meta.json` 或权重里带 oracle 通道的模型，MLX 后端也拒绝，只有 trial 的训练起点（`load_actor(..., oracle=True)`）能载入。`expand --oracle-inputs` 把现有 Actor 做成这样的训练起点，logits 逐位不变；`networks.with_oracle_inputs(actor)` 对内存里的 Actor 做同样的事。
 - `guided.deployment` 是独立 GPU 服务：`POST /act` 接收 `{"observation_payload": ...}` 完整公开观察并返回合法动作，`GET /health` 报告状态。它不是 ONNX 发布包，不改变平台 CPU/ONNX 发布契约，导出与测速也不会自动报名比赛。部署验收以 4070 实机的 10 桌并发为准，计时覆盖 HTTP、排队、编码、推理和回传。
 
 运行状态、完整配置和回执放本项目 `.local/`；各次实验的结论与待办汇总在本机 `.local/reports/guided-status.md`，具体成绩不写入本手册。

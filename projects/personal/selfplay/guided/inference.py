@@ -25,12 +25,22 @@ def prepare_frozen(actor, device):
     return actor
 
 
-def policy_logits(model, planes, scalars, events):
-    """Eager inference also handles frozen precast weights, without CUDA graphs."""
+def policy_logits(model, planes, scalars, events, oracle=None):
+    """Eager inference also handles frozen precast weights, without CUDA graphs.
+
+    ``oracle`` (planes, scalars): the learner's oracle inputs (guided.oracle), passed only when given.
+    """
     if not getattr(model, "_frozen_fp16", False):
-        return model(planes, scalars, events)
+        return forward(model, planes, scalars, events, oracle)
     with torch.autocast(planes.device.type, torch.float16, cache_enabled=False):
+        return forward(model, planes, scalars, events, oracle)
+
+
+def forward(model, planes, scalars, events, oracle=None):
+    """The model's logits; its ``oracle`` argument (guided.oracle) only when there is one."""
+    if oracle is None:
         return model(planes, scalars, events)
+    return model(planes, scalars, events, oracle=oracle)
 
 
 def widen(rows, model):
@@ -48,7 +58,9 @@ def widen(rows, model):
     return [augment(r, encoding) for r in rows]
 
 
-def policy_batch(rows, device):
+def policy_batch(rows, device, oracle=False):
+    """The rows' Actor inputs on ``device``; with ``oracle``, batch["oracle"] holds the rows' oracle
+    inputs (guided.oracle.stack: zero for a row without) when any row has them, else None."""
     if not rows:
         raise ValueError("cannot infer an empty batch")
     # Encodings differ in their numbers of planes and scalars (guided.encoding.INPUTS); a batch has one.
@@ -75,6 +87,11 @@ def policy_batch(rows, device):
     for i, value in enumerate(events):
         padded[i, : len(value)] = value
     batch["events"] = torch.as_tensor(padded, device=device)
+    if oracle:
+        from .oracle import stack
+
+        stacked = stack(rows)
+        batch["oracle"] = None if stacked is None else tuple(torch.as_tensor(x, device=device) for x in stacked)
     return batch
 
 
@@ -178,6 +195,12 @@ class ActorGraphs:
     multinomial) and the branches hook run on the batch's rows of the
     graph's output, as on the eager path (branched_decision), and the
     candidates come back after the three answer columns.
+
+    The learner's oracle inputs (decide's ``oracle``, guided.oracle) are two
+    more static inputs, float16 [size, 16, 34] and [size, 4], of graphs of
+    their own (the key's ``inputs`` count gains the oracle's 16 planes): the
+    forward then passes them to the Actor. Batches without them replay the
+    graphs they always did.
     """
 
     BATCH_BUCKETS = (1, 2, 4, 8, 16, 32, 64, 128)
@@ -225,7 +248,7 @@ class ActorGraphs:
         # A ring of IN_FLIGHT buffer sets per model and shape: a buffer is not
         # refilled while its earlier copy may still be on the way, and other
         # models' batches or the next round may be launched in between.
-        planes, scalars = inputs
+        planes, scalars, *oracle = inputs
         ring = self.hosts.get((key, size, width, inputs))
         if ring is None:
             ring = self.hosts[(key, size, width, inputs)] = []
@@ -236,6 +259,11 @@ class ActorGraphs:
                     torch.zeros((size, width, 5), dtype=torch.int64).pin_memory(),
                     torch.zeros((size, N_ACTIONS), dtype=torch.bool).pin_memory(),
                 )
+                if oracle:  # the learner's oracle inputs (guided.oracle): planes, scalars
+                    tensors += (
+                        torch.zeros((size, oracle[0], 34), dtype=torch.float16).pin_memory(),
+                        torch.zeros((size, 4), dtype=torch.float16).pin_memory(),
+                    )
                 views = [t.numpy() for t in tensors]
                 views[3][:, 0] = (
                     True  # padding rows stay valid; they never reach a caller
@@ -264,14 +292,14 @@ class ActorGraphs:
         return ring[turn]
 
     @staticmethod
-    def _decide(model, planes, scalars, events, mask, sample):
+    def _decide(model, planes, scalars, events, mask, sample, oracle=None):
         # fp16 tensor cores: the large pool Actor answers about twice as fast
         # (measured 1.8-2.6x on a 4070), the small one 1.3-2x. Collection only
         # samples from these policies, so the last-bit logit differences from
         # fp32 change nothing that the training measures; evaluation is the
         # research model service, not this class.
         with torch.autocast("cuda", torch.float16, cache_enabled=False):
-            logits = model(planes, scalars, events).float()
+            logits = forward(model, planes, scalars, events, oracle).float()
         logp = logits.masked_fill(~mask, -1e9).log_softmax(-1)
         greedy = logp.argmax(-1)
         actions = torch.multinomial(logp.exp(), 1).squeeze(1) if sample else greedy
@@ -279,15 +307,15 @@ class ActorGraphs:
         return torch.stack((actions.float(), chosen, greedy.float()), -1)
 
     @staticmethod
-    def _logits(model, planes, scalars, events, mask):
+    def _logits(model, planes, scalars, events, mask, oracle=None):
         # The forward of _decide, for a sample hook to choose from (the mask is the hook's).
         with torch.autocast("cuda", torch.float16, cache_enabled=False):
-            return model(planes, scalars, events).float()
+            return forward(model, planes, scalars, events, oracle).float()
 
     @staticmethod
-    def _hooked(model, planes, scalars, events, mask, hook):
+    def _hooked(model, planes, scalars, events, mask, hook, oracle=None):
         # The forward and a capturable hook's decision, as one graph.
-        return hooked_decision(ActorGraphs._logits(model, planes, scalars, events, mask), mask, hook)
+        return hooked_decision(ActorGraphs._logits(model, planes, scalars, events, mask, oracle), mask, hook)
 
     def _capture(self, compute, model, static):
         """Warm up and capture ``compute(model, *static)`` into a graph sharing the pool; (output, graph)."""
@@ -303,7 +331,7 @@ class ActorGraphs:
         self.pool = graph.pool()
         return out, graph
 
-    def decide(self, key, model, rows, sample, hook=None, branches=None):
+    def decide(self, key, model, rows, sample, hook=None, branches=None, oracle=False):
         """Launch (action, log-probability, argmax) per row: the action sampled from the policy, or its argmax.
 
         With a sample hook (and ``sample``) the hook chooses the action and its
@@ -319,30 +347,38 @@ class ActorGraphs:
         graph may overwrite this one's device output. Up to IN_FLIGHT calls
         for one model and shape may be unread (their host buffers rotate), so
         the device runs one batch while the host fills the next.
+
+        With ``oracle`` (the collection parent sets it for the learner's slots
+        only, guided.oracle) the rows' oracle inputs reach the model, zero for
+        a row without them; when no row has them the decision is the plain one.
         """
+        from .oracle import PLANES, SCALARS
+
         start = time.perf_counter()
         hook = hook if sample else None
         branches = branches if sample else None
         rows = widen(rows, model)
+        oracle = oracle and any(PLANES in row for row in rows)
         shape = self.shape(rows)
         device = next(model.parameters()).device
         if shape is None:
-            batch = policy_batch(rows, device)
+            batch = policy_batch(rows, device, oracle=oracle)
             inputs = (batch["planes"], batch["scalars"], batch["events"], batch["mask"])
+            fed = {"oracle": batch["oracle"]} if oracle else {}
             if branches is not None:
-                decided = Decided(branched_decision(self._logits(model, *inputs), batch["mask"], hook, branches))
+                decided = Decided(branched_decision(self._logits(model, *inputs, **fed), batch["mask"], hook, branches))
             elif hook is None:
-                decided = Decided(self._decide(model, *inputs, sample))
+                decided = Decided(self._decide(model, *inputs, sample, **fed))
             else:
-                decided = Decided(hooked_decision(self._logits(model, *inputs), batch["mask"], hook))
+                decided = Decided(hooked_decision(self._logits(model, *inputs, **fed), batch["mask"], hook))
             self.seconds["eager"] += time.perf_counter() - start
             self.counts["eager"] += 1
             return decided
         size, width = shape
-        count = (len(rows[0]["planes"]), len(rows[0]["scalars"]))
-        tensors, (planes, scalars, events, mask), answers, done = self._host(
-            key, size, width, count
-        )
+        # The oracle's graphs and buffers are their own: the inputs count gains its planes.
+        count = (len(rows[0]["planes"]), len(rows[0]["scalars"])) + ((16,) if oracle else ())
+        tensors, views, answers, done = self._host(key, size, width, count)
+        planes, scalars, events, mask = views[:4]
         for i, row in enumerate(rows):
             planes[i] = row["planes"]
             scalars[i] = row["scalars"]
@@ -350,6 +386,15 @@ class ActorGraphs:
             events[i, : len(history)] = history
             events[i, len(history) :] = 0
             mask[i] = row["mask"]
+        if oracle:
+            oracle_planes, oracle_scalars = views[4:]
+            for i, row in enumerate(rows):
+                if PLANES in row:
+                    oracle_planes[i] = row[PLANES]
+                    oracle_scalars[i] = row[SCALARS]
+                else:
+                    oracle_planes[i] = 0
+                    oracle_scalars[i] = 0
         mark = time.perf_counter()
         self.seconds["fill"] += mark - start
         # A hooked decision replays the logits alone, unless the hook is
@@ -358,12 +403,16 @@ class ActorGraphs:
         in_graph = hook is not None and branches is None and getattr(hook, "capturable", False) is True
         if in_graph:
             mode = ("hooked", id(hook))
-            compute = lambda *inputs: self._hooked(*inputs, hook)  # noqa: E731
+            compute = lambda *inputs, **fed: self._hooked(*inputs, hook, **fed)  # noqa: E731
         elif hook is not None or branches is not None:
             mode, compute = "logits", self._logits
         else:
             mode = sample
-            compute = lambda *inputs: self._decide(*inputs, sample)  # noqa: E731
+            compute = lambda *inputs, **fed: self._decide(*inputs, sample, **fed)  # noqa: E731
+        if oracle:
+            # The static oracle tensors follow the four inputs; the forward takes them as its oracle.
+            plain = compute
+            compute = lambda model, p, s, e, m, op, os: plain(model, p, s, e, m, oracle=(op, os))  # noqa: E731
         entry = self.graphs.get((key, size, width, count, mode))
         if entry is None:
             static = [t.to(device) for t in tensors]

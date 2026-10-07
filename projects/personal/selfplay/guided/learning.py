@@ -23,6 +23,10 @@ def make_batch(rows, device):
     Missing RL fields are allowed for replay-only demonstrations, but update()
     explicitly requires them for on-policy rows. label_version stays a list of
     original strings, rather than being overwritten with the current teacher.
+    When any row has the learner's oracle inputs (guided.oracle), the batch
+    has them too, "oracle_input_planes" [n, 16, 34] and "oracle_input_scalars"
+    [n, 4] float16, zero for a row without (oracle.argument gives the Actor's
+    argument); otherwise it has no such keys.
     """
     if not rows:
         raise ValueError("cannot make an empty batch")
@@ -54,6 +58,12 @@ def make_batch(rows, device):
     for i, value in enumerate(events):
         padded[i, : len(value)] = value
     batch["events"] = torch.as_tensor(padded, device=device)
+    from .oracle import FIELDS as ORACLE_FIELDS, stack
+
+    stacked = stack(rows)
+    if stacked is not None:
+        for key, value in zip(ORACLE_FIELDS, stacked):
+            batch[key] = torch.as_tensor(value, device=device)
     for key in ("action", "teacher"):
         default = -1 if key == "teacher" else 0
         batch[key] = torch.as_tensor(
@@ -93,6 +103,14 @@ def teacher_cross_entropy(logits, mask, teacher):
 
 def _actor_args(batch):
     return batch["planes"], batch["scalars"], batch["events"]
+
+
+def _actor_kwargs(batch):
+    """The learner's oracle inputs as its Actor saw them in collection (guided.oracle), when the rows have them."""
+    from .oracle import argument
+
+    oracle = argument(batch)
+    return {} if oracle is None else {"oracle": oracle}
 
 
 def _critic_args(batch):
@@ -230,7 +248,7 @@ def update(actor, critic, actor_opt, critic_opt, rows, cfg, w, replay, rng):
                         break
                     indices = group[offset : offset + micro]
                     mb = make_batch([rows[int(i)] for i in indices], device)
-                    logits = actor(*_actor_args(mb))
+                    logits = actor(*_actor_args(mb), **_actor_kwargs(mb))
                     logp = masked_log_probs(logits, mb["mask"])
                     entropy = (
                         -(logp.exp() * logp.masked_fill(~mb["mask"], 0)).sum(-1).mean()
@@ -276,7 +294,7 @@ def update(actor, critic, actor_opt, critic_opt, rows, cfg, w, replay, rng):
                                 device,
                             )
                             old_loss = teacher_cross_entropy(
-                                actor(*_actor_args(old)), old["mask"], old["teacher"]
+                                actor(*_actor_args(old), **_actor_kwargs(old)), old["mask"], old["teacher"]
                             )
                             teacher_loss = 0.9 * teacher_loss + 0.1 * old_loss
                     actor_loss = coefficient * teacher_loss

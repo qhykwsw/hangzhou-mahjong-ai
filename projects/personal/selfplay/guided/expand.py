@@ -1,7 +1,9 @@
-"""Extend an exported Actor: a wider encoding or a belief head keeps every decision; shared suits start from a fit.
+"""Extend an exported Actor: a wider encoding, a belief head or oracle inputs keep every decision;
+shared suits start from a fit.
 
     python -m guided.expand <Actor artifact dir or guided-v1 checkpoint> <models root> \
-        [--encoding guided-current-hand-v3 | guided-current-hand-v4] [--belief-head] [--share-suits]
+        [--encoding guided-current-hand-v3 | guided-current-hand-v4] [--belief-head] [--share-suits] \
+        [--oracle-inputs]
 
 A wider encoding appends planes and scalars and may give the events' last
 field values (guided.encoding). The extended Actor's new input columns of
@@ -19,8 +21,14 @@ change decisions: the Actor's per-tile embeddings become shared-suit tables
 (networks.SuitEmbedding), started at the least-squares additive fit of the
 source's tables (rank: the mean over the three suits; suit: its mean over the
 ranks less the overall mean; honours and "no tile" copied), so only what the
-source's tables held beyond rank plus suit is lost. Writes the artifact to
-<models root>/<weights sha>/ (the model store's layout) and prints that path.
+source's tables held beyond rank plus suit is lost. ``--oracle-inputs`` makes a
+training start with the training-only oracle inputs (ADR-0018, guided.oracle):
+their bias-free projections start at zero, so the logits stay the source's bit
+for bit with or without oracle input. Such an artifact is a trial's start and
+nothing else: deployment.load_actor refuses it everywhere else (evaluation,
+serving, opponents) and every export of the training strips the inputs again.
+Writes the artifact to <models root>/<weights sha>/ (the model store's layout)
+and prints that path.
 """
 
 import argparse
@@ -62,18 +70,20 @@ def _shared_suit_weights(weights):
     return result
 
 
-def expand(source, root, encoding=None, *, belief_head=False, suit_embedding=None):
+def expand(source, root, encoding=None, *, belief_head=False, suit_embedding=None, oracle_inputs=False):
     import torch
     from .deployment import load_actor
     from .encoding import EVENT_TAILS, INPUTS, inputs
+    from .networks import ORACLE_PLANES, ORACLE_SCALARS, has_oracle
     from .trial import export_actor
 
-    actor, meta = load_actor(source, "cpu")
+    # A start with oracle inputs may be expanded further; it stays a training start.
+    actor, meta = load_actor(source, "cpu", oracle=True)
     order = list(INPUTS)
     encoding = encoding or meta["encoding"]
     have, want = INPUTS[meta["encoding"]], inputs(encoding)
     if order.index(encoding) < order.index(meta["encoding"]) or (
-        encoding == meta["encoding"] and not belief_head and not suit_embedding
+        encoding == meta["encoding"] and not belief_head and not suit_embedding and not oracle_inputs
     ):
         raise ValueError(f"{encoding} does not extend {meta['encoding']}")
     config = dict(meta["config"], encoding=encoding)
@@ -85,6 +95,10 @@ def expand(source, root, encoding=None, *, belief_head=False, suit_embedding=Non
         if suit_embedding != "shared" or config.get("suit_embedding"):
             raise ValueError(f"cannot change suit_embedding {config.get('suit_embedding')!r} to {suit_embedding!r}")
         config["suit_embedding"] = suit_embedding
+    if oracle_inputs:
+        if has_oracle(config):
+            raise ValueError("the Actor already has oracle inputs")
+        config["oracle_inputs"] = True
     weights = {k: v.detach().clone() for k, v in actor.state_dict().items()}
     if encoding != meta["encoding"]:
         for name, size in (("encoder.tile_in.weight", want[0]), ("encoder.state_in.weight", want[1])):
@@ -101,11 +115,17 @@ def expand(source, root, encoding=None, *, belief_head=False, suit_embedding=Non
         weights = _shared_suit_weights(weights)
     if belief_head:
         weights |= _belief_weights(config)
+    if oracle_inputs:
+        # Bias-free and zero: no oracle, a zero one and any other give the source's logits until training moves them.
+        dim = config["dim"]
+        weights["encoder.oracle_tile_in.weight"] = torch.zeros((dim, ORACLE_PLANES))
+        weights["encoder.oracle_state_in.weight"] = torch.zeros((dim, ORACLE_SCALARS))
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".expand-", dir=root) as tmp:
         staged = Path(tmp) / "artifact"
-        written = export_actor(weights, config, staged, source=meta.get("weights_sha256"))
+        written = export_actor(weights, config, staged, source=meta.get("weights_sha256"),
+                               oracle_start=has_oracle(config))
         target = root / written["weights_sha256"]
         if target.exists():
             raise FileExistsError(f"refusing to overwrite artifact: {target}")
@@ -123,10 +143,12 @@ def main():
     parser.add_argument("--belief-head", action="store_true", help="add a zero-initialized belief head")
     parser.add_argument("--share-suits", action="store_true",
                         help="share rank embeddings across the suits (changes decisions slightly)")
+    parser.add_argument("--oracle-inputs", action="store_true",
+                        help="a training start with zero oracle inputs (ADR-0018; refused outside training)")
     args = parser.parse_args()
-    encoding = args.encoding or (None if args.belief_head or args.share_suits else ENCODING_V3)
+    encoding = args.encoding or (None if args.belief_head or args.share_suits or args.oracle_inputs else ENCODING_V3)
     print(expand(args.source, args.root, encoding, belief_head=args.belief_head,
-                 suit_embedding="shared" if args.share_suits else None))
+                 suit_embedding="shared" if args.share_suits else None, oracle_inputs=args.oracle_inputs))
 
 
 if __name__ == "__main__":
