@@ -1,7 +1,7 @@
-"""Extend an exported Actor to a wider observation encoding without changing a decision.
+"""Extend an exported Actor: a wider encoding or a belief head keeps every decision; shared suits start from a fit.
 
     python -m guided.expand <Actor artifact dir or guided-v1 checkpoint> <models root> \
-        [--encoding guided-current-hand-v3 | guided-current-hand-v4]
+        [--encoding guided-current-hand-v3 | guided-current-hand-v4] [--belief-head] [--share-suits]
 
 A wider encoding appends planes and scalars and may give the events' last
 field values (guided.encoding). The extended Actor's new input columns of
@@ -10,8 +10,17 @@ among them), every row of the last event embedding of a v1 or v2 Actor becomes
 its row 0 (the only one those encodings use; a v3 Actor's table is already as
 wide), and every other tensor is copied, so on a row of the wider encoding it computes
 exactly what the source Actor computes on that row's prefixes; training then
-learns to use the new inputs. Writes the artifact to <models root>/<weights
-sha>/ (the model store's layout) and prints that path.
+learns to use the new inputs. ``--belief-head`` and ``--share-suits`` keep
+the source's encoding unless ``--encoding`` is given. ``--belief-head`` adds the opponents' tile belief (networks.Actor): its output layer
+and the projection that feeds it back start at zero, so the logits stay the
+source's bit for bit; its hidden layer is drawn from a fixed seed (a dead
+zero layer would never learn). ``--share-suits`` is the one step that does
+change decisions: the Actor's per-tile embeddings become shared-suit tables
+(networks.SuitEmbedding), started at the least-squares additive fit of the
+source's tables (rank: the mean over the three suits; suit: its mean over the
+ranks less the overall mean; honours and "no tile" copied), so only what the
+source's tables held beyond rank plus suit is lost. Writes the artifact to
+<models root>/<weights sha>/ (the model store's layout) and prints that path.
 """
 
 import argparse
@@ -21,7 +30,39 @@ import tempfile
 from . import bootstrap  # noqa: F401
 
 
-def expand(source, root, encoding):
+def _belief_weights(config):
+    """The belief head's tensors for an Actor of ``config``: output layer and belief_in zero."""
+    import torch
+    from .networks import actor_of, actor_options
+
+    # A fixed seed: the same source always gives the same artifact.
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(0)
+        template = actor_of(config["encoding"], config["dim"], config["layers"], config["heads"],
+                            **actor_options(config))
+    weights = {
+        k: v.detach().clone()
+        for k, v in template.state_dict().items()
+        if k.startswith(("encoder.belief_head.", "encoder.belief_in."))
+    }
+    for name in ("encoder.belief_head.3.weight", "encoder.belief_head.3.bias",
+                 "encoder.belief_in.weight", "encoder.belief_in.bias"):
+        weights[name].zero_()
+    return weights
+
+
+def _shared_suit_weights(weights):
+    """``weights`` with each per-tile table replaced by its shared-suit fit (networks.SuitEmbedding.fit)."""
+    from .networks import TILE_FIELDS, SuitEmbedding
+
+    result = dict(weights)
+    for name in ("encoder.tile_embedding", *(f"encoder.event_embeddings.{i}.weight" for i in TILE_FIELDS)):
+        prefix = name.removesuffix("weight").rstrip(".") + "."
+        result |= {prefix + k: v for k, v in SuitEmbedding.fit(result.pop(name)).items()}
+    return result
+
+
+def expand(source, root, encoding=None, *, belief_head=False, suit_embedding=None):
     import torch
     from .deployment import load_actor
     from .encoding import EVENT_TAILS, INPUTS, inputs
@@ -29,27 +70,42 @@ def expand(source, root, encoding):
 
     actor, meta = load_actor(source, "cpu")
     order = list(INPUTS)
+    encoding = encoding or meta["encoding"]
     have, want = INPUTS[meta["encoding"]], inputs(encoding)
-    if order.index(encoding) <= order.index(meta["encoding"]):
+    if order.index(encoding) < order.index(meta["encoding"]) or (
+        encoding == meta["encoding"] and not belief_head and not suit_embedding
+    ):
         raise ValueError(f"{encoding} does not extend {meta['encoding']}")
+    config = dict(meta["config"], encoding=encoding)
+    if belief_head:
+        if config.get("belief_head"):
+            raise ValueError("the Actor already has a belief head")
+        config["belief_head"] = True
+    if suit_embedding:
+        if suit_embedding != "shared" or config.get("suit_embedding"):
+            raise ValueError(f"cannot change suit_embedding {config.get('suit_embedding')!r} to {suit_embedding!r}")
+        config["suit_embedding"] = suit_embedding
     weights = {k: v.detach().clone() for k, v in actor.state_dict().items()}
-    for name, size in (("encoder.tile_in.weight", want[0]), ("encoder.state_in.weight", want[1])):
-        narrow = weights[name]
-        wide = torch.zeros((narrow.shape[0], size), dtype=narrow.dtype)
-        wide[:, : narrow.shape[1]] = narrow
-        weights[name] = wide
-    # Earlier encodings only ever look up row 0 (their other rows never trained),
-    # so every row of the wider table starts as that row.
-    tail = weights["encoder.event_embeddings.4.weight"]
-    if len(tail) != EVENT_TAILS[encoding]:
-        weights["encoder.event_embeddings.4.weight"] = tail[:1].expand(EVENT_TAILS[encoding], -1).contiguous()
+    if encoding != meta["encoding"]:
+        for name, size in (("encoder.tile_in.weight", want[0]), ("encoder.state_in.weight", want[1])):
+            narrow = weights[name]
+            wide = torch.zeros((narrow.shape[0], size), dtype=narrow.dtype)
+            wide[:, : narrow.shape[1]] = narrow
+            weights[name] = wide
+        # Earlier encodings only ever look up row 0 (their other rows never trained),
+        # so every row of the wider table starts as that row.
+        tail = weights["encoder.event_embeddings.4.weight"]
+        if len(tail) != EVENT_TAILS[encoding]:
+            weights["encoder.event_embeddings.4.weight"] = tail[:1].expand(EVENT_TAILS[encoding], -1).contiguous()
+    if suit_embedding:
+        weights = _shared_suit_weights(weights)
+    if belief_head:
+        weights |= _belief_weights(config)
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".expand-", dir=root) as tmp:
         staged = Path(tmp) / "artifact"
-        written = export_actor(
-            weights, dict(meta["config"], encoding=encoding), staged, source=meta.get("weights_sha256")
-        )
+        written = export_actor(weights, config, staged, source=meta.get("weights_sha256"))
         target = root / written["weights_sha256"]
         if target.exists():
             raise FileExistsError(f"refusing to overwrite artifact: {target}")
@@ -63,9 +119,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("source", help="an exported Actor directory or a guided-v1 training checkpoint")
     parser.add_argument("root", help="models root; the artifact goes to <root>/<weights sha>/")
-    parser.add_argument("--encoding", default=ENCODING_V3)
+    parser.add_argument("--encoding", help=f"default {ENCODING_V3}, or the source's with another option")
+    parser.add_argument("--belief-head", action="store_true", help="add a zero-initialized belief head")
+    parser.add_argument("--share-suits", action="store_true",
+                        help="share rank embeddings across the suits (changes decisions slightly)")
     args = parser.parse_args()
-    print(expand(args.source, args.root, args.encoding))
+    encoding = args.encoding or (None if args.belief_head or args.share_suits else ENCODING_V3)
+    print(expand(args.source, args.root, encoding, belief_head=args.belief_head,
+                 suit_embedding="shared" if args.share_suits else None))
 
 
 if __name__ == "__main__":

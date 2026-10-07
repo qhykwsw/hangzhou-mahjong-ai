@@ -35,11 +35,14 @@ def _sha256(path):
 
 
 def _actor_config(config):
+    from .networks import actor_options
+
     result = {key: int(config[key]) for key in ("dim", "layers", "heads")}
     if min(result.values()) < 1 or result["dim"] % result["heads"]:
         raise ValueError("invalid actor architecture")
     result["lookahead"] = bool(config.get("lookahead", True))
-    return result
+    # Optional Actor structures (networks.actor_options); absent by default.
+    return result | actor_options(config)
 
 
 def load_actor(source, device="cuda"):
@@ -50,7 +53,7 @@ def load_actor(source, device="cuda"):
     """
     import torch
     from .encoding import ENCODING, INPUTS
-    from .networks import actor_of
+    from .networks import actor_of, actor_options
 
     source = Path(source)
     selected = torch.device(device)
@@ -74,7 +77,7 @@ def load_actor(source, device="cuda"):
         if encoding not in INPUTS:
             raise ValueError("incompatible observation encoding")
         metadata = {"format": FORMAT, "encoding": encoding, "config": config}
-    actor = actor_of(metadata["encoding"], config["dim"], config["layers"], config["heads"])
+    actor = actor_of(metadata["encoding"], config["dim"], config["layers"], config["heads"], **actor_options(config))
     actor.load_state_dict(weights, strict=True)
     for value in actor.state_dict().values():
         if not bool(torch.isfinite(value).all()):
