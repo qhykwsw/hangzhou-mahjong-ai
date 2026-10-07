@@ -101,8 +101,11 @@ def summarize(results, blocks, rounds):
                 snapshots=sum(len(r["snapshots"]) for r in results), dealer_edge=edge, draw_rate=p)
 
 
-def measure(a_id, b_id, *, hands=None, seed=None, host="local", k=None):
-    """V(b) - V(a), points per game on the fixed pool (see the module docstring); appended to pdl-results.jsonl."""
+def measure(a_id, b_id, *, hands=None, seed=None, host="local", k=None, a_spec=None, b_spec=None):
+    """V(b) - V(a), points per game on the fixed pool (see the module docstring); appended to pdl-results.jsonl.
+
+    A version without a record yet (an attempt being judged, harness.evaluate) passes its spec.
+    """
     import fcntl
 
     if host != "local":
@@ -112,7 +115,7 @@ def measure(a_id, b_id, *, hands=None, seed=None, host="local", k=None):
     rounds = int(pool["config"]["rounds"])
     blocks = max(1, hands // (4 * rounds))
     seed = random.SystemRandom().getrandbits(62) if seed is None else int(seed)
-    specs = {"A": spec_of(a_id), "B": spec_of(b_id)}
+    specs = {"A": a_spec or spec_of(a_id), "B": b_spec or spec_of(b_id)}
     policies = dict(E.playing(pool), **{n: E.with_timeouts(s) for n, s in specs.items()})
     root = E.LOCAL / "pdl" / f"{a_id}--{b_id}--{seed}--{blocks}x{k}"
     env = dict(os.environ, PYTHONPATH=pool["runtime_path"], **E._job_env(pool))

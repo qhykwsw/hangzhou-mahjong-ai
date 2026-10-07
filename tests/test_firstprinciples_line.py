@@ -170,9 +170,15 @@ def test_one_version_one_record(harness):
     assert [(r["id"], r["games"]) for r in shown] == [("fp-rl-start-x", 16384), ("ref-piao", 16384), ("fp-rl-003", 0)]
 
 
-@pytest.mark.parametrize("new_best_dev, verdict, replayed", [(2.0, "discard", []), (0.5, "keep", ["fp-rl-008"])])
-def test_new_best_during_confirmation_is_first_compared_on_dev(harness, monkeypatch, new_best_dev, verdict, replayed):
+@pytest.mark.parametrize("new_best_dev, verdict, replayed, pdl", [
+    (2.0, "discard", [], []), (0.4, "keep", ["fp-rl-008"], []), (0.7, "keep", [], ["fp-rl-008"])])
+def test_new_best_during_confirmation_is_first_compared_on_dev(harness, monkeypatch, new_best_dev, verdict, replayed,
+                                                                 pdl):
     E, _, _ = harness
+    P = importlib.import_module("harness.pdl")
+    measured = []
+    monkeypatch.setattr(P, "measure", lambda a, b, **kw: measured.append(a) or dict(
+        seed=kw["seed"], games=8, k=2, diff=0.5, se=0.1, lower90=0.37, parts={}, snapshots=3, seconds=1.0))
     monkeypatch.setattr(E, "DEV_BLOCKS", 4)
     monkeypatch.setattr(E, "CONFIRM_BLOCKS", 2)
     monkeypatch.setattr(E, "check_seal", lambda: None)
@@ -194,6 +200,42 @@ def test_new_best_during_confirmation_is_first_compared_on_dev(harness, monkeypa
     result = E.evaluate("rl", {"parameters": {"weights": "mine"}}, "x", "fp-rl-009", host="4070", confirm_seed=5)
     assert result["status"] == verdict
     assert [a for a, label in calls if label.startswith("confirm-for-")] == replayed
+    assert measured == pdl
+
+
+@pytest.mark.parametrize("dev, pdl_diff, verdict", [
+    (0.2, 0.3, "keep"), (-0.3, 0.05, "unconfirmed"), (0.4, -0.1, "discard"), (-0.6, None, "discard")])
+def test_a_close_development_difference_is_judged_by_pdl(harness, monkeypatch, dev, pdl_diff, verdict):
+    E, _, _ = harness
+    P = importlib.import_module("harness.pdl")
+    monkeypatch.setattr(E, "DEV_BLOCKS", 4)
+    monkeypatch.setattr(E, "CONFIRM_BLOCKS", 2)
+    monkeypatch.setattr(E, "check_seal", lambda: None)
+    monkeypatch.setattr(E, "platform_entrant", lambda: None)
+    (E.LOCAL / "pool.json").write_text(json.dumps({"id": "pool-a", "members": {}, "dev_seed": 1}))
+    record(E, id="fp-rl-007", finished_at=1, games=16, spec={"weights": "old"}, dev_blocks={str(b): 0.0 for b in range(4)})
+    calls, measured = [], []
+
+    def play(pool, attempt_id, spec, blocks, seed, label, host):
+        calls.append(label)
+        return {b: dev if attempt_id == "fp-rl-009" else 0.0 for b in blocks}, {"timeouts": 0, "fallback_actions": 0,
+                                                                                "errors": 0}
+
+    def measure(a, b, **kw):
+        measured.append((a, b, kw["a_spec"], kw["b_spec"], kw["seed"]))
+        return dict(seed=kw["seed"], games=8, k=2, diff=pdl_diff, se=0.1, lower90=pdl_diff - E.CONFIRM_Z * 0.1,
+                    parts={"hu": {"diff": pdl_diff, "se": 0.1}}, snapshots=3, seconds=1.0)
+
+    monkeypatch.setattr(E, "play", play)
+    monkeypatch.setattr(P, "measure", measure)
+    r = E.evaluate("rl", {"weights": "mine"}, "x", "fp-rl-009", host="4070", confirm_seed=5)
+    assert r["status"] == verdict and calls == ["dev"] and r["confirm"] is None
+    if pdl_diff is None:
+        assert measured == [] and r["pdl"] is None
+    else:
+        assert measured == [("fp-rl-007", "fp-rl-009", {"weights": "old"}, {"weights": "mine"}, 5)]
+        assert r["pdl"]["against"] == "fp-rl-007" and r["pdl"]["diff"] == pdl_diff
+        assert f"差 {pdl_diff:+.2f} ± 0.10" in E.report(r)
 
 
 def test_catalog_offers_every_version_that_became_a_line_best(harness):

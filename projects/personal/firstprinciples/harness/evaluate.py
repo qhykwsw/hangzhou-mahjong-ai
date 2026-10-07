@@ -8,11 +8,13 @@ the same games for every attempt and results do not depend on how the blocks
 are split into jobs.
 
 Every version (attempt, reference, the RL start) plays the whole development
-set, 4096 blocks (16384 games), so one version has one score. An attempt above
-the best there goes to a fresh confirmation set, where it and the best each
-play 2048 blocks and the paired difference must have a one-sided 90% lower
-bound above zero. A best version that changes during the confirmation is
-first compared on the development set, where its scores are on record.
+set, 8192 blocks (32768 games), so one version has one score. An attempt
+within CLOSE of the best there is judged by the paired performance difference
+(harness.pdl, on fresh walls); one further above goes to a fresh confirmation
+set, where it and the best each play 4096 blocks. Either way the one-sided 90%
+lower bound must be above zero. A best version that changes during the
+judgement is first compared on the development set, where its scores are on
+record.
 
 The maintainer seals the evaluation conditions (conditions(): the harness
 code, the pool, and each RL host's frozen training framework and start); an
@@ -106,6 +108,9 @@ DEV_BLOCKS = override("FP_DEV", 8192)
 CONFIRM_BLOCKS = override("FP_CONFIRM", 4096)
 JOB_RETRIES = 3  # a job that fails this often (not a host fault) fails the attempt
 CONFIRM_Z = 1.2816  # one-sided 90%
+# Development differences within this of the best are decided by PDL (user 10-07):
+# its standard error is about a third of the confirmation set's.
+CLOSE = 0.5
 TIMEOUTS = {"discard": 2.0, "response": 0.6}  # platform limits minus network and concurrency margin
 RULE_OPPONENTS = [
     "heuristic-efficiency--01--piao-call-channel",
@@ -782,7 +787,8 @@ def history(line):
     for r in rows:
         score = "—" if r["score"] is None else f"{r['score']:+.2f}±{r['se']:.2f}"
         diff = "" if r.get("diff") is None else f" 差{r['diff']:+.2f}"
-        lower = f" 确认下界{r['confirm']['lower90']:+.2f}" if r.get("confirm") else ""
+        lower = (f" 确认下界{r['confirm']['lower90']:+.2f}" if r.get("confirm")
+                 else f" 逐手差{r['pdl']['diff']:+.2f}±{r['pdl']['se']:.2f}" if r.get("pdl") else "")
         design = "" if r.get("design_seconds") is None else f" 设计{r['design_seconds'] / 60:.0f}分"
         host = f" @{r['host']}" if r.get("host") not in (None, "local") else ""
         base = f" 从{r['from']}改一处" if r.get("from") else f" 基于{r['base']}" if r.get("base") else ""
@@ -1011,12 +1017,12 @@ def mean_se(values):
 
 def evaluate(line, spec, description, attempt_id=None, design_seconds=None, host=None,
              confirm_seed=None, extra=None):
-    """Play the development set and, above the best, the confirmation set; append the record.
+    """Play the development set, judge the attempt against the best (judge) and append the record.
 
     Attempts of a line may run on several hosts at once, so the best version
     is re-read whenever it is compared against: the development blocks are the
-    same games for everyone, and a champion that changed during the
-    confirmation set replays those fresh walls before the paired test.
+    same games for everyone, and a champion that changed during the judgement
+    is compared there first.
 
     Calling it again with the same attempt id and confirm_seed after an
     interruption reuses every finished job (harness.line resumes attempts so).
@@ -1029,54 +1035,27 @@ def evaluate(line, spec, description, attempt_id=None, design_seconds=None, host
     reference = line == "reference"
     host = host or EVAL_HOST[line]
     started = time.time()
-    confirm = proxy = None
+    confirm = pdl = proxy = None
     scores, stats = play(pool, attempt_id, spec, range(DEV_BLOCKS), pool["dev_seed"], "dev", host)
     champion = None if reference else best(pool["id"], line)
     if champion is None:
         verdict = "reference" if reference else "keep"
+        if not reference:
+            proxy = proxy_tables(attempt_id, spec, host)  # a line's first version: on record, nothing to pair with
     else:
-        diff, se = paired(scores, champion_blocks(champion), range(DEV_BLOCKS))
-        log(f"{attempt_id} dev {DEV_BLOCKS * 4} games: diff {diff:+.3f} ± {se:.3f} vs {champion['id']}")
-        verdict = "discard" if diff <= 0 else None
-    if verdict is None:
-        seed = confirm_seed or random.SystemRandom().getrandbits(62)
-        mine, _ = play(pool, attempt_id, spec, range(CONFIRM_BLOCKS), seed, "confirm", host)
-        while True:
-            current = best(pool["id"], line)
-            if current["id"] != champion["id"]:
-                # A new best version appeared meanwhile. Its development scores are
-                # on record: the attempt must lead it there before it is worth
-                # replaying the fresh walls for.
-                champion = current
-                diff, se = paired(scores, champion_blocks(champion), range(DEV_BLOCKS))
-                log(f"{attempt_id}: best version is now {champion['id']}; dev diff {diff:+.3f} ± {se:.3f}")
-                if diff <= 0:
-                    verdict = "discard"
-                    break
-            # The best version replays the same fresh walls under its own id.
-            theirs, _ = play(pool, champion["id"], champion["spec"], range(CONFIRM_BLOCKS), seed,
-                             f"confirm-for-{attempt_id}", host)
-            if best(pool["id"], line)["id"] == champion["id"]:
-                break
-        if verdict is None:
-            diff, se = paired(mine, theirs, range(CONFIRM_BLOCKS))
-            confirm = {"seed": seed, "games": CONFIRM_BLOCKS * 4, "diff": diff, "se": se,
-                       "lower90": diff - CONFIRM_Z * se, "against": champion["id"]}
-            verdict = "keep" if diff - CONFIRM_Z * se > 0 else "unconfirmed"
-            if verdict == "keep":
-                # The lines build the semifinal and final version against strong opponents
-                # (user, 10-05); a new best version's proxy tables are on record only, for
-                # the qualifier version (harness.qualifier) to measure itself against.
-                proxy = proxy_tables(attempt_id, spec, host, champion)
-    elif champion is None and not reference:
-        proxy = proxy_tables(attempt_id, spec, host)  # a line's first version: on record, nothing to pair with
+        verdict, pdl, confirm, champion = judge(pool, line, attempt_id, spec, scores, champion, host, confirm_seed)
+        if verdict == "keep":
+            # The lines build the semifinal and final version against strong opponents
+            # (user, 10-05); a new best version's proxy tables are on record only, for
+            # the qualifier version (harness.qualifier) to measure itself against.
+            proxy = proxy_tables(attempt_id, spec, host, champion)
     score, se = mean_se(scores[k] for k in range(DEV_BLOCKS))
     record = dict(
         id=attempt_id, line=line, pool=pool["id"], status=verdict, description=description, host=host,
         started_at=started, finished_at=time.time(), games=DEV_BLOCKS * 4, score=score, se=se,
         best_before=champion["score"] if champion else None,
         diff=paired(scores, champion_blocks(champion), range(DEV_BLOCKS))[0] if champion else None,
-        confirm=confirm, stats=stats, spec=spec, dev_blocks={str(k): scores[k] for k in sorted(scores)},
+        confirm=confirm, pdl=pdl, stats=stats, spec=spec, dev_blocks={str(k): scores[k] for k in sorted(scores)},
         design_seconds=design_seconds,
     ) | (extra or {})
     if verdict == "keep":
@@ -1085,6 +1064,49 @@ def evaluate(line, spec, description, attempt_id=None, design_seconds=None, host
         record["proxy"] = proxy
     append_record(record)
     return record
+
+
+def judge(pool, line, attempt_id, spec, scores, champion, host, seed=None):
+    """The verdict against the line's best version: (status, pdl, confirm, the best compared with).
+
+    Below the best by CLOSE or more: discarded. Within CLOSE: the paired
+    performance difference on fresh walls (harness.pdl, on the Mac), the best
+    version continuing at each of the attempt's decisions where it would act
+    otherwise. Further above: the confirmation set, both versions replaying the
+    same fresh walls. A best version that changes meanwhile is compared on the
+    development set again.
+    """
+    from . import pdl
+
+    seed = seed or random.SystemRandom().getrandbits(62)
+    mine = None
+    while True:
+        diff, se = paired(scores, champion_blocks(champion), range(DEV_BLOCKS))
+        log(f"{attempt_id} dev {DEV_BLOCKS * 4} games: diff {diff:+.3f} ± {se:.3f} vs {champion['id']}")
+        if diff <= -CLOSE:
+            return "discard", None, None, champion
+        if diff <= CLOSE:
+            e = pdl.measure(champion["id"], attempt_id, seed=seed, a_spec=champion["spec"], b_spec=spec)
+        else:
+            if mine is None:
+                mine, _ = play(pool, attempt_id, spec, range(CONFIRM_BLOCKS), seed, "confirm", host)
+            if best(pool["id"], line)["id"] == champion["id"]:
+                # The best version replays the same fresh walls under its own id.
+                theirs, _ = play(pool, champion["id"], champion["spec"], range(CONFIRM_BLOCKS), seed,
+                                 f"confirm-for-{attempt_id}", host)
+        current = best(pool["id"], line)
+        if current["id"] != champion["id"]:
+            log(f"{attempt_id}: best version is now {current['id']}")
+            champion = current
+            continue
+        if diff <= CLOSE:
+            result = {k: e[k] for k in ("seed", "games", "k", "diff", "se", "lower90", "parts", "snapshots", "seconds")}
+            status = "keep" if e["lower90"] > 0 else "discard" if e["diff"] <= 0 else "unconfirmed"
+            return status, result | {"against": champion["id"]}, None, champion
+        d, s = paired(mine, theirs, range(CONFIRM_BLOCKS))
+        confirm = {"seed": seed, "games": CONFIRM_BLOCKS * 4, "diff": d, "se": s, "lower90": d - CONFIRM_Z * s,
+                   "against": champion["id"]}
+        return "keep" if confirm["lower90"] > 0 else "unconfirmed", None, confirm, champion
 
 
 def proxy_tables(attempt_id, spec, host, champion=None):
@@ -1160,7 +1182,7 @@ def against_platform(record):
             "lower90": lower, "above": lower > 0}
 
 
-STATUS = {"keep": "成功", "discard": "失败", "unconfirmed": "开发集高但未确认",
+STATUS = {"keep": "成功", "discard": "失败", "unconfirmed": "高于最好版本但未确认",
           "reference": "参照", "crash": "崩溃", "invalid": "无效", "cancelled": "已取消", "inequivalent": "不等价"}
 LINE_NAMES = {"rule": "规则线", "rl": "RL 线", "reference": "参照"}
 
@@ -1211,6 +1233,10 @@ def report(record):
         if c.get("combined"):  # 10-05 (eb07bed) to the qualifier split: the proxy tables counted half
             m = c["combined"]
             lines.append(f"确认集与代理桌各占一半：配对差 {m['diff']:+.2f} ± {m['se']:.2f}，90% 下界 {m['lower90']:+.2f}（判定依据）")
+    if record.get("pdl"):
+        p = record["pdl"]
+        lines.append(f"逐手对比（开发集差距在 {CLOSE} 分以内，以它为准）：{p['games']} 场新牌局、{p['snapshots']} 处分歧，"
+                     f"对 {p['against']} 差 {p['diff']:+.2f} ± {p['se']:.2f}，90% 下界 {p['lower90']:+.2f}")
     if cost:
         lines.append(cost)
     s = record["stats"]
