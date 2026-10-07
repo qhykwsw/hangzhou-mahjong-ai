@@ -531,6 +531,18 @@ def reserve_attempt(line, host, description, **state):
     return attempt_id
 
 
+def free_host(attempt_id):
+    """Let the attempt's GPU host take the next attempt while it is judged on the Mac (PDL).
+
+    Its host may still play for it afterwards (the proxy tables of a new best version, or the
+    confirmation set when the best version changed meanwhile), beside the next attempt's training.
+    """
+    path = LOCAL / "running" / f"{attempt_id}.json"
+    with attempts_lock():
+        if path.exists():
+            atomic_json(path, read_json(path) | {"host_free": True})
+
+
 def release_attempt(attempt_id):
     (LOCAL / "running" / f"{attempt_id}.json").unlink(missing_ok=True)
     (LOCAL / "running" / f"{attempt_id}.lock").unlink(missing_ok=True)
@@ -1135,6 +1147,7 @@ def judge(pool, line, attempt_id, spec, scores, champion, host, seed=None):
         if diff <= -CLOSE:
             return "discard", None, None, champion
         if diff <= CLOSE:
+            free_host(attempt_id)
             e = pdl.measure(champion["id"], attempt_id, seed=seed, a_spec=champion["spec"], b_spec=spec)
         else:
             if mine is None:

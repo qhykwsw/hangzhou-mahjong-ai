@@ -238,6 +238,15 @@ def test_a_close_development_difference_is_judged_by_pdl(harness, monkeypatch, d
         assert f"差 {pdl_diff:+.2f} ± 0.10" in E.report(r)
 
 
+def test_an_attempt_judged_on_the_mac_lets_its_host_go(harness, monkeypatch):
+    E, rl, line = harness
+    (rl.RL / "setup-4070.json").write_text(json.dumps({"source_id": "a"}))
+    attempt_id = E.reserve_attempt("rl", "4070", "x", stage="evaluating")
+    assert "4070" not in line.free_hosts("rl")
+    E.free_host(attempt_id)
+    assert "4070" in line.free_hosts("rl") and E.running()[0]["host"] == "4070"
+
+
 def test_rejudge_extends_an_earlier_attempt_and_judges_it_now(harness, monkeypatch):
     E, _, _ = harness
     P = importlib.import_module("harness.pdl")

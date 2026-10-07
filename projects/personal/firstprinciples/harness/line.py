@@ -223,8 +223,9 @@ def free_hosts(line, probe=True, reserved=None):
     whether or not it is switched on for the line.
     """
     # Any line's attempt keeps its host busy: a host just lent to the other line
-    # finishes the attempt it has before taking the new line's.
-    busy = {s.get("host") for s in E.running()}
+    # finishes the attempt it has before taking the new line's. One judged on the
+    # Mac (PDL) has let its host go (E.free_host).
+    busy = {s.get("host") for s in E.running() if not s.get("host_free")}
     held = scale.reserved_hosts()
     hosts = [h for h in line_hosts(line) if ready(h) and h not in busy
              and (h == reserved if h in held else enabled(h))]
