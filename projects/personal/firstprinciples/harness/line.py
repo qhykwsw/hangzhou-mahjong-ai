@@ -52,6 +52,7 @@ from guided import recipe_jobs, remote  # noqa: E402  (rl puts guided on the pat
 RUNNING = E.LOCAL / "running"
 LEASE_SECONDS = 20 * 60  # a lease not renewed this long is free for another session
 PROBE_SECONDS = 120  # host answers are reused this long
+OFFLINE_GRACE = 300  # status and notices call a host offline only after its probes have failed this long
 POLL_SECONDS = 15
 QUEUE_SECONDS = 30
 
@@ -181,18 +182,34 @@ def close_due_hosts():
     return notices
 
 
-def online(hosts, probe=True):
-    """Which hosts answer, probed in parallel; answers are reused for PROBE_SECONDS."""
+def online(hosts, probe=True, grace=False):
+    """Which hosts answer, probed in parallel; answers are reused for PROBE_SECONDS.
+
+    With ``grace`` (what the status and the user's notices show) a host that has
+    stopped answering for less than OFFLINE_GRACE still counts as online: the
+    4090's relay drops for a minute or two now and then while its jobs run on.
+    Starting an attempt goes by the last answer itself.
+    """
     path = E.LOCAL / "probe.json"
     cache = E.read_json(path) if path.exists() else {}
     stale = [h for h in hosts if h != "local" and time.time() - cache.get(h, {}).get("at", 0) > PROBE_SECONDS]
     if probe and stale:
         with ThreadPoolExecutor(len(stale)) as pool:
             answers = list(pool.map(recipe_jobs.reachable, stale))
-        cache = (E.read_json(path) if path.exists() else {}) | {
-            h: {"online": ok, "at": time.time()} for h, ok in zip(stale, answers)}
+        now = time.time()
+        cache = E.read_json(path) if path.exists() else {}
+        for h, ok in zip(stale, answers):
+            down = None if ok else cache.get(h, {}).get("down_since") or now
+            cache[h] = {"online": ok, "at": now, "down_since": down}
         E.atomic_json(path, cache)
-    return {h: h == "local" or cache.get(h, {}).get("online", False) for h in hosts}
+
+    def up(h):
+        entry = cache.get(h, {})
+        if h == "local" or entry.get("online", False):
+            return True
+        return grace and entry.get("down_since") is not None and time.time() - entry["down_since"] < OFFLINE_GRACE
+
+    return {h: up(h) for h in hosts}
 
 
 def ready(host):
@@ -246,7 +263,7 @@ def design_hosts(line, probe=True):
 def host_states(line):
     busy = {s["host"]: s["id"] for s in E.running(line) if s.get("host")}
     hosts = line_hosts(line)
-    up = online([h for h in hosts if enabled(h) and h not in scale.reserved_hosts()])
+    up = online([h for h in hosts if enabled(h) and h not in scale.reserved_hosts()], grace=True)
     states = {}
     held = scale.reserved_hosts()
     for h in hosts:

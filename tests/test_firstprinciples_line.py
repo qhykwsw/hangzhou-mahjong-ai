@@ -22,7 +22,7 @@ def harness(tmp_path, monkeypatch):
     monkeypatch.setattr(E, "MODELS", tmp_path / "models")
     (tmp_path / "rl").mkdir()
     (tmp_path / "pool.json").write_text(json.dumps({"id": "pool-a", "members": {}}))
-    monkeypatch.setattr(line, "online", lambda hosts, probe=True: {h: True for h in hosts})
+    monkeypatch.setattr(line, "online", lambda hosts, probe=True, grace=False: {h: True for h in hosts})
     return E, rl, line
 
 
