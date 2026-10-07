@@ -189,7 +189,14 @@ try:
     os.kill(pid,0); print(json.dumps(True))
 except Exception:
     print(json.dumps(False))"""
-    while h.python(alive, timeout=120):
+    while True:
+        try:
+            if not h.python(alive, timeout=120):
+                break
+        except RuntimeError as exc:  # the host dropped off the network: the run goes on there
+            E.log(f"{name}: {host} not answering ({str(exc)[-120:]}); waiting")
+            time.sleep(60)
+            continue
         time.sleep(20)
     jobs = [f"w{w:02d}" for w in range(workers)]
     hostrun.fetch(name, host, [f"{j}/result.json" for j in jobs] + [f"{j}/worker.log" for j in jobs], to=stage / "out")
