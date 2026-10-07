@@ -220,7 +220,9 @@ def test_continuation_options_are_checked(members, monkeypatch):
                        ({"branch_continuation": {"leaner": "m1"}}, "is {'learner'"),
                        ({"branches": 0, "branch_control": True}, "need cfg"),
                        ({"branch_truncate": -1}, "positive integer"),
-                       ({"branches": 0, "branch_truncate": 2}, "need cfg")]:
+                       ({"branches": 0, "branch_truncate": 2}, "need cfg"),
+                       ({"branches": 0, "branch_resample": {}}, "need cfg"),
+                       ({"branch_resample": {"weight": None}}, "is {'weights'")]:
         with pytest.raises(ValueError, match=match):
             Game(cfg | bad, {"entries": []}, {k: None for k in by_id}, seats, 1, train=True)
     for cls in (Game, fastgame.FastGame):
@@ -409,6 +411,120 @@ def test_a_python_rule_learner_truncates_on_both_engines(members, monkeypatch):
                     seed_for(107, "branch-truncate-python"), entries=entries)
     assert games[1]._branch_seats.python == {0}
     assert sum(r["truncated"] for r in leaves(games[1].rows).values()) > 20
+
+
+WORLDS = []
+
+
+def weight(row, world):
+    """A world-weight hook: records what it is given, and weighs by the others' hands and the row's inputs."""
+    WORLDS.append((sorted(row), world))
+    others = [h for s, h in enumerate(world["hands"]) if s != world["seat"]]
+    return 1.0 + sum(sum(h) for h in others) / 1000.0 + float(row["planes"].astype(np.float32).sum()) / 1e6
+
+
+@pytest.mark.parametrize("extra", [
+    {"branch_control": True},
+    {"branch_control": True, "vine": True, "stable_wall": True, "luck": True, "branch_truncate": 3},
+    {"stage": {"kind": "advancement", "games": 10, "per_game_sd": 70}, "encoding": "guided-current-hand-v4"},
+])
+def test_resampled_worlds_are_the_same_on_both_engines(members, monkeypatch, extra):
+    cfg = configuration(rounds=16, lookahead=True, gae_lambda=0.95) | BASE | extra | {
+        "branch_resample": {"weights": "test_guided_branches:weight"}}
+    WORLDS.clear()
+    seats = ["m3", "m0", "model:current", "m5"]
+    games, _ = both(cfg, members, monkeypatch, seats, seed_for(109, "branch-resample", str(sorted(extra))))
+    half = len(WORLDS) // 2
+    assert half > 20 and WORLDS[:half] == WORLDS[half:]  # the Python game's worlds, then the C game's
+    rows = [row for row in games[1].rows if "branches" in row]
+    assert len(rows) == half
+    for row, (keys, world) in zip(rows, WORLDS[half:]):
+        assert keys == ["events", "mask", "planes", "scalars"] and world["seat"] == 2
+        results = [*row["branches"], *([row["branch_control"]] if "branch_control" in row else [])]
+        assert len({r["world_weight"] for r in results}) == 1
+        assert results[0]["world_weight"] == weight({k: row[k] for k in keys}, world)
+    # The same game without resampling: the copies play other worlds, the game itself is the same.
+    plain_cfg = {k: v for k, v in cfg.items() if k != "branch_resample"}
+    again, _ = both(plain_cfg, members, monkeypatch, seats, seed_for(109, "branch-resample", str(sorted(extra))))
+    strip = lambda rows: [{k: v for k, v in r.items() if k not in ("branches", "branch_control")} for r in rows]
+    assert plain(strip(again[1].rows)) == plain(strip(games[1].rows))
+    keys = ("playout", "playout_scores", "leaf_row")
+    differ = sum(plain([{k: b.get(k) for k in keys} for b in x["branches"]])
+                 != plain([{k: b.get(k) for k in keys} for b in y["branches"]])
+                 for x, y in zip(again[1].rows, games[1].rows) if "branches" in x)
+    assert differ > 5
+    assert not any("world_weight" in b for row in again[1].rows for b in row.get("branches", ()))
+
+
+@pytest.mark.parametrize("extra", [{}, {"stable_wall": True, "luck": True, "branch_truncate": 2}])
+def test_resampled_worlds_with_python_seats_play_the_same_on_both_engines(members, monkeypatch, extra):
+    """Python rule seats (the game's and a continuation's) decide in a re-dealt world on the C engine
+    from a Mirror re-dealt the same way."""
+    entries = tables(members, monkeypatch, {"py": 2, "py2": 4})
+    cfg = configuration(rounds=16, lookahead=True, gae_lambda=0.95) | BASE | extra | {
+        "branch_resample": {"weights": None}, "branch_control": True,
+        "branch_continuation": {"learner": "greedy", "opponents": {"m1": "py2"}}}
+    games, _ = both(cfg, members, monkeypatch, ["model:current", "py", "m1", "m3"],
+                    seed_for(113, "branch-resample-python", str(sorted(extra))), entries=entries)
+    assert games[1].python_seats == {1} and games[1]._branch_seats.python == {1, 2}
+    results = [b for row in games[1].rows for b in row.get("branches", ())]
+    assert len(results) > 20 and all(b["world_weight"] == 1.0 for b in results)
+
+
+def test_a_world_keeps_the_learners_view_and_redeals_the_rest(members, monkeypatch):
+    from guided.branches import redeal
+
+    by_id = {f"m{i}": m for i, m in enumerate(members)}
+    monkeypatch.setattr(artifacts, "build_policy", lambda bundle, cid: by_id[cid])
+    cfg = configuration(rounds=16, lookahead=True) | BASE | {"branch_resample": {}, "stable_wall": True}
+    game = fastgame.FastGame(cfg, {"entries": []}, {k: None for k in by_id}, ["m1", "model:current", "m2", "m3"],
+                             seed_for(127, "world"), focal=1, train=True)
+    changed = 0
+    for _ in range(30):
+        request = game.advance()
+        if request is None:
+            break
+        real = game.state.snapshot()
+        (world, _), weight = game._branch_world(request["row"])
+        got = world.snapshot()
+        assert weight == 1.0
+        assert got["hands"][1] == real["hands"][1]
+        for key in ("melds", "discards", "events", "initial_hands", "white_acquired", "chain", "piao", "catch_owner",
+                    "turn", "phase", "drawn", "scores", "steps", "log"):
+            assert got[key] == real[key], key
+        assert [len(h) for h in got["hands"]] == [len(h) for h in real["hands"]]
+        assert len(got["wall"]) == len(real["wall"])
+        hidden = lambda snap: sorted([t for s in (0, 2, 3) for t in snap["hands"][s]] + list(snap["wall"]))
+        assert hidden(got) == hidden(real)
+        changed += got["hands"] != real["hands"]
+        # The world depends on the learner's view alone: the others' real tiles dealt otherwise give the same one.
+        pool, hands = hidden(real), [list(h) for h in real["hands"]]
+        for s in (0, 2, 3):
+            hands[s], pool = pool[:len(hands[s])], pool[len(hands[s]):]
+        assert hands != [list(h) for h in real["hands"]]
+        assert redeal(hands, pool, 1, 7) == redeal(real["hands"], real["wall"], 1, 7)
+        legal = [int(i) for i in np.flatnonzero(request["row"]["mask"])]
+        game.apply((legal[0], 0.0, 0.0, legal[0]))
+    assert changed > 20
+    hand = fastgame.native.Hand(5, 0, 1, (0, 0, 0, 0), 16)
+    snap = hand.snapshot()
+    with pytest.raises(ValueError, match="keeps the tiles"):
+        hand.redeal([snap["hands"][0][:-1] + (snap["wall"][0],), *snap["hands"][1:]], snap["wall"][:-1] + (33,))
+    with pytest.raises(ValueError, match="tiles expected"):
+        hand.redeal(snap["hands"], snap["wall"][1:])
+    assert hand.snapshot() == snap  # a refused redeal changes nothing
+
+
+@needs131
+def test_resampled_131_continuations_play_the_same_on_both_engines(members, monkeypatch):
+    entries = tables(members, monkeypatch, {}, {"r131": rule131})
+    cfg = configuration(rounds=8, lookahead=True, gae_lambda=0.95) | BASE | {
+        "branch_continuation": {"learner": "r131"}, "branch_control": True, "branch_resample": {},
+        "branch_truncate": 3, "stable_wall": True, "luck": True}
+    games, slots = both(cfg, members, monkeypatch, ["m1", "model:current", "m3", "m4"],
+                        seed_for(131, "branch-resample-131"), entries=entries)
+    assert not any(kind == "Branch" for kind, _ in slots)
+    assert sum("branch_control" in row for row in games[1].rows) > 10
 
 
 def test_without_branches_no_row_carries_them_and_stray_candidates_fail(members, monkeypatch):

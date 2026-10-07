@@ -120,6 +120,14 @@ class Mirror:
             attach(state, game.stage)
         self.state, self.applied = state, 0
 
+    def copy(self):
+        """An independent Mirror at the same position (of a copy of the hand)."""
+        from .environment import fork
+
+        other = object.__new__(Mirror)
+        other.state, other.applied = fork(self.state), self.applied
+        return other
+
     def sync(self, hand):
         """The Python hand at the C hand's position."""
         from selfplay_core.actions import action_index
@@ -357,13 +365,36 @@ class FastGame(Game):
         self.pending = None
         self.state.step(index)
 
+    def _branch_world(self, row):
+        """The C hand the row's copies start from, with a Mirror of it when re-dealt for Python seats; its weight.
+
+        A re-dealt world's Python seats cannot replay the C log from the deal:
+        their Mirror is the game's at the fork, re-dealt the same way, and each
+        copy carries its own copy of it.
+        """
+        if not self.branching.resample:
+            return (self.state, None), None
+        from .branches import place, redeal, weigh, world_seed
+
+        world = self.state.fork()
+        snap = world.snapshot()
+        hands, wall = redeal(snap["hands"], snap["wall"], self.focal, world_seed(self))
+        mirror = None
+        if self._branch_seats.python:
+            mirror = self._mirror()
+            mirror.sync(self.state)
+            mirror = mirror.copy()
+            place(mirror.state, hands, wall, self.focal)
+        world.redeal(hands, wall)
+        return (world, mirror), weigh(self, row, hands, wall, [len(m) for m in snap["melds"]])
+
     def _branch_copy(self, world, index, legal, result):
         """A copy of ``world`` playing the candidate ``index`` (FastBranch)."""
-        if self.seats is None:
-            return super()._branch_copy(world, index, legal, result)
         if index not in legal:
             raise ValueError("a branch candidate is not a legal action")
-        self.shadows.append(FastBranch(self, world.fork(), index, result, self._branch_seats))
+        hand, mirror = world
+        self.shadows.append(FastBranch(self, hand.fork(), index, result, self._branch_seats,
+                                       None if mirror is None else mirror.copy()))
 
     def _branch_plan(self, plan):
         """guided.branches.seat_plan's ``plan`` on the C hand: run's profiles, the seats deciding in Python, the model slots.
@@ -445,9 +476,10 @@ class FastBranch(FastShadow):
     and the model slots the parent answers.
     """
 
-    def __init__(self, game, state, move, result, plan):
+    def __init__(self, game, state, move, result, plan, mirror=None):
         self.plan, self.decisions = plan, 0
         super().__init__(game, state, move, result)
+        self.mirror = mirror  # a re-dealt world's (FastGame._branch_world), else built on first use
 
     def advance(self):
         from .branches import finished, truncated

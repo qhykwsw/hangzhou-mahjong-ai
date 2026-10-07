@@ -144,8 +144,24 @@
   - `leaf_row` 是停下时学习座位的编码行，只含合法观察的 `planes`、`scalars`、`events`、`mask`，编码与正常行相同。
 - 方案在父进程里用自己的价值网给 `leaf_row` 估值，框架不估值。
 
+**世界重采样**
+- `cfg["branch_resample"] = {"weights": None | "模块:函数"}`：每行的所有副本（候选与控制）不从真实牌局出发，而从按学习座位视角重发的同一个世界出发。
+- 重发的做法：
+  - 把三家的暗手牌和剩余牌墙合成一池，先排序，再用该行自己的随机流（本场种子、`"branch-world"`、行号）洗乱；按各家原来的暗手张数发回，余下的按原长度做牌墙。
+  - 先排序，所以世界只取决于学习座位看不到的那组牌，与真实谁拿了什么无关。
+- 保持不变的：
+  - 学习座位的手牌，以及所有公开信息：副露、牌河、各家张数、财神状态（抓打圈、连杠与财飘计数）、分数、本局事件。
+  - 别家的暗杠作为副露整副保留，所以牌池是学习座位的未见牌减去这些暗杠的牌。
+  - 别家过去的私有事件（发牌、摸牌）仍是原牌。只读当前手牌和公开信息的规则（race 成员、fp-rule-131）不受影响。
+- 稳定牌墙：重发的牌按牌墙顺序填进剩余位置，位置结构不变。此后各家仍从自己的位置摸牌，所以同一行的副本之间仍然配对；只是位置上的牌是重发世界的，不是真实牌墙的。运气照常累计，期望按重发后的牌墙算。
+- `weights`（在对局进程里解析）对每个重发世界调用一次 `f(row, world)`：
+  - `row` 只含该行的 `planes`、`scalars`、`events`、`mask`；
+  - `world = {"seat", "hands"（按绝对座位的四家手牌，含学习座位自己）, "wall"（按摸牌顺序）, "opened"（各家副露数）}`；
+  - 返回该世界的权重，例如信念模型给出的对手手牌似然。
+- 该行每个结果都带 `world_weight`，没有 `weights` 时为 1.0。两种引擎用同一个随机流重发，结果逐位一致。
+
 **写回该行的字段**
-- `branches`：按候选顺序的列表，每项 `{"action", "truncated": False, "playout", "playout_scores", "playout_dealer", "playout_deals_next"}`，含义同偏离行的同名字段；开 `luck` 时另有 `playout_luck_pay`、`playout_luck_deal`。截断的项见上。
+- `branches`：按候选顺序的列表，每项 `{"action", "truncated": False, "playout", "playout_scores", "playout_dealer", "playout_deals_next"}`，含义同偏离行的同名字段；开 `luck` 时另有 `playout_luck_pay`、`playout_luck_deal`；重采样时另有 `world_weight`。截断的项见上。
 - `branch_control`：开 `branch_control` 时，有候选的行才带。
 - 没有候选的行不带 `branches`。`finish_game` 在该场所有副本打完后才调用。
 - 副本不产生训练行、不计入 `samples` 和局数预算，但要多打：多出的推理请求约等于候选数乘以本局剩余的学习决策数。

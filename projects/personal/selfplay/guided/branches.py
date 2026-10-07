@@ -59,13 +59,46 @@ stop (its planes, scalars, events and mask: the legal observation's inputs,
 encoded as the game's rows are), the luck so far. A recipe values the leaf
 with its own value network in the parent; the framework does not.
 
+    cfg["branch_resample"] = {"weights": None | "module:function"}
+
+Each row's copies (its candidates and its control) then start from one world
+re-dealt from the learner's point of view instead of the real hand: the
+other three seats' concealed tiles and the remaining wall are pooled, sorted
+(so the world depends on the learner's unseen multiset alone, not on who
+really holds what) and shuffled by the row's own random stream
+(seed_for(game seed, "branch-world", row index)); each seat gets back as many
+as it held, the rest is the wall, as long as it was. The learner's hand and
+everything public stay: melds (the others' concealed kongs too, kept whole:
+the pool is the learner's unseen tiles less those kongs' tiles), rivers, hand
+sizes, the white tile's state (catch-play circle, chain and piao counts),
+the scores and the hand's events. The others' past private events (their
+deal and draws) still name the real tiles; a rule reading only its current
+hand and the public state (race members, fp-rule-131) does not see them.
+
+A stable wall (cfg["stable_wall"]) keeps its structure: the re-dealt tiles
+fill the remaining positions in wall order, so from the fork on every seat
+draws from its own positions as before and a row's copies stay paired with
+each other; what lies at those positions is the re-dealt world's, not the
+real wall's. The draw luck accumulates on as before, its expectations over
+the re-dealt wall.
+
+``weights`` (resolved in the worker) is called once per re-dealt world as
+f(row, world) with the learner's row inputs (planes, scalars, events, mask)
+and world = {"seat", "hands" (four tuples by absolute seat, the learner's
+own included), "wall" (in draw order), "opened" (melds per seat)}; it returns
+the world's weight, e.g. a belief model's likelihood of the others' hands.
+Every result of the row carries it as ``world_weight`` (1.0 without
+``weights``). Both engines draw the same world from the same stream, so they
+stay bit for bit the same.
+
 Both engines play the copies the same, bit for bit: Branch here on the Python
 engine, fastgame.FastBranch on the C engine.
 """
 
+import random
 from types import SimpleNamespace
 
-from .environment import GREEDY, Shadow, staged
+from .environment import GREEDY, Shadow, hook, staged
 from .statistics import seed_for
 
 LEAF = ("planes", "scalars", "events", "mask")
@@ -76,6 +109,7 @@ def options(cfg, train):
     width = cfg.get("branches")
     if not width:
         stray = [key for key in ("branch_continuation", "branch_control", "branch_truncate") if cfg.get(key)]
+        stray += ["branch_resample"] if cfg.get("branch_resample") not in (None, False) else []
         if stray:
             raise ValueError(f"{stray} need cfg['branches']")
         return None
@@ -98,8 +132,15 @@ def options(cfg, train):
     truncate = cfg.get("branch_truncate") or 0
     if isinstance(truncate, bool) or not isinstance(truncate, int) or truncate < 0:
         raise ValueError("cfg['branch_truncate'] is the learner's decision a copy stops at, a positive integer")
+    resample = cfg.get("branch_resample")
+    if resample is True:
+        resample = {}
+    if resample not in (None, False) and (not isinstance(resample, dict) or set(resample) - {"weights"}):
+        raise ValueError("cfg['branch_resample'] is {'weights': None or 'module:function'}")
     return SimpleNamespace(width=width, learner=GREEDY if learner == "greedy" else learner, swaps=swaps,
-                           control=bool(cfg.get("branch_control")), truncate=truncate)
+                           control=bool(cfg.get("branch_control")), truncate=truncate,
+                           resample=resample not in (None, False),
+                           weights=(resample or {}).get("weights") if isinstance(resample, dict) else None)
 
 
 def seat_plan(game):
@@ -135,15 +176,54 @@ def policy(game, spec, seat):
 
 def start(game, row, legal, candidates, argmax):
     """The copies of a learning decision's candidates (and its control), each writing its result into the row."""
-    world = game._branch_world(row)
+    world, weight = game._branch_world(row)
     results = row["branches"] = []
-    for index in candidates:
-        result = {"action": int(index)}
-        results.append(result)
-        game._branch_copy(world, int(index), legal, result)
+    moves = [(int(index), results) for index in candidates]
     if game.branching.control:
-        result = row["branch_control"] = {"action": int(argmax)}
-        game._branch_copy(world, int(argmax), legal, result)
+        moves.append((int(argmax), None))
+    for index, into in moves:
+        result = {"action": index}
+        if weight is not None:
+            result["world_weight"] = weight
+        if into is None:
+            row["branch_control"] = result
+        else:
+            into.append(result)
+        game._branch_copy(world, index, legal, result)
+
+
+def world_seed(game):
+    """The random stream of the world a row's copies share: by the game's seed and the row's index."""
+    return seed_for(game.seed, "branch-world", len(game.rows))
+
+
+def redeal(hands, wall, focal, seed):
+    """The hidden tiles re-dealt (see the module docstring): (four hands, wall), the learner's hand as it was."""
+    others = [s for s in range(4) if s != focal]
+    pool = sorted([t for s in others for t in hands[s]] + list(wall))
+    random.Random(seed).shuffle(pool)
+    dealt, at = [list(h) for h in hands], 0
+    for s in others:
+        dealt[s] = pool[at:at + len(hands[s])]
+        at += len(hands[s])
+    return dealt, pool[at:]
+
+
+def place(state, hands, wall, focal):
+    """A Python HandState's hidden tiles replaced by a redeal's (native.Hand.redeal for the C hand)."""
+    for s in range(4):
+        if s != focal:
+            state.hands[s][:] = hands[s]
+    state.wall[:] = wall
+
+
+def weigh(game, row, hands, wall, opened):
+    """The re-dealt world's weight: cfg["branch_resample"]["weights"](row inputs, world), else 1.0."""
+    spec = game.branching.weights
+    if not spec:
+        return 1.0
+    world = {"seat": game.focal, "hands": [tuple(h) for h in hands], "wall": tuple(wall), "opened": tuple(opened)}
+    return float(hook(spec, None)({key: row[key] for key in LEAF}, world))
 
 
 def finished(result, game, scores, delta, winner, dealer):

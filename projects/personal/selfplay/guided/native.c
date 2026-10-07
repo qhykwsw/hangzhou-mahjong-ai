@@ -1597,6 +1597,73 @@ static PyObject *hand_track_luck(HandObject *self, PyObject *arg) {
     Py_RETURN_NONE;
 }
 
+/* One sequence of tiles into out, exactly n of them, each counted into counts. */
+static int g_tiles_in(PyObject *seq, int n, int8_t *out, int *counts, const char *what) {
+    PyObject *fast = PySequence_Fast(seq, what);
+    if (!fast) return -1;
+    if (PySequence_Fast_GET_SIZE(fast) != n) {
+        PyErr_Format(PyExc_ValueError, "%s: %d tiles expected", what, n);
+        Py_DECREF(fast);
+        return -1;
+    }
+    for (int i = 0; i < n; i++) {
+        long t = PyLong_AsLong(PySequence_Fast_GET_ITEM(fast, i));
+        if (t == -1 && PyErr_Occurred()) { Py_DECREF(fast); return -1; }
+        if (t < 0 || t >= NTILES) {
+            PyErr_Format(PyExc_ValueError, "%s: tile %ld out of range", what, t);
+            Py_DECREF(fast);
+            return -1;
+        }
+        out[i] = (int8_t)t;
+        counts[t]++;
+    }
+    Py_DECREF(fast);
+    return 0;
+}
+
+/* redeal(hands, wall): the four concealed hands (each as long as the seat's,
+ * in the order the seat holds them) and the remaining wall (as long as it, in
+ * wall order: a stable wall's remaining positions keep their places) replaced
+ * by these tiles. The tiles in play stay the same multiset; melds, rivers,
+ * events and everything else are kept (guided.branches' world resampling). */
+static PyObject *hand_redeal(HandObject *self, PyObject *args) {
+    PyObject *hands_obj, *wall_obj;
+    if (!PyArg_ParseTuple(args, "OO", &hands_obj, &wall_obj)) return NULL;
+    g_hand *h = &self->h;
+    int8_t hands[4][G_HAND], wall[G_WALL], old[G_WALL];
+    int before[NTILES] = {0}, after[NTILES] = {0};
+    PyObject *fast = PySequence_Fast(hands_obj, "hands");
+    if (!fast) return NULL;
+    if (PySequence_Fast_GET_SIZE(fast) != 4) {
+        Py_DECREF(fast);
+        PyErr_SetString(PyExc_ValueError, "four hands");
+        return NULL;
+    }
+    for (int s = 0; s < 4; s++) {
+        if (g_tiles_in(PySequence_Fast_GET_ITEM(fast, s), h->n_hand[s], hands[s], after, "hand") < 0) {
+            Py_DECREF(fast);
+            return NULL;
+        }
+        for (int i = 0; i < h->n_hand[s]; i++) before[h->hand[s][i]]++;
+    }
+    Py_DECREF(fast);
+    int n = g_wall_tiles(h, old);
+    for (int i = 0; i < n; i++) before[old[i]]++;
+    if (g_tiles_in(wall_obj, n, wall, after, "wall") < 0) return NULL;
+    if (memcmp(before, after, sizeof(before))) {
+        PyErr_SetString(PyExc_ValueError, "a redeal keeps the tiles in play");
+        return NULL;
+    }
+    for (int s = 0; s < 4; s++) {
+        memcpy(h->hand[s], hands[s], (size_t)h->n_hand[s]);
+        memset(h->c[s], 0, sizeof(h->c[s]));
+        for (int i = 0; i < h->n_hand[s]; i++) h->c[s][hands[s][i]]++;
+    }
+    for (int k = h->lo, i = 0; k < h->hi; k++)
+        if (!h->stable || !h->used[k]) h->wall[k] = wall[i++];
+    Py_RETURN_NONE;
+}
+
 static PyGetSetDef hand_getset[] = {
     {"settled", (getter)hand_get_settled, NULL, NULL, NULL},
     {"winner", (getter)hand_get_winner, NULL, NULL, NULL},
@@ -1622,6 +1689,7 @@ static PyMethodDef hand_methods[] = {
     {"snapshot", (PyCFunction)hand_snapshot, METH_NOARGS, "Every field as plain values."},
     {"stabilize", (PyCFunction)hand_stabilize, METH_NOARGS, "guided.walls.stabilize: each seat draws from its own positions from here on."},
     {"track_luck", (PyCFunction)hand_track_luck, METH_O, "Accumulate this seat's draw luck (guided.walls) from here on."},
+    {"redeal", (PyCFunction)hand_redeal, METH_VARARGS, "Replace the concealed hands and the remaining wall by the same tiles in play."},
     {NULL},
 };
 

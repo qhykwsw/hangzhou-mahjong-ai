@@ -328,8 +328,15 @@ class Game:
             start(self, row, legal, candidates, greedy[0])
 
     def _branch_world(self, row):
-        """The hand the row's branch copies start from."""
-        return self.state
+        """The hand the row's branch copies start from (re-dealt under cfg["branch_resample"]), and its weight."""
+        if not self.branching.resample:
+            return self.state, None
+        from .branches import place, redeal, weigh, world_seed
+
+        world = fork(self.state)
+        hands, wall = redeal(world.hands, world.wall, self.focal, world_seed(self))
+        place(world, hands, wall, self.focal)
+        return world, weigh(self, row, hands, wall, [len(m) for m in world.melds])
 
     def _branch_copy(self, world, index, legal, result):
         """A copy of ``world`` playing the candidate ``index`` (guided.branches.Branch)."""
