@@ -50,6 +50,49 @@ class BatchFirstEncoderLayer(nn.TransformerEncoderLayer):
         return src + self.linear2(F.gelu(self.linear1(self.norm2(src))))
 
 
+# The event fields that hold a tile (34: none): tile and chi's lowest tile.
+TILE_FIELDS = (2, 3)
+
+
+class SuitEmbedding(nn.Module):
+    """A tile table whose three suits share their ranks: row 9s + r is ranks[r] + suits[s].
+
+    Rows 27..33 (the seven honours) and the ``extra`` rows after them (an
+    event's "no tile", 34) are free (``others``). ``weight`` is the whole
+    table; lookups read it as an nn.Embedding reads its own.
+    """
+
+    def __init__(self, dim, extra=0, std=1.0):
+        super().__init__()
+        self.ranks = nn.Parameter(torch.empty(9, dim))
+        self.suits = nn.Parameter(torch.empty(3, dim))
+        self.others = nn.Parameter(torch.empty(7 + extra, dim))
+        # A suited row adds two draws: the same spread as a free row.
+        nn.init.normal_(self.ranks, std=std / math.sqrt(2))
+        nn.init.normal_(self.suits, std=std / math.sqrt(2))
+        nn.init.normal_(self.others, std=std)
+
+    @property
+    def weight(self):
+        suited = (self.suits[:, None] + self.ranks).flatten(0, 1)
+        return torch.cat([suited, self.others])
+
+    def forward(self, index):
+        return F.embedding(index, self.weight)
+
+    @staticmethod
+    def fit(table):
+        """Parameters whose table is the least-squares additive fit of a per-tile ``table``.
+
+        ranks[r] is rank r's mean over the three suits, suits[s] the suit's
+        mean over its ranks less the mean of all 27; honours and extra rows
+        are copied.
+        """
+        suited = table[:27].unflatten(0, (3, 9))
+        ranks = suited.mean(0)
+        return {"ranks": ranks, "suits": suited.mean(1) - ranks.mean(0), "others": table[27:].clone()}
+
+
 class HistoryEncoder(nn.Module):
     """Tile, state and event tokens through a pre-norm transformer.
 
@@ -63,25 +106,33 @@ class HistoryEncoder(nn.Module):
     With ``belief_head`` (an Actor option, see Actor) ``belief_head`` reads the
     34 tile tokens after ``belief_layer = layers // 2`` blocks and ``belief_in``
     adds its sigmoid, without gradient, back to them before the next block.
+    With ``suit_embedding="shared"`` the tile tokens' table and the events'
+    tile tables are SuitEmbeddings instead of free rows per tile.
     """
 
     def __init__(self, dim, layers, heads, max_events=4096, *, state_only=False,
-                 planes=N_PLANES, scalars=N_SCALARS, event_tail=4, belief_head=False):
+                 planes=N_PLANES, scalars=N_SCALARS, event_tail=4, belief_head=False, suit_embedding=None):
         super().__init__()
         if dim % heads or dim < 2:
             raise ValueError("dim must be divisible by heads and at least 2")
+        if suit_embedding not in (None, "shared"):
+            raise ValueError(f"unknown suit_embedding: {suit_embedding!r}")
         self.dim, self.layers, self.heads = dim, layers, heads
         self.max_events = max_events
         self.state_only = state_only
+        self.suit_embedding = suit_embedding
+        shared = suit_embedding == "shared"
         self.tile_in = nn.Linear(planes, dim)
-        self.tile_embedding = nn.Parameter(torch.empty(34, dim))
+        self.tile_embedding = SuitEmbedding(dim, std=0.02) if shared else nn.Parameter(torch.empty(34, dim))
         self.state_in = nn.Linear(scalars, dim)
         self.event_embeddings = nn.ModuleList(
-            nn.Embedding(size, dim) for size in (7, 5, 35, 35, event_tail)
+            SuitEmbedding(dim, extra=1) if shared and field in TILE_FIELDS else nn.Embedding(size, dim)
+            for field, size in enumerate((7, 5, 35, 35, event_tail))
         )
         self.timed_events = event_tail > 4
         self.type_embedding = nn.Parameter(torch.empty(3, dim))
-        nn.init.normal_(self.tile_embedding, std=0.02)
+        if not shared:
+            nn.init.normal_(self.tile_embedding, std=0.02)
         nn.init.normal_(self.type_embedding, std=0.02)
         positions = torch.arange(max_events + 1, dtype=torch.float32)[:, None]
         frequencies = torch.exp(
@@ -160,7 +211,8 @@ class HistoryEncoder(nn.Module):
         event_tokens = event_tokens + self.positions[valid.long().cumsum(1)]
         planes = planes[:, : self.tile_in.in_features]
         scalars = scalars[:, : self.state_in.in_features]
-        tiles = self.tile_in(planes.float().transpose(1, 2)) + self.tile_embedding
+        table = self.tile_embedding.weight if self.suit_embedding else self.tile_embedding
+        tiles = self.tile_in(planes.float().transpose(1, 2)) + table
         state = self.state_in(scalars.float())[:, None]
         tokens = torch.cat(
             [
@@ -196,9 +248,10 @@ class HistoryEncoder(nn.Module):
 def actor_options(config):
     """The optional Actor structures ``config`` turns on, as Actor keyword arguments.
 
-    ``"belief_head": true`` adds the opponents' tile belief (Actor). Options at
-    their defaults are dropped, so an Actor without any keeps its original
-    config, weights and exported files bit for bit.
+    ``"belief_head": true`` adds the opponents' tile belief, ``"suit_embedding":
+    "shared"`` shares the suits' rank embeddings (Actor). Options at their
+    defaults are dropped, so an Actor without any keeps its original config,
+    weights and exported files bit for bit.
     """
     options = {}
     belief = config.get("belief_head", False)
@@ -206,6 +259,11 @@ def actor_options(config):
         raise ValueError("belief_head must be true or false")
     if belief:
         options["belief_head"] = True
+    suits = config.get("suit_embedding")
+    if suits not in (None, "shared"):
+        raise ValueError(f"unknown suit_embedding: {suits!r} (only \"shared\")")
+    if suits:
+        options["suit_embedding"] = suits
     return options
 
 
@@ -241,14 +299,24 @@ class Actor(nn.Module):
     logits) for a training loss on hidden state (ADR-0009), and the policy loss
     never reaches the head. The head reads only legal inputs, so inference is
     unchanged: one forward pass, logits only.
+
+    ``suit_embedding="shared"``: every per-tile embedding, the tile tokens'
+    ``encoder.tile_embedding`` and the events' tile and chi tables
+    (``encoder.event_embeddings.2`` and ``.3``), is a SuitEmbedding: rank plus
+    suit for the three suits, free rows for the honours (and "no tile"). The
+    rest of the Actor is already tile-shared (tile_in, discard_head and
+    claim_head act on every tile token alike; the planes carry a suit one-hot
+    and the rank), so these tables were its only per-tile parameters on the
+    input side; the 63 chi logits of state_head stay one row per suit.
+    expand --share-suits starts one from an existing Actor (SuitEmbedding.fit).
     """
 
     def __init__(self, dim=128, layers=4, heads=4, *, planes=N_PLANES, scalars=N_SCALARS, event_tail=4,
-                 belief_head=False):
+                 belief_head=False, suit_embedding=None):
         super().__init__()
         self.dim, self.layers, self.heads = dim, layers, heads
         self.encoder = HistoryEncoder(dim, layers, heads, planes=planes, scalars=scalars, event_tail=event_tail,
-                                      belief_head=belief_head)
+                                      belief_head=belief_head, suit_embedding=suit_embedding)
         self.discard_head = nn.Linear(dim, 1)
         self.claim_head = nn.Linear(dim, 4)
         self.state_head = nn.Linear(dim, 65)

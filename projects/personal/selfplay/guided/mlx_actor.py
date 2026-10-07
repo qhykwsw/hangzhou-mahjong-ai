@@ -20,11 +20,24 @@ class Actor:
                 half.update([name + ".weight", name + ".bias"])
             if isinstance(module, torch.nn.MultiheadAttention):
                 half.update([name + ".in_proj_weight", name + ".in_proj_bias"])
+        weights = actor.state_dict()
+        encoder = actor.encoder
+        if encoder.suit_embedding:
+            # Frozen weights: each shared-suit table (guided.networks.SuitEmbedding)
+            # is built once, as torch builds it, and read under its per-tile name.
+            from .networks import TILE_FIELDS
+
+            shared = ("encoder.tile_embedding.", *(f"encoder.event_embeddings.{i}." for i in TILE_FIELDS))
+            weights = {k: v for k, v in weights.items() if not k.startswith(shared)}
+            with torch.no_grad():
+                weights["encoder.tile_embedding"] = encoder.tile_embedding.weight
+                for i in TILE_FIELDS:
+                    weights[f"encoder.event_embeddings.{i}.weight"] = encoder.event_embeddings[i].weight
         self.w = {
             k: mx.array(
                 v.detach().cpu().numpy().astype(np.float16 if k in half else np.float32)
             )
-            for k, v in actor.state_dict().items()
+            for k, v in weights.items()
         }
         self.positions = mx.array(actor.encoder.positions.detach().cpu().numpy())
         # The prefixes of wider rows this Actor reads, and whether it embeds

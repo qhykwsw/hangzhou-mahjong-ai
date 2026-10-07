@@ -1,4 +1,5 @@
-"""Optional Actor structures: off by default, the belief head expands without changing a decision."""
+"""Optional Actor structures: off by default, the belief head expands without changing a decision,
+shared suits start from the source's tables."""
 
 from pathlib import Path
 import random
@@ -51,17 +52,19 @@ def test_options_default_to_the_original_actor(tmp_path):
     import json
 
     base = {"dim": 32, "layers": 2, "heads": 4, "lookahead": True}
-    assert actor_options(base) == actor_options(base | {"belief_head": False}) == {}
-    with pytest.raises(ValueError):
-        actor_options({"belief_head": "yes"})
+    off = {"belief_head": False, "suit_embedding": None}
+    assert actor_options(base) == actor_options(base | off) == {}
+    for bad in ({"belief_head": "yes"}, {"suit_embedding": "per-suit"}):
+        with pytest.raises(ValueError):
+            actor_options(bad)
     torch.manual_seed(5)
     plain = Actor(32, 2, 4)
     torch.manual_seed(5)
-    built = actor_of(ENCODING, 32, 2, 4, **actor_options(base | {"belief_head": False}))
+    built = actor_of(ENCODING, 32, 2, 4, **actor_options(base | off))
     assert list(plain.state_dict()) == list(built.state_dict())
-    assert not any("belief" in name for name in plain.state_dict())
+    assert not any(k in name for name in plain.state_dict() for k in ("belief", "ranks", "suits", "others"))
     assert all(torch.equal(a, b) for a, b in zip(plain.state_dict().values(), built.state_dict().values()))
-    export_actor(plain.state_dict(), base | {"belief_head": False}, tmp_path / "plain")
+    export_actor(plain.state_dict(), base | off, tmp_path / "plain")
     assert json.loads((tmp_path / "plain/meta.json").read_text())["config"] == base
 
 
@@ -142,3 +145,63 @@ def test_belief_head_needs_two_layers_and_plain_actors_return_no_belief(rows):
         Actor(16, 1, 4, belief_head=True)
     with pytest.raises(ValueError, match="no belief head"):
         logits_of(Actor(16, 1, 4), rows[:2], return_belief=True)
+
+
+def test_shared_suits_make_every_tile_table_rank_plus_suit(rows):
+    torch.manual_seed(9)
+    actor = Actor(32, 2, 4, suit_embedding="shared")
+    names = dict(actor.named_parameters())
+    assert "encoder.tile_embedding" not in names and "encoder.event_embeddings.2.weight" not in names
+    for prefix, rest in (("encoder.tile_embedding.", 7), ("encoder.event_embeddings.2.", 8),
+                         ("encoder.event_embeddings.3.", 8)):
+        assert [tuple(names[prefix + k].shape) for k in ("ranks", "suits", "others")] == [(9, 32), (3, 32), (rest, 32)]
+    for table in (actor.encoder.tile_embedding, actor.encoder.event_embeddings[2], actor.encoder.event_embeddings[3]):
+        weight = table.weight.detach()
+        suited = weight[:27].unflatten(0, (3, 9))
+        # Two suits differ by one vector at every rank.
+        torch.testing.assert_close(suited - suited[:1], (table.suits - table.suits[:1]).detach()[:, None].expand(3, 9, 32))
+        assert torch.equal(weight[27:], table.others.detach())
+    batch = policy_batch(rows, "cpu")
+    logits = actor(batch["planes"], batch["scalars"], batch["events"])
+    logits.masked_fill(~batch["mask"], 0).square().sum().backward()
+    assert all(names[k].grad.abs().sum() > 0 for k in names if k.endswith(("ranks", "suits", "others")))
+
+
+def test_share_suits_starts_from_the_least_squares_fit_of_the_source(rows, tmp_path):
+    from guided.deployment import load_actor
+    from guided.expand import expand
+    from guided.trial import export_actor
+
+    config = {"dim": 32, "layers": 2, "heads": 4, "lookahead": True}
+    torch.manual_seed(41)
+    source = Actor(32, 2, 4)
+    export_actor(source.state_dict(), config, tmp_path / "v1")
+    target = expand(tmp_path / "v1", tmp_path / "models", suit_embedding="shared")
+    shared, meta = load_actor(target, "cpu")
+    assert meta["encoding"] == ENCODING and meta["config"]["suit_embedding"] == "shared"
+    for name, table in (("encoder.tile_embedding", shared.encoder.tile_embedding),
+                        ("encoder.event_embeddings.2.weight", shared.encoder.event_embeddings[2]),
+                        ("encoder.event_embeddings.3.weight", shared.encoder.event_embeddings[3])):
+        original = source.state_dict()[name]
+        suited = original[:27].unflatten(0, (3, 9))
+        torch.testing.assert_close(table.ranks.detach(), suited.mean(0))
+        fitted = table.weight.detach()
+        assert torch.equal(fitted[27:], original[27:])
+        # The residual of a least-squares additive fit sums to zero over suits and over ranks.
+        residual = (original - fitted)[:27].unflatten(0, (3, 9))
+        assert residual.sum(0).abs().max() < 1e-5 and residual.sum(1).abs().max() < 1e-5
+    assert logits_of(shared, rows).isfinite().all()
+    with pytest.raises(ValueError, match="cannot change suit_embedding"):
+        expand(target, tmp_path / "again", suit_embedding="shared")
+    # Tables that already are rank plus suit come through unchanged.
+    with torch.no_grad():
+        for table in (source.encoder.tile_embedding, source.encoder.event_embeddings[2].weight,
+                      source.encoder.event_embeddings[3].weight):
+            table[:27] = (torch.randn(3, 1, 32) + torch.randn(1, 9, 32)).flatten(0, 1)
+    export_actor(source.state_dict(), config, tmp_path / "additive")
+    exact, _ = load_actor(expand(tmp_path / "additive", tmp_path / "models", suit_embedding="shared"), "cpu")
+    torch.testing.assert_close(logits_of(exact, rows), logits_of(source, rows), atol=1e-5, rtol=1e-5)
+    # Every option and a wider encoding at once.
+    both = expand(tmp_path / "v1", tmp_path / "all", ENCODING_V4, belief_head=True, suit_embedding="shared")
+    _, meta = load_actor(both, "cpu")
+    assert meta["config"] == config | {"belief_head": True, "suit_embedding": "shared"}

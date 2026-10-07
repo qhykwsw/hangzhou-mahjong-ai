@@ -101,6 +101,30 @@ def test_belief_head_matches_reference():
         np.testing.assert_allclose(compiled, expected.numpy(), rtol=0.01, atol=0.005)
 
 
+def test_shared_suit_embeddings_match_reference():
+    from guided.encoding import ENCODING_V3, EVENT_TAILS, INPUTS
+    from guided.networks import actor_of
+
+    torch.manual_seed(597)
+    rng = np.random.default_rng(460)
+    for options in ({"suit_embedding": "shared"}, {"suit_embedding": "shared", "belief_head": True}):
+        actor = actor_of(ENCODING_V3, 32, 2, 4, **options).eval()
+        torch.nn.init.normal_(actor.encoder.tile_embedding.ranks)  # tables that move the logits
+        if "belief_head" in options:
+            torch.nn.init.normal_(actor.encoder.belief_in.weight, std=0.5)
+        row = blank(*INPUTS[ENCODING_V3])
+        events = np.zeros((3, 32, 5), np.int32)
+        for field, size in enumerate([7, 5, 35, 35, EVENT_TAILS[ENCODING_V3]]):
+            events[:, 8:24, field] = rng.integers(1 if field < 4 else 0, size, size=(3, 16))
+        events[:, :8, 1:] = -999
+        args = [rng.normal(size=(3, *row["planes"].shape)).astype(np.float16),
+                rng.normal(size=(3, *row["scalars"].shape)).astype(np.float16), events]
+        with torch.inference_mode():
+            expected = actor(*(torch.from_numpy(a) for a in args)).numpy()
+        actual = np.asarray(MetalActor(actor).logits(*(mx.array(a) for a in args)))
+        np.testing.assert_allclose(actual, expected, rtol=0.01, atol=0.005)
+
+
 def test_service_two_inflight_batches_reuse_slots_without_stale_answers():
     torch.manual_seed(139)
     actor = MetalActor(Actor(32, 1, 4).eval())
