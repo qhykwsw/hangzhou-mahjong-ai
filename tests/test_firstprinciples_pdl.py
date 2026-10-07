@@ -61,9 +61,16 @@ def test_a_version_against_itself_differs_nowhere(pdl):
 
 def test_the_same_seed_gives_the_same_measurement(pdl):
     first = pdl.measure("x", "y", hands=16, seed=7, k=2)
-    again = pdl.measure("x", "y", hands=16, seed=7, k=2)
+    again = pdl.measure("x", "y", hands=16, seed=7, k=2, reuse=False)
     assert first["snapshots"] > 0
     keep = ("diff", "se", "parts", "snapshots", "dealer_edge", "draw_rate")
     assert {k: first[k] for k in keep} == {k: again[k] for k in keep}
     rows = [json.loads(line) for line in pdl.results_path().read_text().splitlines()]
     assert [r["b"] for r in rows] == ["y", "y"]
+
+
+def test_a_measurement_on_record_is_reused(pdl, monkeypatch):
+    first = pdl.measure("x", "y", hands=16, seed=7, k=2)
+    monkeypatch.setattr(pdl.subprocess, "Popen", None)  # nothing is played again
+    assert pdl.measure("x", "y", hands=16, seed=7, k=2) == first
+    assert len(pdl.results_path().read_text().splitlines()) == 1

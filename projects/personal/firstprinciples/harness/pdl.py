@@ -101,10 +101,12 @@ def summarize(results, blocks, rounds):
                 snapshots=sum(len(r["snapshots"]) for r in results), dealer_edge=edge, draw_rate=p)
 
 
-def measure(a_id, b_id, *, hands=None, seed=None, host="local", k=None, a_spec=None, b_spec=None):
+def measure(a_id, b_id, *, hands=None, seed=None, host="local", k=None, a_spec=None, b_spec=None, reuse=True):
     """V(b) - V(a), points per game on the fixed pool (see the module docstring); appended to pdl-results.jsonl.
 
-    A version without a record yet (an attempt being judged, harness.evaluate) passes its spec.
+    A version without a record yet (an attempt being judged, harness.evaluate) passes its spec. A
+    measurement is a function of the versions, pool, seed, hands and K, so one already on record with
+    all of these is returned as it is (reuse): an interrupted judgement resumes without measuring again.
     """
     import fcntl
 
@@ -116,6 +118,13 @@ def measure(a_id, b_id, *, hands=None, seed=None, host="local", k=None, a_spec=N
     blocks = max(1, hands // (4 * rounds))
     seed = random.SystemRandom().getrandbits(62) if seed is None else int(seed)
     specs = {"A": a_spec or spec_of(a_id), "B": b_spec or spec_of(b_id)}
+    versions = {a_id: E.version({"id": a_id, "spec": specs["A"]}), b_id: E.version({"id": b_id, "spec": specs["B"]})}
+    if reuse and results_path().exists():
+        same = (a_id, b_id, pool["id"], seed, blocks * 4, k, versions)
+        for line in results_path().read_text().splitlines():
+            r = json.loads(line)
+            if (r["a"], r["b"], r["pool"], r["seed"], r["games"], r["k"], r["versions"]) == same:
+                return r
     policies = dict(E.playing(pool), **{n: E.with_timeouts(s) for n, s in specs.items()})
     root = E.LOCAL / "pdl" / f"{a_id}--{b_id}--{seed}--{blocks}x{k}"
     env = dict(os.environ, PYTHONPATH=pool["runtime_path"], **E._job_env(pool))
@@ -152,7 +161,7 @@ def measure(a_id, b_id, *, hands=None, seed=None, host="local", k=None, a_spec=N
                 raise RuntimeError(f"PDL {job.name}: {value.get('status')} {str(value.get('error'))[-1500:]}")
             results.append(value)
     entry = dict(a=a_id, b=b_id, pool=pool["id"], seed=seed, hands=blocks * 4 * rounds, games=blocks * 4, k=k,
-                 versions={a_id: E.version({"id": a_id, "spec": specs["A"]}), b_id: E.version({"id": b_id, "spec": specs["B"]})},
+                 versions=versions,
                  seconds=time.time() - started, at=time.time(), **summarize(results, blocks, rounds))
     with results_path().open("a") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")

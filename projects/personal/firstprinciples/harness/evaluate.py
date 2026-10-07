@@ -37,6 +37,7 @@ Maintainer commands (from projects/personal/firstprinciples); iteration agents u
   python -m harness.evaluate rebase-finish rule|rl                      # record them; the highest is the line's best
   python -m harness.evaluate refresh rule|rl [--host <host>]            # replay a line's best under the current conditions
   python -m harness.evaluate extend rule|rl [--host <host>]             # play a line's best on development blocks it has not played (the set grew)
+  python -m harness.evaluate rejudge <attempt> [--host <host>] [--seed S]  # an earlier attempt under the current rules (S: its PDL on record)
   python -m harness.evaluate seal                                       # after any change to the conditions
   python -m harness.evaluate reference <research candidate | model name> [--host local|4070|4090|5070ti]
   python -m harness.evaluate implement <pool member> <package dir>      # an equivalent, faster implementation
@@ -766,6 +767,52 @@ def extend(line, host=None):
     return record
 
 
+def rejudge(attempt_id, host=None, seed=None):
+    """Judge an earlier attempt again under the current rules, against the line's best now.
+
+    For attempts judged before the 10-07 rules (the doubled development set,
+    PDL for close calls): its development archive is extended to the whole set
+    on its host, then judge() decides as for a new attempt; ``seed`` is that of
+    a PDL measurement already made for it, which is then reused. The new record
+    keeps the id (``rejudged`` holds the old status, games, score and diff); a
+    kept one, being the last kept record, becomes the line's best.
+    """
+    pool = load_pool()
+    check_seal()
+    rows = [r for r in attempts(pool["id"]) if r["id"] == attempt_id and r.get("dev_blocks")]
+    if not rows:
+        raise Refused(f"{attempt_id} 在当前对手池下没有开发集成绩")
+    old = rows[-1]
+    line = old["line"]
+    champion = best(pool["id"], line)
+    if champion is None or champion["id"] == attempt_id:
+        raise Refused(f"{attempt_id} 没有可比的最好版本")
+    host = host or old.get("host") or EVAL_HOST[line]
+    scores = {int(k): v for k, v in old["dev_blocks"].items()}
+    stats = old.get("stats") or {}
+    missing = [b for b in range(DEV_BLOCKS) if b not in scores]
+    if missing:
+        more, extra = play(pool, attempt_id, old["spec"], missing, pool["dev_seed"], "dev-extend", host)
+        scores |= more
+        stats = {k: int(stats.get(k) or 0) + int(extra.get(k) or 0) for k in set(stats) | set(extra)}
+    verdict, pdl, confirm, champion = judge(pool, line, attempt_id, old["spec"], scores, champion, host, seed)
+    score, se = mean_se(scores[k] for k in range(DEV_BLOCKS))
+    record = {k: v for k, v in old.items() if k not in ("proxy", "reference")} | dict(
+        status=verdict, host=host, games=DEV_BLOCKS * 4, score=score, se=se, stats=stats,
+        best_before=champion["score"], diff=paired(scores, champion_blocks(champion), range(DEV_BLOCKS))[0],
+        confirm=confirm, pdl=pdl, dev_blocks={str(k): scores[k] for k in sorted(scores)},
+        rejudged={"at": time.time(), "old_status": old["status"], "old_games": old["games"], "old_score": old["score"],
+                  "old_diff": old.get("diff")})
+    if verdict == "keep":
+        record["reference"] = against_platform(record)
+        record["proxy"] = proxy_tables(attempt_id, old["spec"], host, champion)
+    with records_path().open("a") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    mark_reported([record])
+    log(f"{attempt_id} rejudged: {verdict} ({old['status']} before)")
+    return record
+
+
 def champion_blocks(champion):
     """The best version's development scores by block, refusing an archive shorter than the set (extend first)."""
     blocks = {int(k): v for k, v in champion["dev_blocks"].items()}
@@ -798,6 +845,8 @@ def history(line):
                 else f" 换池重算（旧池 {r['rebased']['old_score']:+.2f}）" if r.get("rebased") else "")
         if r.get("refreshed"):
             kind += f" 当前条件重测（原 {r['refreshed']['old_score']:+.2f}）"
+        if r.get("rejudged"):
+            kind += f" 按 10-07 规则重判（原{STATUS[r['rejudged']['old_status']]}，{r['rejudged']['old_games']}场）"
         t = r.get("training") or {}
         trained = (f" 训练{t['hands'] / 10000:.0f}万局" + (f"（续训自{t['from']}，累计{t['lineage_hands'] / 10000:.0f}万局）"
                                                          if t.get("from") else "")) if t.get("hands") else ""
@@ -1290,6 +1339,10 @@ def main():
     ex = sub.add_parser("extend", help="play a line's best on the development blocks it has not played (after the set grew)")
     ex.add_argument("line", choices=("rule", "rl"))
     ex.add_argument("--host", choices=tuple(EVAL_WORKERS))
+    rj = sub.add_parser("rejudge", help="judge an earlier attempt again under the current rules")
+    rj.add_argument("attempt")
+    rj.add_argument("--host", choices=tuple(EVAL_WORKERS))
+    rj.add_argument("--seed", type=int, help="the seed of a PDL measurement already on record for it")
     sub.add_parser("upgrade-runtime", help="move the pool onto its runtime plus src/mahjong_ai/_fast.c's new functions")
     sub.add_parser("seal", help="accept the current evaluation conditions (maintainer)")
     cmp = sub.add_parser("compare", help="paired development-set difference of two scored versions")
@@ -1335,6 +1388,13 @@ def main():
         except Refused as exc:
             raise SystemExit(str(exc))
         print("已完整" if r is None else f"{r['id']} {r['games']} 场 {r['score']:+.2f} ± {r['se']:.2f}（原 {r['extended']['old_games']} 场 {r['extended']['old_score']:+.2f}）")
+        return
+    if args.command == "rejudge":
+        try:
+            r = rejudge(args.attempt, args.host, args.seed)
+        except Refused as exc:
+            raise SystemExit(str(exc))
+        print(report(r))
         return
     if args.command == "upgrade-runtime":
         try:

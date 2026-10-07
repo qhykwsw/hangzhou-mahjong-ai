@@ -238,6 +238,35 @@ def test_a_close_development_difference_is_judged_by_pdl(harness, monkeypatch, d
         assert f"差 {pdl_diff:+.2f} ± 0.10" in E.report(r)
 
 
+def test_rejudge_extends_an_earlier_attempt_and_judges_it_now(harness, monkeypatch):
+    E, _, _ = harness
+    P = importlib.import_module("harness.pdl")
+    monkeypatch.setattr(E, "DEV_BLOCKS", 4)
+    monkeypatch.setattr(E, "check_seal", lambda: None)
+    monkeypatch.setattr(E, "platform_entrant", lambda: None)
+    monkeypatch.setattr(E, "proxy_tables", lambda *a: {"error": "none"})
+    (E.LOCAL / "pool.json").write_text(json.dumps({"id": "pool-a", "members": {}, "dev_seed": 1}))
+    record(E, id="fp-rl-007", finished_at=1, games=16, spec={"weights": "old"}, dev_blocks={str(b): 0.0 for b in range(4)})
+    record(E, id="fp-rl-009", status="discard", host="5070ti", finished_at=2, games=8, score=-0.1, diff=-0.1,
+           spec={"weights": "mine"}, dev_blocks={"0": -0.1, "1": -0.1}, stats={"timeouts": 0}, training={"hands": 5})
+    calls, measured = [], []
+
+    def play(pool, attempt_id, spec, blocks, seed, label, host):
+        calls.append((attempt_id, list(blocks), label, host))
+        return {b: 0.3 for b in blocks}, {"timeouts": 1}
+
+    monkeypatch.setattr(E, "play", play)
+    monkeypatch.setattr(P, "measure", lambda a, b, **kw: measured.append((a, b, kw["seed"])) or dict(
+        seed=kw["seed"], games=8, k=2, diff=0.3, se=0.1, lower90=0.17, parts={}, snapshots=3, seconds=1.0))
+    r = E.rejudge("fp-rl-009", seed=11)
+    assert calls == [("fp-rl-009", [2, 3], "dev-extend", "5070ti")] and measured == [("fp-rl-007", "fp-rl-009", 11)]
+    assert r["status"] == "keep" and r["games"] == 16 and r["stats"] == {"timeouts": 1} and r["training"] == {"hands": 5}
+    assert r["rejudged"]["old_status"] == "discard" and r["pdl"]["against"] == "fp-rl-007"
+    assert E.best("pool-a", "rl")["id"] == "fp-rl-009" and "按 10-07 规则重判" in E.history("rl")
+    with pytest.raises(E.Refused):
+        E.rejudge("fp-rl-009")
+
+
 def test_catalog_offers_every_version_that_became_a_line_best(harness):
     E, rl, _ = harness
     pool = {"id": "pool-a", "members": {"piao": {"family": "code"}}, "runtime_path": "/pool-runtime"}
