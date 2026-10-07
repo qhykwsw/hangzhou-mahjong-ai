@@ -46,10 +46,16 @@ def build(spec):
 def act(policy, obs):
     from mahjong_ai.execution.candidate_runtime import ActionUnavailable
 
-    try:
-        return policy.act(obs)
-    except ActionUnavailable as exc:  # a model seat that could not answer: the measurement is void
-        raise RuntimeError(f"策略未给出动作：{getattr(policy, 'last_error', None) or exc}") from exc
+    for attempt in range(3):
+        try:
+            return policy.act(obs)
+        except ActionUnavailable as exc:
+            # The policies decide from the observation alone, so asking again is the same
+            # decision: a model service that timed out once (a busy training host) is retried;
+            # one that cannot answer at all voids the measurement.
+            if attempt == 2:
+                raise RuntimeError(f"策略未给出动作：{getattr(policy, 'last_error', None) or exc}") from exc
+            time.sleep(10)
 
 
 def main(root):
