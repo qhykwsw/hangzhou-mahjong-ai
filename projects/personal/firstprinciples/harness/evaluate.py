@@ -34,6 +34,7 @@ Maintainer commands (from projects/personal/firstprinciples); iteration agents u
   python -m harness.evaluate rebase <attempt> ... [--host <host>]       # replay earlier versions on the new pool
   python -m harness.evaluate rebase-finish rule|rl                      # record them; the highest is the line's best
   python -m harness.evaluate refresh rule|rl [--host <host>]            # replay a line's best under the current conditions
+  python -m harness.evaluate extend rule|rl [--host <host>]             # play a line's best on development blocks it has not played (the set grew)
   python -m harness.evaluate seal                                       # after any change to the conditions
   python -m harness.evaluate reference <research candidate | model name> [--host local|4070|4090|5070ti]
   python -m harness.evaluate implement <pool member> <package dir>      # an equivalent, faster implementation
@@ -99,8 +100,10 @@ EVAL_WORKERS = {"local": 12, "4070": 16, "4090": 14, "5070ti": 12}
 EVAL_TABLES = {"local": 1, "4070": 1, "4090": 1, "5070ti": 1}
 ISOLATION = "none"  # the pool's packages run in the match process (see module docstring)
 POLL_SECONDS = 5  # how often remote job results are checked
-DEV_BLOCKS = override("FP_DEV", 4096)  # 4 games each
-CONFIRM_BLOCKS = override("FP_CONFIRM", 2048)
+# 4 games each. Doubled on 10-07 (user) from 4096 and 2048: the first 4096
+# development blocks are the same games as before (extend adds the rest).
+DEV_BLOCKS = override("FP_DEV", 8192)
+CONFIRM_BLOCKS = override("FP_CONFIRM", 4096)
 JOB_RETRIES = 3  # a job that fails this often (not a host fault) fails the attempt
 CONFIRM_Z = 1.2816  # one-sided 90%
 TIMEOUTS = {"discard": 2.0, "response": 0.6}  # platform limits minus network and concurrency margin
@@ -723,6 +726,49 @@ def refresh(line, host=None):
     return record
 
 
+def extend(line, host=None):
+    """Play the line's best version on the development blocks it has not played yet, and record it again.
+
+    When the development set grows (10-07: 4096 -> 8192 blocks), its first
+    blocks stay the same games, so the best version's archived blocks are
+    kept and only the new ones are played; candidates are then paired with it
+    on the whole set. The new record keeps the version's id and time
+    (``extended`` holds when, the old game count and score); being the last
+    kept record, it stays the line's best.
+    """
+    pool = load_pool()
+    check_seal()
+    champion = best(pool["id"], line)
+    if champion is None:
+        raise Refused(f"{LINE_NAMES[line]}还没有成功的版本")
+    have = {int(k): v for k, v in champion["dev_blocks"].items()}
+    missing = [b for b in range(DEV_BLOCKS) if b not in have]
+    if not missing:
+        return None
+    host = host or champion.get("host") or EVAL_HOST[line]
+    scores, stats = play(pool, champion["id"], champion["spec"], missing, pool["dev_seed"], "dev-extend", host)
+    merged = have | scores
+    score, se = mean_se(merged[k] for k in range(DEV_BLOCKS))
+    old_stats = champion.get("stats") or {}
+    record = dict(champion, host=host, games=DEV_BLOCKS * 4, score=score, se=se,
+                  stats={k: int(old_stats.get(k) or 0) + int(stats.get(k) or 0) for k in set(old_stats) | set(stats)},
+                  dev_blocks={str(k): merged[k] for k in sorted(merged)},
+                  extended={"at": time.time(), "old_games": champion["games"], "old_score": champion["score"]})
+    with records_path().open("a") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    mark_reported([record])
+    log(f"{champion['id']} extended to {DEV_BLOCKS * 4} games on {pool['id']}: {score:+.2f} ± {se:.2f} (was {champion['score']:+.2f})")
+    return record
+
+
+def champion_blocks(champion):
+    """The best version's development scores by block, refusing an archive shorter than the set (extend first)."""
+    blocks = {int(k): v for k, v in champion["dev_blocks"].items()}
+    if any(b not in blocks for b in range(DEV_BLOCKS)):
+        raise Refused(f"{champion['id']} 的开发集成绩只有 {len(blocks)} 组，少于现在的 {DEV_BLOCKS} 组；维护者先 extend")
+    return blocks
+
+
 def history(line):
     """Every attempt of the line, its best version and the reference, for designing the next one."""
     pool = load_pool()
@@ -818,8 +864,10 @@ def _tasks(pool, attempt_id, spec, blocks, seed, label, host):
     resources = dict(pool["resources"], isolation=ISOLATION, tables=EVAL_TABLES[host])
     for n in range(0, len(blocks), size):
         # Under the pool id: a finished job is reused on restart, and a job of
-        # another pool (other runtime, other walls) must never be.
-        root = LOCAL / "jobs" / pool["id"] / attempt_id / f"{label}-{n // size:02d}"
+        # another pool (other runtime, other walls) must never be; nor one of
+        # another block span (the set sizes changed on 10-07).
+        span = f"{blocks[0]}+{len(blocks)}"
+        root = LOCAL / "jobs" / pool["id"] / attempt_id / f"{label}-{span}-{n // size:02d}"
         task = dict(kind="match", project=str(REPO), experiment="firstprinciples",
                     runtime_path=pool["runtime_path"], runtime="", config=pool["config"],
                     timeouts=pool["timeouts"], resources=resources, seed=seed,
@@ -987,7 +1035,7 @@ def evaluate(line, spec, description, attempt_id=None, design_seconds=None, host
     if champion is None:
         verdict = "reference" if reference else "keep"
     else:
-        diff, se = paired(scores, {int(k): v for k, v in champion["dev_blocks"].items()}, range(DEV_BLOCKS))
+        diff, se = paired(scores, champion_blocks(champion), range(DEV_BLOCKS))
         log(f"{attempt_id} dev {DEV_BLOCKS * 4} games: diff {diff:+.3f} ± {se:.3f} vs {champion['id']}")
         verdict = "discard" if diff <= 0 else None
     if verdict is None:
@@ -1000,7 +1048,7 @@ def evaluate(line, spec, description, attempt_id=None, design_seconds=None, host
                 # on record: the attempt must lead it there before it is worth
                 # replaying the fresh walls for.
                 champion = current
-                diff, se = paired(scores, {int(k): v for k, v in champion["dev_blocks"].items()}, range(DEV_BLOCKS))
+                diff, se = paired(scores, champion_blocks(champion), range(DEV_BLOCKS))
                 log(f"{attempt_id}: best version is now {champion['id']}; dev diff {diff:+.3f} ± {se:.3f}")
                 if diff <= 0:
                     verdict = "discard"
@@ -1027,7 +1075,7 @@ def evaluate(line, spec, description, attempt_id=None, design_seconds=None, host
         id=attempt_id, line=line, pool=pool["id"], status=verdict, description=description, host=host,
         started_at=started, finished_at=time.time(), games=DEV_BLOCKS * 4, score=score, se=se,
         best_before=champion["score"] if champion else None,
-        diff=paired(scores, {int(k): v for k, v in champion["dev_blocks"].items()}, range(DEV_BLOCKS))[0] if champion else None,
+        diff=paired(scores, champion_blocks(champion), range(DEV_BLOCKS))[0] if champion else None,
         confirm=confirm, stats=stats, spec=spec, dev_blocks={str(k): scores[k] for k in sorted(scores)},
         design_seconds=design_seconds,
     ) | (extra or {})
@@ -1213,6 +1261,9 @@ def main():
     rf = sub.add_parser("refresh", help="replay a line's best on the development set under the current conditions")
     rf.add_argument("line", choices=("rule", "rl"))
     rf.add_argument("--host", choices=tuple(EVAL_WORKERS))
+    ex = sub.add_parser("extend", help="play a line's best on the development blocks it has not played (after the set grew)")
+    ex.add_argument("line", choices=("rule", "rl"))
+    ex.add_argument("--host", choices=tuple(EVAL_WORKERS))
     sub.add_parser("upgrade-runtime", help="move the pool onto its runtime plus src/mahjong_ai/_fast.c's new functions")
     sub.add_parser("seal", help="accept the current evaluation conditions (maintainer)")
     cmp = sub.add_parser("compare", help="paired development-set difference of two scored versions")
@@ -1251,6 +1302,13 @@ def main():
         s = r["stats"]
         print(f"{r['id']} {r['score']:+.2f} ± {r['se']:.2f}（原 {r['refreshed']['old_score']:+.2f}；"
               f"超时 {s['timeouts']}，代打 {s['fallback_actions']}，报错 {s['errors']}）")
+        return
+    if args.command == "extend":
+        try:
+            r = extend(args.line, args.host)
+        except Refused as exc:
+            raise SystemExit(str(exc))
+        print("已完整" if r is None else f"{r['id']} {r['games']} 场 {r['score']:+.2f} ± {r['se']:.2f}（原 {r['extended']['old_games']} 场 {r['extended']['old_score']:+.2f}）")
         return
     if args.command == "upgrade-runtime":
         try:
