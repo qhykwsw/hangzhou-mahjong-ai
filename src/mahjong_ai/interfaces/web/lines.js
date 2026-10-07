@@ -206,7 +206,7 @@
     const few = (online?.omitted || []).map((r) => `${short(r.version)} ${r.rooms} 房`).join("、");
     $("onlineNote").textContent = online?.enabled
       ? `各版本线上每房的桌面分，即平台积分里的「一场」（10 场、80 手，四家合计为零），由每场均分 ×10 折算。每个版本两条线：实心点和深色线剔除有对手挂机的场次，空心点和浅色线是全部场次；横线为按房聚类的 95% 区间。线上对手随时间变化，不同时期上场的版本不完全可比。`
-        + `不足 ${online.min_rooms} 房的版本不画（上场中的版本满 2 房就画，房数少时区间很宽）${few ? `；未画：${few}` : ""}`
+        + `不足 ${online.min_rooms} 房的版本不画${few ? `（${few}）` : ""}`
       : "";
     if (!rows.length) return '<p class="muted">还没有足够的线上对局。</p>';
     const W = Math.max(300, Math.round($("onlineChart").clientWidth - 16));

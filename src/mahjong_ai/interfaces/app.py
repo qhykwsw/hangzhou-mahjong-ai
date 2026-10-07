@@ -78,8 +78,7 @@ def free_play_versions(competition):
     from its replays once and kept in ``online-rooms.jsonl``. The readout is given
     without the games where an opponent was AFK and over all games (``all_``),
     each with an SE clustered by room. Versions
-    with fewer than ONLINE_MIN_ROOMS rooms are listed but not scored, except the
-    ones playing now, scored from their second room (user 10-07).
+    with fewer than ONLINE_MIN_ROOMS rooms are listed but not scored.
     """
     log = competition / "free-play-strongest.log"
     if not log.exists():
@@ -129,7 +128,7 @@ def free_play_versions(competition):
     playing = (turns.read_text().split() if turns.exists() else []) or ([pin.read_text().strip()] if pin.exists() else [])
     rows, omitted = [], []
     for version, played in versions.items():
-        if len(played) < (2 if version in playing else ONLINE_MIN_ROOMS):
+        if len(played) < ONLINE_MIN_ROOMS:
             omitted.append({"version": version, "rooms": len(played)})
             continue
         clean = [[g for g in games if not g[3]] for _, _, games in played]
