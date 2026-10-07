@@ -101,12 +101,15 @@ def summarize(results, blocks, rounds):
                 snapshots=sum(len(r["snapshots"]) for r in results), dealer_edge=edge, draw_rate=p)
 
 
-def measure(a_id, b_id, *, hands=None, seed=None, host="local", k=None, a_spec=None, b_spec=None, reuse=True):
+def measure(a_id, b_id, *, hands=None, seed=None, host="local", k=None, a_spec=None, b_spec=None, reuse=True,
+            field=None):
     """V(b) - V(a), points per game on the fixed pool (see the module docstring); appended to pdl-results.jsonl.
 
     A version without a record yet (an attempt being judged, harness.evaluate) passes its spec. A
-    measurement is a function of the versions, pool, seed, hands and K, so one already on record with
-    all of these is returned as it is (reuse): an interrupted judgement resumes without measuring again.
+    measurement is a function of the versions, pool, seed, hands, K and field, so one already on record
+    with all of these is returned as it is (reuse): an interrupted judgement resumes without measuring again.
+    ``field`` ({"id", "members": {name: spec}, "lineups": [[name] * 3, ...]}) seats other opponents in
+    place of the pool's, block b with lineup b % len(lineups); the pool's runtime and game format stay.
     """
     import fcntl
 
@@ -119,14 +122,16 @@ def measure(a_id, b_id, *, hands=None, seed=None, host="local", k=None, a_spec=N
     seed = random.SystemRandom().getrandbits(62) if seed is None else int(seed)
     specs = {"A": a_spec or spec_of(a_id), "B": b_spec or spec_of(b_id)}
     versions = {a_id: E.version({"id": a_id, "spec": specs["A"]}), b_id: E.version({"id": b_id, "spec": specs["B"]})}
+    field_id = field["id"] if field else None
     if reuse and results_path().exists():
-        same = (a_id, b_id, pool["id"], seed, blocks * 4, k, versions)
+        same = (a_id, b_id, pool["id"], seed, blocks * 4, k, versions, field_id)
         for line in results_path().read_text().splitlines():
             r = json.loads(line)
-            if (r["a"], r["b"], r["pool"], r["seed"], r["games"], r["k"], r["versions"]) == same:
+            if (r["a"], r["b"], r["pool"], r["seed"], r["games"], r["k"], r["versions"], r.get("field")) == same:
                 return r
-    policies = dict(E.playing(pool), **{n: E.with_timeouts(s) for n, s in specs.items()})
-    root = E.LOCAL / "pdl" / f"{a_id}--{b_id}--{seed}--{blocks}x{k}"
+    opponents, lineups = (field["members"], field["lineups"]) if field else (E.playing(pool), E.lineups(pool))
+    policies = dict(opponents, **{n: E.with_timeouts(s) for n, s in specs.items()})
+    root = E.LOCAL / "pdl" / (f"{a_id}--{b_id}--{seed}--{blocks}x{k}" + (f"--{field_id}" if field else ""))
     env = dict(os.environ, PYTHONPATH=pool["runtime_path"], **E._job_env(pool))
     E.LOCAL.mkdir(parents=True, exist_ok=True)
     started = time.time()
@@ -146,7 +151,7 @@ def measure(a_id, b_id, *, hands=None, seed=None, host="local", k=None, a_spec=N
             job = root / f"w{w:02d}"
             job.mkdir(parents=True, exist_ok=True)
             (job / "result.json").unlink(missing_ok=True)
-            E.atomic_json(job / "task.json", dict(policies=policies, lineups=E.lineups(pool), config=pool["config"],
+            E.atomic_json(job / "task.json", dict(policies=policies, lineups=lineups, config=pool["config"],
                                                    blocks=list(range(w, blocks, workers)), seed=seed, k=k,
                                                    guided=str(GUIDED)))
             with (job / "worker.log").open("ab") as out:
@@ -160,7 +165,7 @@ def measure(a_id, b_id, *, hands=None, seed=None, host="local", k=None, a_spec=N
             if value.get("status") != "completed":
                 raise RuntimeError(f"PDL {job.name}: {value.get('status')} {str(value.get('error'))[-1500:]}")
             results.append(value)
-    entry = dict(a=a_id, b=b_id, pool=pool["id"], seed=seed, hands=blocks * 4 * rounds, games=blocks * 4, k=k,
+    entry = dict(a=a_id, b=b_id, pool=pool["id"], field=field_id, seed=seed, hands=blocks * 4 * rounds, games=blocks * 4, k=k,
                  versions=versions,
                  seconds=time.time() - started, at=time.time(), **summarize(results, blocks, rounds))
     with results_path().open("a") as f:
