@@ -20,6 +20,14 @@ from .statistics import seed_for, advantages
 GREEDY = "model:greedy"
 
 
+def luck_kind(cfg):
+    """cfg["luck_kind"]: "immediate" (the default, guided.walls' draw luck) or "race" (its race luck as well)."""
+    kind = cfg.get("luck_kind", "immediate")
+    if kind not in ("immediate", "race"):
+        raise ValueError(f"unknown luck_kind {kind!r}: 'immediate' or 'race'")
+    return kind
+
+
 def hook(spec, default):
     """Resolve an optional "module:function" training-recipe hook.
 
@@ -107,6 +115,8 @@ class Game:
         # guided.walls: training hands on a stable wall, and the learner's draw luck on its rows.
         self.stable = bool(cfg.get("stable_wall")) and train
         self.luck = bool(cfg.get("luck")) and train
+        # cfg["luck_kind"] "race": the race luck as well, in fields of its own (luck_race_*).
+        self.race_luck = self.luck and luck_kind(cfg) == "race"
         # cfg["stage"] (guided.stage): the game is placed inside a tournament stage.
         from .stage import start
 
@@ -143,7 +153,8 @@ class Game:
         if self.stable or self.luck:
             from .walls import train_hand
 
-            train_hand(self.state, stable=self.stable, luck_seat=self.focal if self.luck else None)
+            train_hand(self.state, stable=self.stable, luck_seat=self.focal if self.luck else None,
+                       race=self.race_luck)
         if self.stage:
             from .stage import attach
 
@@ -166,6 +177,8 @@ class Game:
                     )
                     if self.luck:
                         self.rows[-1]["end_luck_pay"], self.rows[-1]["end_luck_deal"] = state.luck
+                    if self.race_luck:
+                        self.rows[-1]["end_luck_race_pay"], self.rows[-1]["end_luck_race_deal"] = state.race_luck
                     if self.stage:  # the game's four scores after the hand, by absolute seat
                         self.rows[-1]["end_scores"] = [s / self.config.base_score for s in self.scores]
                 else:
@@ -233,6 +246,8 @@ class Game:
                 row.update(hook(self.cfg.get("critic_features"), oracle)(state, seat))
                 if self.luck:
                     row["luck_pay"], row["luck_deal"] = state.luck
+                if self.race_luck:
+                    row["luck_race_pay"], row["luck_race_deal"] = state.race_luck
                 if self.stage:
                     from .stage import row_fields
 
@@ -419,6 +434,8 @@ class Shadow:
         self.row["playout_scores"] = [(s + d) / game.config.base_score for s, d in zip(state.scores, state.delta)]
         if game.luck:
             self.row["playout_luck_pay"], self.row["playout_luck_deal"] = state.luck
+        if game.race_luck:
+            self.row["playout_luck_race_pay"], self.row["playout_luck_race_deal"] = state.race_luck
 
     def apply(self, response):
         from selfplay_core.actions import action_index

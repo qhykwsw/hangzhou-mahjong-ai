@@ -101,6 +101,7 @@ def test_every_decision_is_the_pythons():
     {},
     {"stable_wall": True, "luck": True, "critic_features": "guided.encoding:oracle"},
     {"vine": True, "stable_wall": True, "luck": True},
+    {"stable_wall": True, "luck": True, "luck_kind": "race", "critic_features": "guided.encoding:oracle"},
     {"stage": {"kind": "advancement", "games": 10, "per_game_sd": 70}},
     {"encoding": "guided-current-hand-v2", "stage": {"kind": "final", "games": 10, "per_game_sd": 70}},
     {"encoding": "guided-current-hand-v3", "vine": True},

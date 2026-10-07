@@ -112,7 +112,7 @@ class Mirror:
         if game.stable or game.luck:
             from .walls import train_hand
 
-            train_hand(state, stable=game.stable, luck_seat=game.focal if game.luck else None)
+            train_hand(state, stable=game.stable, luck_seat=game.focal if game.luck else None, race=game.race_luck)
         if game.stage:
             from .stage import attach
 
@@ -171,7 +171,7 @@ class FastGame(Game):
         if self.stable:
             self.state.stabilize()
         if self.luck:
-            self.state.track_luck(self.focal)
+            self.state.track_luck(self.focal, self.race_luck)
         self.start = (self.dealer, tuple(self.scores))
         self.mirror = None
 
@@ -237,6 +237,8 @@ class FastGame(Game):
                     self.rows[-1]["reward"] += delta[self.focal] / self.config.base_score
                     if self.luck:
                         self.rows[-1]["end_luck_pay"], self.rows[-1]["end_luck_deal"] = state.luck
+                    if self.race_luck:
+                        self.rows[-1]["end_luck_race_pay"], self.rows[-1]["end_luck_race_deal"] = state.race_luck
                     if self.stage:  # the game's four scores after the hand, by absolute seat
                         self.rows[-1]["end_scores"] = [s / self.config.base_score for s in self.scores]
                 else:
@@ -281,6 +283,8 @@ class FastGame(Game):
                 row.update(state.oracle(seat) if not features else hook(features, None)(StateView(self, state), seat))
                 if self.luck:
                     row["luck_pay"], row["luck_deal"] = state.luck
+                if self.race_luck:
+                    row["luck_race_pay"], row["luck_race_deal"] = state.race_luck
                 if self.stage:
                     from .stage import row_fields
 
@@ -388,6 +392,8 @@ class FastShadow:
         self.row["playout_scores"] = [(s + d) / game.config.base_score for s, d in zip(self.start_scores, state.delta)]
         if game.luck:
             self.row["playout_luck_pay"], self.row["playout_luck_deal"] = state.luck
+        if game.race_luck:
+            self.row["playout_luck_race_pay"], self.row["playout_luck_race_deal"] = state.race_luck
         return None
 
     def apply(self, response):
@@ -485,7 +491,7 @@ def replay(game, snap):
         if game.stable or game.luck:
             from .walls import train_hand
 
-            train_hand(state, stable=game.stable, luck_seat=game.focal if game.luck else None)
+            train_hand(state, stable=game.stable, luck_seat=game.focal if game.luck else None, race=game.race_luck)
         for index in log:
             legal = state.legal_actions()
             state.step(next(a for a in legal if action_index(a) == index), legal)

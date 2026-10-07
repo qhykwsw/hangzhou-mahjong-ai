@@ -155,6 +155,9 @@ typedef struct {
     uint8_t used[G_WALL];
     int luck_seat;
     double luck_pay, luck_deal;
+    /* and its race luck (guided.walls, cfg["luck_kind"] "race") when race_on */
+    int race_on;
+    double race_pay, race_deal;
 } g_hand;
 
 static int wall_len(const g_hand *h) { return h->stable ? h->n_left : h->hi - h->lo; }
@@ -287,13 +290,135 @@ static int g_luck_expect(const g_hand *h, int seat, int kong, double *pay, doubl
     return 1;
 }
 
+/* guided.walls.race_value: R (pay, deal) of a wall of n tiles, seats drawing in
+ * turn from `first`; racers in seat order, each with hits > 0 copies that win
+ * for it and sum, the learner's payoffs summed over them. */
+#define G_RACE_DRAWS 32 /* a seat's own draws: at most (136 - 20 + 3) / 4 */
+
+static void g_race(int n, int first, int nr, const int *seat, const int *hits, const double *sum, int learner,
+                   int learner_deals, double *pay, double *deal) {
+    int draws = n - 20, off[4], m[4];
+    double miss[4][G_RACE_DRAWS + 1];
+    for (int i = 0; i < nr; i++) {
+        off[i] = ((seat[i] - first) % 4 + 4) % 4;
+        m[i] = draws > off[i] ? (draws - off[i] + 3) / 4 : 0;
+        if (m[i] > G_RACE_DRAWS) m[i] = G_RACE_DRAWS; /* never: a wall holds 136 tiles */
+        miss[i][0] = 1.0;
+        for (int j = 0; j < m[i]; j++) {
+            int keep = n - hits[i] - j;
+            miss[i][j + 1] = miss[i][j] * ((double)(keep > 0 ? keep : 0) / (double)(n - j));
+        }
+    }
+    double total = 0.0, none = 1.0, mine = 0.0;
+    for (int i = 0; i < nr; i++) {
+        double first_p = 0.0;
+        for (int j = 0; j < m[i]; j++) {
+            int k = off[i] + 4 * j;
+            double others = 1.0;
+            for (int q = 0; q < nr; q++)
+                if (q != i) others *= miss[q][k > off[q] ? (k - off[q] + 3) / 4 : 0];
+            first_p += miss[i][j] * (double)hits[i] / (double)(n - j) * others;
+        }
+        total += first_p * (sum[i] / (double)hits[i]);
+        if (seat[i] == learner) mine = first_p;
+        none *= miss[i][m[i]];
+    }
+    *pay = total;
+    *deal = learner_deals ? mine + none : mine;
+}
+
+/* TrainingHand._race_values: before `seat` draws, v(y) per tile y of the wall
+ * (vp, vd) and their means over it; 0 when nobody can win (no race luck). */
+static int g_race_values(const g_hand *h, int seat, int kong, double *vp, double *vd, double *ep, double *ed) {
+    int w[NTILES] = {0}, n = 0;
+    for (int k = h->lo; k < h->hi; k++)
+        if (!h->stable || !h->used[k]) {
+            w[h->wall[k]]++;
+            n++;
+        }
+    int nr = 0, seats[4], hits[4], wins[4][NTILES], now[NTILES] = {0}, anything_now = 0;
+    double sums[4], pays[4][NTILES], now_pay[NTILES];
+    for (int p = 0; p < 4; p++) {
+        int c[NTILES], opened = h->n_melds[p], got = 0;
+        memcpy(c, h->c[p], sizeof(c));
+        if (shanten_raw(c, opened) > 0) continue;
+        double total = 0.0;
+        for (int y = 0; y < NTILES; y++) {
+            wins[nr][y] = 0;
+            if (!w[y]) continue;
+            c[y]++;
+            long fan = fan_value(c, y, opened, h->chain[p], h->piao[p], h->ycbk, 0), at_once = fan;
+            if (p == seat && kong) at_once = fan_value(c, y, opened, h->chain[p], h->piao[p], h->ycbk, 1);
+            c[y]--;
+            if (p == seat && at_once > 0) {
+                now[y] = 1;
+                now_pay[y] = g_luck_payoff(h, p, at_once);
+                anything_now = 1;
+            }
+            if (fan > 0) {
+                wins[nr][y] = 1;
+                pays[nr][y] = g_luck_payoff(h, p, fan);
+                got += w[y];
+                total += (double)w[y] * pays[nr][y];
+            }
+        }
+        if (got > 0) {
+            seats[nr] = p;
+            hits[nr] = got;
+            sums[nr] = total;
+            nr++;
+        }
+    }
+    if (!nr && !anything_now) return 0;
+    int learner = h->luck_seat, next = (seat + 1) % 4, deals = h->dealer == learner;
+    double missed_pay, missed_deal, pay = 0.0, deal = 0.0;
+    g_race(n - 1, next, nr, seats, hits, sums, learner, deals, &missed_pay, &missed_deal);
+    for (int y = 0; y < NTILES; y++) {
+        if (!w[y]) continue;
+        double vy_pay, vy_deal;
+        int waited = 0;
+        for (int i = 0; i < nr; i++) waited |= wins[i][y];
+        if (now[y]) {
+            vy_pay = now_pay[y];
+            vy_deal = seat == learner ? 1.0 : 0.0;
+        } else if (!waited) {
+            vy_pay = missed_pay;
+            vy_deal = missed_deal;
+        } else {
+            int ls[4], lh[4], nl = 0;
+            double lt[4];
+            for (int i = 0; i < nr; i++) {
+                if (!wins[i][y]) {
+                    ls[nl] = seats[i];
+                    lh[nl] = hits[i];
+                    lt[nl++] = sums[i];
+                } else if (hits[i] > 1) {
+                    ls[nl] = seats[i];
+                    lh[nl] = hits[i] - 1;
+                    lt[nl++] = sums[i] - pays[i][y];
+                }
+            }
+            g_race(n - 1, next, nl, ls, lh, lt, learner, deals, &vy_pay, &vy_deal);
+        }
+        vp[y] = vy_pay;
+        vd[y] = vy_deal;
+        pay += (double)w[y] * vy_pay;
+        deal += (double)w[y] * vy_deal;
+    }
+    *ep = pay / (double)n;
+    *ed = deal / (double)n;
+    return 1;
+}
+
 static void g_draw(g_hand *h, int seat, int kong, int initial) {
     if (wall_len(h) <= 20) {
         g_finish(h, -1);
         return;
     }
-    double pay = 0.0, deal = 0.0;
+    double pay = 0.0, deal = 0.0, race_pay[NTILES], race_deal[NTILES], race_mean_pay = 0.0, race_mean_deal = 0.0;
     int luck = !initial && h->luck_seat >= 0 && g_luck_expect(h, seat, kong, &pay, &deal);
+    int race = !initial && h->luck_seat >= 0 && h->race_on &&
+               g_race_values(h, seat, kong, race_pay, race_deal, &race_mean_pay, &race_mean_deal);
     h->turn = seat;
     h->drawn = g_take_wall(h, seat, kong);
     g_take(h, seat, h->drawn);
@@ -307,6 +432,10 @@ static void g_draw(g_hand *h, int seat, int kong, int initial) {
         double dealt = fan > 0 && seat == h->luck_seat ? 1.0 : 0.0;
         h->luck_pay += got - pay;
         h->luck_deal += dealt - deal;
+    }
+    if (race) {
+        h->race_pay += race_pay[h->drawn] - race_mean_pay;
+        h->race_deal += race_deal[h->drawn] - race_mean_deal;
     }
 }
 
@@ -1580,20 +1709,23 @@ static PyObject *hand_get_turn(HandObject *self, void *c) { return PyLong_FromLo
 static PyObject *hand_get_dealer(HandObject *self, void *c) { return PyLong_FromLong(self->h.dealer); }
 static PyObject *hand_get_steps(HandObject *self, void *c) { return PyLong_FromLong(self->h.steps); }
 static PyObject *hand_get_luck(HandObject *self, void *c) { return Py_BuildValue("(dd)", self->h.luck_pay, self->h.luck_deal); }
+static PyObject *hand_get_race_luck(HandObject *self, void *c) { return Py_BuildValue("(dd)", self->h.race_pay, self->h.race_deal); }
 
 static PyObject *hand_stabilize(HandObject *self, PyObject *unused) {
     g_stabilize(&self->h);
     Py_RETURN_NONE;
 }
 
-static PyObject *hand_track_luck(HandObject *self, PyObject *arg) {
-    long seat = PyLong_AsLong(arg);
-    if (seat == -1 && PyErr_Occurred()) return NULL;
+/* track_luck(seat, race=False): guided.walls.train_hand's luck_seat (and race). */
+static PyObject *hand_track_luck(HandObject *self, PyObject *args) {
+    int seat, race = 0;
+    if (!PyArg_ParseTuple(args, "i|p", &seat, &race)) return NULL;
     if (seat < 0 || seat > 3) {
         PyErr_SetString(PyExc_ValueError, "seat must be 0..3");
         return NULL;
     }
-    self->h.luck_seat = (int)seat;
+    self->h.luck_seat = seat;
+    self->h.race_on |= race;
     Py_RETURN_NONE;
 }
 
@@ -1605,6 +1737,7 @@ static PyGetSetDef hand_getset[] = {
     {"dealer", (getter)hand_get_dealer, NULL, NULL, NULL},
     {"steps", (getter)hand_get_steps, NULL, NULL, NULL},
     {"luck", (getter)hand_get_luck, NULL, NULL, NULL},
+    {"race_luck", (getter)hand_get_race_luck, NULL, NULL, NULL},
     {NULL},
 };
 
@@ -1621,7 +1754,8 @@ static PyMethodDef hand_methods[] = {
     {"oracle_into", (PyCFunction)hand_oracle_into, METH_VARARGS, "oracle into whole columns of a row store."},
     {"snapshot", (PyCFunction)hand_snapshot, METH_NOARGS, "Every field as plain values."},
     {"stabilize", (PyCFunction)hand_stabilize, METH_NOARGS, "guided.walls.stabilize: each seat draws from its own positions from here on."},
-    {"track_luck", (PyCFunction)hand_track_luck, METH_O, "Accumulate this seat's draw luck (guided.walls) from here on."},
+    {"track_luck", (PyCFunction)hand_track_luck, METH_VARARGS,
+     "track_luck(seat, race=False): accumulate this seat's draw luck (guided.walls) from here on, and its race luck."},
     {NULL},
 };
 
