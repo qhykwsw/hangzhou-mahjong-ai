@@ -135,9 +135,15 @@ class Mirror:
 
 
 def python_act(game, mirror, hand, seat):
-    """A Python rule seat's turn: its action on the mirror's Observation, played on both hands."""
+    """A Python rule seat's turn: its action on the mirror's Observation, played on both hands
+    (the platform's on the C hand when its time runs out; the mirror catches up from the log)."""
     from selfplay_core.actions import action_index
 
+    if game.timeouts:
+        index = hand.timeout()
+        if index is not None:
+            hand.step(index)
+            return
     state = mirror.sync(hand)
     legal = state.legal_actions()
     obs = state.observation(legal)
@@ -172,6 +178,10 @@ class FastGame(Game):
             self.state.stabilize()
         if self.luck:
             self.state.track_luck(self.focal, self.race_luck)
+        if self.timeouts:
+            from .opponents import hand_keys
+
+            self.state.timeouts(self.timeouts, hand_keys(self.seed, self.hand_no))
         self.start = (self.dealer, tuple(self.scores))
         self.mirror = None
 
@@ -186,7 +196,8 @@ class FastGame(Game):
                 if not spec.startswith("model:"):
                     python.add(seat)
                 continue
-            profiles.append(member[0])
+            # A jittered member (guided.opponents) decides on its own copy of the profile.
+            profiles.append(self.jitter[seat][0] if seat in self.jitter else member[0])
             fallbacks.append(member[1])
         self.python_seats = frozenset(python)
         # fp-rule-131 as the teacher labels on the C hand (_label).

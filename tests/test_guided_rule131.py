@@ -129,6 +129,22 @@ def test_131_seats_play_the_python_game_in_c(members, monkeypatch, extra):
         assert rule_seat_kinds(games[0]) == {"python_engine": 3}
 
 
+def test_131_seats_time_out_but_keep_their_profiles(members, monkeypatch):
+    """guided.opponents: a 131 seat is not jittered (its role profiles stay) but times out, alike on both engines."""
+    monkeypatch.setattr(artifacts, "build_policy", lambda bundle, cid: rule131() if cid == "r131" else members[int(cid[1:])])
+    entries = {k: None for k in ("r131", "m0", "m1")}
+    cfg = configuration(rounds=8, lookahead=True, gae_lambda=0.95) | {
+        "playout_baseline": True, "opponent_jitter": {"sd": 0.1}, "opponent_timeout": {"mean": 0.15}}
+    seats = ["model:current", "r131", "m1", "r131"]
+    games = [cls(cfg, {"entries": []}, entries, seats, seed_for(113, "rule131-opponents"), focal=0, train=True)
+             for cls in (Game, fastgame.FastGame)]
+    counts = [play(game) for game in games]
+    assert counts[0] == counts[1] > 30
+    assert games[0].scores == games[1].scores and rows_of(games[0]) == rows_of(games[1])
+    assert sorted(games[1].jitter) == [2] and games[1].seats[0][1] == games[1].seats[0][3] == 1 << 20
+    assert games[1].timeouts[0] == 0.0 and all(games[1].timeouts[s] > 0 for s in (1, 2, 3))
+
+
 def test_131_teaches_on_the_c_hand(members, monkeypatch):
     monkeypatch.setattr(artifacts, "build_policy",
                         lambda bundle, cid: rule131() if cid == "teach" else members[int(cid[1:])])

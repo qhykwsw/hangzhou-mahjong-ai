@@ -121,6 +121,12 @@ class Game:
         from .stage import start
 
         self.stage = start(cfg, seed)
+        # guided.opponents: training opponents' jittered race profiles and timeouts.
+        self.jitter, self.timeouts = {}, None
+        if train:
+            from .opponents import plan
+
+            self.jitter, self.timeouts = plan(cfg, seed, seat_specs, self.policies)
         self.searched, self.window = 0, None
         self.shadows = []
         self.unfinished = False
@@ -159,6 +165,26 @@ class Game:
             from .stage import attach
 
             attach(self.state, self.stage)
+        if self.timeouts:
+            from .opponents import arm, hand_keys
+
+            arm(self.state, self.timeouts, hand_keys(self.seed, self.hand_no))
+
+    def rule_act(self, state, seat, obs, legal):
+        """A rule seat's move: the platform's when its time runs out, a jittered member's, else its policy's."""
+        if self.timeouts:
+            from .opponents import default_action, timed_out
+
+            if timed_out(state, seat):
+                return default_action(state, legal)
+        if seat in self.jitter:
+            from .opponents import jittered_act
+
+            return jittered_act(obs, *self.jitter[seat])
+        action = self.policies[seat].act(obs)
+        if action not in legal:
+            raise ValueError("frozen opponent returned an illegal action")
+        return action
 
     def advance(self):
         from mahjong_ai.domain.types import RoundResult
@@ -225,10 +251,7 @@ class Game:
             if self.stage:
                 obs = staged(obs, self.stage, state, self.config.rounds)
             if seat in self.policies:
-                action = self.policies[seat].act(obs)
-                if action not in legal:
-                    raise ValueError("frozen opponent returned an illegal action")
-                state.step(action, legal)
+                state.step(self.rule_act(state, seat, obs, legal), legal)
                 continue
             row = encode(obs, self.cfg["lookahead"])
             row.update(
@@ -410,10 +433,7 @@ class Shadow:
             if game.stage:
                 obs = staged(obs, game.stage, state, game.config.rounds)
             if seat in game.policies:
-                action = game.policies[seat].act(obs)
-                if action not in legal:
-                    raise ValueError("frozen opponent returned an illegal action")
-                state.step(action, legal)
+                state.step(game.rule_act(state, seat, obs, legal), legal)
                 continue
             self.pending = legal
             row = encode(obs, game.cfg["lookahead"])
@@ -536,6 +556,9 @@ def worker(conn, cfg, bundle_path, panel_path, worker_index, command):
             from .fastgame import FastGame as Training
         else:
             Training = Game
+        if not is_eval and cfg.get("opponent_jitter"):
+            # Members register their race profiles through fastgame as they load (guided.opponents).
+            from . import fastgame  # noqa: F401
         completed_samples = completed_games = teacher_errors = 0
         rule_seats = {"c": 0, "callback": 0, "python_engine": 0}
         games = {}

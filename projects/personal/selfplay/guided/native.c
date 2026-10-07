@@ -158,6 +158,11 @@ typedef struct {
     /* and its race luck (guided.walls, cfg["luck_kind"] "race") when race_on */
     int race_on;
     double race_pay, race_deal;
+    /* guided.opponents' timeouts: each seat's rate (0: none), its stream's key in
+     * this hand and the decisions it has drawn for */
+    double tmo_eps[4];
+    uint64_t tmo_key[4];
+    int tmo_n[4];
 } g_hand;
 
 static int wall_len(const g_hand *h) { return h->stable ? h->n_left : h->hi - h->lo; }
@@ -890,72 +895,92 @@ static void g_r68_view(const g_hand *h, int s, r68_view *o) {
 /* A seat of fp-rule-131 (rule131.h) in place of a race profile: rule131() registers its profiles. */
 #define G_R131 (1 << 20)
 
-/* py_race_act for the seat to move: the index of its choice among the legal actions.
- * G_R131 plays fp-rule-131 on the race profile of its role in this hand. */
-static int g_member_act(const g_hand *h, const g_action *legal, int n_legal, int member,
-                        PyObject *fallback, int *choice) {
-    int profile = member;
-    if (member == G_R131) {
-        if (!r131.ready) {
-            PyErr_SetString(PyExc_RuntimeError, "fp-rule-131's profiles are not registered");
-            return -1;
-        }
-        /* SAVED_BY_ROLE[(dealer, min(3, max(0, rounds_total - round_no)))] */
-        int left = h->rounds_total - h->hand_no;
-        profile = r131.role[h->dealer == h->turn][left < 0 ? 0 : left > 3 ? 3 : left];
+/* ---------- guided.opponents: jittered race profiles ---------- */
+
+/* A training game's copy of a registered profile with its floats changed
+ * (jitter_profile), decided on as that profile is, under an id of its own
+ * above the registered ones: the race memo keys a value by its profile's id
+ * (race_key_of keeps 13 bits of it) and the call option's memo binds one, so
+ * no copy reads a value memoised for another. Ids go round a ring of
+ * G_JIT_IDS; when it wraps an id names another copy, and both memos are
+ * emptied. A game's ids live while it plays: the ring holds thousands of
+ * games' seats, a worker plays a few dozen tables at once. */
+#define G_JIT_IDS 8000
+static race_profile g_jit[G_JIT_IDS];
+static int g_jit_from[G_JIT_IDS]; /* the registered profile it copies */
+static uint8_t g_jit_live[G_JIT_IDS];
+static int g_jit_next;
+
+/* The profile of a registered or jittered id, and the registered one to bind; NULL for an unknown id. */
+static const race_profile *g_profile(int id, int *registered) {
+    if (id >= 0 && id < race_profile_count) {
+        *registered = id;
+        return &race_profiles[id];
     }
-    if (profile < 0 || profile >= race_profile_count) {
+    int j = id - RACE_PROFILES;
+    if (j >= 0 && j < G_JIT_IDS && g_jit_live[j]) {
+        *registered = g_jit_from[j];
+        return &g_jit[j];
+    }
+    return NULL;
+}
+
+/* jitter_profile(profile, (q, saved, one_step, far_step, q_early, q_late, hunt, draw_risk, tie)):
+ * a copy of a registered profile with these floats (its other fields kept); its id. */
+static PyObject *py_jitter_profile(PyObject *self, PyObject *args) {
+    int base;
+    double f[9];
+    if (!PyArg_ParseTuple(args, "i(ddddddddd)", &base, &f[0], &f[1], &f[2], &f[3], &f[4], &f[5], &f[6], &f[7], &f[8]))
+        return NULL;
+    if (base < 0 || base >= race_profile_count) {
         PyErr_SetString(PyExc_ValueError, "unknown race profile");
-        return -1;
+        return NULL;
     }
-    if (n_legal > 64 || n_legal < 1) {
-        PyErr_SetString(PyExc_ValueError, "legal actions out of range");
-        return -1;
+    if (g_jit_next == G_JIT_IDS) {
+        g_jit_next = 0;
+        memset(race_cache, 0, sizeof(race_cache));
+        r68_memo.profile = -1; /* binds afresh, emptying its slots */
     }
-    race_act_ctx *A = PyMem_Calloc(1, sizeof(race_act_ctx));
-    if (!A) { PyErr_NoMemory(); return -1; }
-    int rc = -1, avail[NTILES];
-    PyObject *available = NULL;
-    const race_profile *p = &race_profiles[profile];
-    int s = h->turn;
-    A->seat = s;
-    memcpy(A->c, h->c[s], sizeof(A->c));
-    A->size = h->n_hand[s];
-    A->opened = h->n_melds[s];
-    A->obs = g_stub[h->discarder >= 0 ? h->discarder : 0][h->catch_owner + 1];
-    g_available(h, s, avail);
-    if (!(available = g_int_tuple(avail, NTILES))) goto done;
-    A->chain = h->chain[s];
-    A->piao = h->piao[s];
-    A->hu_fan = g_fan(h);
-    {
-        int left = -floor_div(-(wall_len(h) - p->last_wall), 4);
-        A->draws = left > 1 ? left : 1;
+    int j = g_jit_next++;
+    race_profile p = race_profiles[base];
+    p.q = f[0];
+    p.saved = f[1];
+    p.one_step = f[2];
+    p.far_step = f[3];
+    p.q_early = f[4];
+    p.q_late = f[5];
+    p.hunt = f[6];
+    p.draw_risk = f[7];
+    p.tie = f[8];
+    g_jit[j] = p;
+    g_jit_from[j] = base;
+    g_jit_live[j] = 1;
+    return PyLong_FromLong(RACE_PROFILES + j);
+}
+
+/* race_floats(id): the jittered floats of a registered or jittered profile, in jitter_profile's order. */
+static PyObject *py_race_floats(PyObject *self, PyObject *arg) {
+    long id = PyLong_AsLong(arg);
+    if (id == -1 && PyErr_Occurred()) return NULL;
+    int registered;
+    const race_profile *p = g_profile((int)id, &registered);
+    if (!p) {
+        PyErr_SetString(PyExc_ValueError, "unknown race profile");
+        return NULL;
     }
-    if (race_bind(&A->x, available, profile, fallback) < 0) goto done;
-    A->n_legal = n_legal;
-    for (int i = 0; i < n_legal; i++) g_race_action(&legal[i], &A->legal[i]);
-    A->piao_known = 1;
-    A->piao_ok = g_act_piao(h, s, A->c, A->size, A->opened);
-    if (member == G_R131) {
-        r131_view w;
-        g_r68_view(h, s, &w.o);
-        w.response = h->phase != PH_DRAW;
-        rc = r131_act(A, &w, choice);
-        goto done;
-    }
-    if (p->style >= 10) {
-        r68_view o;
-        g_r68_view(h, s, &o);
-        rc = r68_act(A, &o, choice);
-        goto done;
-    }
+    return Py_BuildValue("(ddddddddd)", p->q, p->saved, p->one_step, p->far_step, p->q_early, p->q_late, p->hunt,
+                         p->draw_risk, p->tie);
+}
+
+/* A race member's choice once its context is bound (A->x on the profile p):
+ * Race.act's styles 0-5 (py_race_act after its third-pool branch). */
+static int g_race_choose(race_act_ctx *A, const race_profile *p, int *choice) {
     int has_hu = 0;
     for (int i = 0; i < A->n_legal; i++) has_hu |= A->legal[i].kind == ACT_HU;
     if (has_hu) {
         int d = act_double(A);
-        if (d == -2) goto done;
-        if (d >= 0) { *choice = d; rc = 0; goto done; }
+        if (d == -2) return -1;
+        if (d >= 0) { *choice = d; return 0; }
     }
     int allowed[64];
     for (int i = 0; i < A->n_legal; i++) allowed[i] = 1;
@@ -984,7 +1009,7 @@ static int g_member_act(const g_hand *h, const g_action *legal, int n_legal, int
                 x[a->tile] -= a->kong;
                 take = sdk_shanten(x, a->added ? A->opened : A->opened + 1) <= 0;
             }
-            if (take) { *choice = i; rc = 0; goto done; }
+            if (take) { *choice = i; return 0; }
         }
     } else if (style == 3 || style == 4) {
         int kind = style == 3 ? ACT_PENG : ACT_CHI;
@@ -994,19 +1019,19 @@ static int g_member_act(const g_hand *h, const g_action *legal, int n_legal, int
                 race_action *a = &A->legal[i];
                 if (a->kind != kind) continue;
                 int after;
-                if (act_after_call(A, a, &after, NULL) < 0) goto done;
+                if (act_after_call(A, a, &after, NULL) < 0) return -1;
                 int take = after < now;
                 if (!take && after == now) {
                     long wide, own;
                     int ignore;
-                    if (act_after_call(A, a, &ignore, &wide) < 0) goto done;
+                    if (act_after_call(A, a, &ignore, &wide) < 0) return -1;
                     ctx_at(A, A->opened);
                     analysis_row row;
-                    if (race_analysis(&A->x, A->c, 0, 0, &row) < 0) goto done;
+                    if (race_analysis(&A->x, A->c, 0, 0, &row) < 0) return -1;
                     own = row.ukeire;
                     take = wide > own;
                 }
-                if (take) { *choice = i; rc = 0; goto done; }
+                if (take) { *choice = i; return 0; }
             }
         }
     } else if (style == 5) {
@@ -1014,29 +1039,226 @@ static int g_member_act(const g_hand *h, const g_action *legal, int n_legal, int
             for (int i = 0; i < A->n_legal; i++)
                 if (A->legal[i].kind == ACT_CHI || A->legal[i].kind == ACT_PENG) allowed[i] = 0;
     }
-    {
-        int best = -1;
-        double top = 0.0;
-        for (int i = 0; i < A->n_legal; i++) {
-            if (!allowed[i]) continue;
-            double value;
-            if (act_value(A, &A->legal[i], &value) < 0) goto done;
-            if (best < 0 || value > top) {
-                best = i;
-                top = value;
-            }
+    int best = -1;
+    double top = 0.0;
+    for (int i = 0; i < A->n_legal; i++) {
+        if (!allowed[i]) continue;
+        double value;
+        if (act_value(A, &A->legal[i], &value) < 0) return -1;
+        if (best < 0 || value > top) {
+            best = i;
+            top = value;
         }
-        if (best < 0) {
-            PyErr_SetString(PyExc_ValueError, "max() arg is an empty sequence");
-            goto done;
-        }
-        *choice = best;
-        rc = 0;
     }
+    if (best < 0) {
+        PyErr_SetString(PyExc_ValueError, "max() arg is an empty sequence");
+        return -1;
+    }
+    *choice = best;
+    return 0;
+}
+
+/* py_race_act for the seat to move: the index of its choice among the legal actions.
+ * G_R131 plays fp-rule-131 on the race profile of its role in this hand; a
+ * jittered id (jitter_profile) plays its copy. */
+static int g_member_act(const g_hand *h, const g_action *legal, int n_legal, int member,
+                        PyObject *fallback, int *choice) {
+    int profile = member;
+    if (member == G_R131) {
+        if (!r131.ready) {
+            PyErr_SetString(PyExc_RuntimeError, "fp-rule-131's profiles are not registered");
+            return -1;
+        }
+        /* SAVED_BY_ROLE[(dealer, min(3, max(0, rounds_total - round_no)))] */
+        int left = h->rounds_total - h->hand_no;
+        profile = r131.role[h->dealer == h->turn][left < 0 ? 0 : left > 3 ? 3 : left];
+    }
+    int registered;
+    const race_profile *p = g_profile(profile, &registered);
+    if (!p) {
+        PyErr_SetString(PyExc_ValueError, "unknown race profile");
+        return -1;
+    }
+    if (n_legal > 64 || n_legal < 1) {
+        PyErr_SetString(PyExc_ValueError, "legal actions out of range");
+        return -1;
+    }
+    race_act_ctx *A = PyMem_Calloc(1, sizeof(race_act_ctx));
+    if (!A) { PyErr_NoMemory(); return -1; }
+    int rc = -1, avail[NTILES];
+    PyObject *available = NULL;
+    int s = h->turn;
+    A->seat = s;
+    memcpy(A->c, h->c[s], sizeof(A->c));
+    A->size = h->n_hand[s];
+    A->opened = h->n_melds[s];
+    A->obs = g_stub[h->discarder >= 0 ? h->discarder : 0][h->catch_owner + 1];
+    g_available(h, s, avail);
+    if (!(available = g_int_tuple(avail, NTILES))) goto done;
+    A->chain = h->chain[s];
+    A->piao = h->piao[s];
+    A->hu_fan = g_fan(h);
+    {
+        int left = -floor_div(-(wall_len(h) - p->last_wall), 4);
+        A->draws = left > 1 ? left : 1;
+    }
+    if (race_bind(&A->x, available, registered, fallback) < 0) goto done;
+    A->x.p = p;
+    A->x.profile = profile;
+    A->n_legal = n_legal;
+    for (int i = 0; i < n_legal; i++) g_race_action(&legal[i], &A->legal[i]);
+    A->piao_known = 1;
+    A->piao_ok = g_act_piao(h, s, A->c, A->size, A->opened);
+    if (member == G_R131) {
+        r131_view w;
+        g_r68_view(h, s, &w.o);
+        w.response = h->phase != PH_DRAW;
+        rc = r131_act(A, &w, choice);
+        goto done;
+    }
+    if (p->style >= 10) {
+        r68_view o;
+        g_r68_view(h, s, &o);
+        rc = r68_act(A, &o, choice);
+        goto done;
+    }
+    rc = g_race_choose(A, p, choice);
 done:
     Py_XDECREF(available);
     PyMem_Free(A);
     return rc;
+}
+
+/* race_act(obs, profile, fallback): _fast.race_act on an Observation for a
+ * registered or jittered profile (the Python engine's jittered seats,
+ * guided.opponents), the same reading of the Observation and the same choice. */
+static PyObject *py_obs_race_act(PyObject *self, PyObject *args) {
+    PyObject *obs, *fallback;
+    int profile;
+    if (!PyArg_ParseTuple(args, "OiO", &obs, &profile, &fallback)) return NULL;
+    int registered;
+    const race_profile *p = g_profile(profile, &registered);
+    if (!p) {
+        PyErr_SetString(PyExc_ValueError, "unknown race profile");
+        return NULL;
+    }
+    race_act_ctx *A = PyMem_Calloc(1, sizeof(race_act_ctx));
+    if (!A) return PyErr_NoMemory();
+    PyObject *result = NULL, *hand = NULL, *discards = NULL, *melds = NULL, *stage = NULL, *legal = NULL;
+    PyObject *available = NULL, *seat_melds = NULL;
+    A->obs = obs;
+    long v;
+    int choice;
+    if (!(stage = PyObject_GetAttrString(obs, "stage"))) goto done;
+    if (attr_int(stage, "seat", &v) < 0) goto done;
+    A->seat = (int)v;
+    if (!(hand = PyObject_GetAttrString(obs, "hand"))) goto done;
+    if (counts_of(hand, A->c, &A->size) < 0) goto done;
+    if (!(melds = PyObject_GetAttrString(obs, "melds"))) goto done;
+    if (!(seat_melds = PySequence_GetItem(melds, A->seat))) goto done;
+    Py_ssize_t opened = PySequence_Size(seat_melds);
+    if (opened < 0) goto done;
+    A->opened = (int)opened;
+    if (!(discards = PyObject_GetAttrString(obs, "discards"))) goto done;
+    {
+        PyObject *call = PyTuple_Pack(3, hand, discards, melds);
+        if (!call) goto done;
+        available = py_remaining_tiles(NULL, call);
+        Py_DECREF(call);
+        if (!available) goto done;
+    }
+    if (attr_int(obs, "chain_count", &v) < 0) goto done;
+    A->chain = (int)v;
+    if (attr_int(obs, "piao_count", &v) < 0) goto done;
+    A->piao = (int)v;
+    if (attr_int(obs, "hu_fan", &v) < 0) goto done;
+    A->hu_fan = (int)v;
+    if (attr_int(obs, "wall_remaining", &v) < 0) goto done;
+    {
+        int left = -floor_div(-((int)v - p->last_wall), 4);
+        A->draws = left > 1 ? left : 1;
+    }
+    if (race_bind(&A->x, available, registered, fallback) < 0) goto done;
+    A->x.p = p;
+    A->x.profile = profile;
+    if (!(legal = PyObject_GetAttrString(obs, "legal_actions"))) goto done;
+    {
+        PyObject *seq = PySequence_Fast(legal, "expected legal actions");
+        if (!seq) goto done;
+        Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
+        if (n > 64 || n < 1) {
+            Py_DECREF(seq);
+            PyErr_SetString(PyExc_ValueError, "legal actions out of range");
+            goto done;
+        }
+        A->n_legal = (int)n;
+        for (Py_ssize_t i = 0; i < n; i++) {
+            if (parse_action(PySequence_Fast_GET_ITEM(seq, i), &A->legal[i]) < 0) {
+                Py_DECREF(seq);
+                goto done;
+            }
+        }
+        Py_DECREF(seq);
+    }
+    if (p->style >= 10) {
+        int hu = 0, pass = 0;
+        for (int i = 0; i < A->n_legal; i++) {
+            hu |= A->legal[i].kind == ACT_HU;
+            pass |= A->legal[i].kind == ACT_PASS;
+        }
+        r68_view o;
+        if (r68_view_of(obs, A->seat, hu, pass, &o) < 0) goto done;
+        if (r68_act(A, &o, &choice) < 0) goto done;
+    } else if (g_race_choose(A, p, &choice) < 0) {
+        goto done;
+    }
+    result = PyLong_FromLong(choice);
+done:
+    Py_XDECREF(stage);
+    Py_XDECREF(hand);
+    Py_XDECREF(melds);
+    Py_XDECREF(seat_melds);
+    Py_XDECREF(discards);
+    Py_XDECREF(legal);
+    Py_XDECREF(available);
+    PyMem_Free(A);
+    return result;
+}
+
+/* ---------- guided.opponents: timeouts ---------- */
+
+/* The k-th uniform of a seat's stream (splitmix64 of key + (k + 1) * golden; 53 bits). */
+static double g_uniform(uint64_t key, uint64_t k) {
+    uint64_t z = key + (k + 1) * 0x9E3779B97F4A7C15ULL;
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    z ^= z >> 31;
+    return (double)(z >> 11) * (1.0 / 9007199254740992.0);
+}
+
+/* Whether the seat's decision now times out (each decision of a seat with a rate draws once). */
+static int g_timed_out(g_hand *h, int seat) {
+    if (!(h->tmo_eps[seat] > 0.0)) return 0;
+    int k = h->tmo_n[seat]++;
+    return g_uniform(h->tmo_key[seat], (uint64_t)k) < h->tmo_eps[seat];
+}
+
+/* HandState.timeout_action, the platform's move for a player out of time: pass a
+ * call; win when it can; else let go the last tile of the hand in its order (the
+ * tile just drawn). Its index among the legal actions, -1 when there is none. */
+static int g_timeout_choice(const g_hand *h, const g_action *legal, int n) {
+    if (h->phase != PH_DRAW) {
+        for (int i = 0; i < n; i++)
+            if (legal[i].kind == A_PASS) return i;
+        return -1;
+    }
+    for (int i = 0; i < n; i++)
+        if (legal[i].kind == A_HU) return i;
+    int s = h->turn;
+    for (int k = h->n_hand[s] - 1; k >= 0; k--)
+        for (int i = 0; i < n; i++)
+            if (legal[i].kind == A_DISCARD && legal[i].tile == h->hand[s][k]) return i;
+    return -1;
 }
 
 /* ---------- the learner's encoding ---------- */
@@ -1400,8 +1622,9 @@ static PyObject *hand_step(HandObject *self, PyObject *arg) {
     Py_RETURN_NONE;
 }
 
-/* run(profiles, fallbacks): play every race member's turn; the seat of the
- * next other decision, or None once the hand is settled. */
+/* run(profiles, fallbacks): play every race member's turn (the platform's move
+ * instead when its time runs out, guided.opponents); the seat of the next
+ * other decision, or None once the hand is settled. */
 static PyObject *hand_run(HandObject *self, PyObject *args) {
     PyObject *profiles_obj, *fallbacks;
     if (!PyArg_ParseTuple(args, "OO", &profiles_obj, &fallbacks)) return NULL;
@@ -1430,12 +1653,19 @@ static PyObject *hand_run(HandObject *self, PyObject *args) {
         }
         int seat = h->turn;
         if (profiles[seat] < 0) return PyLong_FromLong(seat);
-        PyObject *fallback = PySequence_GetItem(fallbacks, seat);
-        if (!fallback) return NULL;
         int choice;
-        int rc = g_member_act(h, legal, n, profiles[seat], fallback, &choice);
-        Py_DECREF(fallback);
-        if (rc < 0) return NULL;
+        if (g_timed_out(h, seat)) {
+            if ((choice = g_timeout_choice(h, legal, n)) < 0) {
+                PyErr_SetString(PyExc_RuntimeError, "no timeout action");
+                return NULL;
+            }
+        } else {
+            PyObject *fallback = PySequence_GetItem(fallbacks, seat);
+            if (!fallback) return NULL;
+            int rc = g_member_act(h, legal, n, profiles[seat], fallback, &choice);
+            Py_DECREF(fallback);
+            if (rc < 0) return NULL;
+        }
         if (g_step(h, &legal[choice]) < 0) return NULL;
     }
     Py_RETURN_NONE;
@@ -1711,6 +1941,35 @@ static PyObject *hand_get_steps(HandObject *self, void *c) { return PyLong_FromL
 static PyObject *hand_get_luck(HandObject *self, void *c) { return Py_BuildValue("(dd)", self->h.luck_pay, self->h.luck_deal); }
 static PyObject *hand_get_race_luck(HandObject *self, void *c) { return Py_BuildValue("(dd)", self->h.race_pay, self->h.race_deal); }
 
+/* timeouts(rates, keys): guided.opponents' four timeout rates and this hand's stream keys; counts restart. */
+static PyObject *hand_timeouts(HandObject *self, PyObject *args) {
+    double eps[4];
+    unsigned long long key[4];
+    if (!PyArg_ParseTuple(args, "(dddd)(KKKK)", &eps[0], &eps[1], &eps[2], &eps[3], &key[0], &key[1], &key[2], &key[3]))
+        return NULL;
+    for (int s = 0; s < 4; s++) {
+        self->h.tmo_eps[s] = eps[s];
+        self->h.tmo_key[s] = (uint64_t)key[s];
+        self->h.tmo_n[s] = 0;
+    }
+    Py_RETURN_NONE;
+}
+
+/* timeout(): for the seat to move, the platform's action index when its time runs out on this
+ * decision (drawing the seat's next uniform), else None (a rule seat deciding in Python). */
+static PyObject *hand_timeout(HandObject *self, PyObject *unused) {
+    g_hand *h = &self->h;
+    g_action legal[64];
+    int n = g_legal(h, legal);
+    if (n < 1 || !g_timed_out(h, h->turn)) Py_RETURN_NONE;
+    int choice = g_timeout_choice(h, legal, n);
+    if (choice < 0) {
+        PyErr_SetString(PyExc_RuntimeError, "no timeout action");
+        return NULL;
+    }
+    return PyLong_FromLong(g_index(&legal[choice]));
+}
+
 static PyObject *hand_stabilize(HandObject *self, PyObject *unused) {
     g_stabilize(&self->h);
     Py_RETURN_NONE;
@@ -1754,6 +2013,8 @@ static PyMethodDef hand_methods[] = {
     {"oracle_into", (PyCFunction)hand_oracle_into, METH_VARARGS, "oracle into whole columns of a row store."},
     {"snapshot", (PyCFunction)hand_snapshot, METH_NOARGS, "Every field as plain values."},
     {"stabilize", (PyCFunction)hand_stabilize, METH_NOARGS, "guided.walls.stabilize: each seat draws from its own positions from here on."},
+    {"timeouts", (PyCFunction)hand_timeouts, METH_VARARGS, "timeouts(rates, keys): guided.opponents' timeout rates and stream keys."},
+    {"timeout", (PyCFunction)hand_timeout, METH_NOARGS, "The platform's action index if the seat to move times out now, else None."},
     {"track_luck", (PyCFunction)hand_track_luck, METH_VARARGS,
      "track_luck(seat, race=False): accumulate this seat's draw luck (guided.walls) from here on, and its race luck."},
     {NULL},
@@ -2235,6 +2496,9 @@ static PyObject *py_v3_events(PyObject *self, PyObject *args) {
 static PyMethodDef native_methods[] = {
     {"race_profile", py_game_profile, METH_VARARGS, "Register a race member's profile here (the runtime's race_profile arguments)."},
     {"rule131", py_rule131, METH_VARARGS, "Register fp-rule-131's profiles (plain, roles[dealer][left]); its member code."},
+    {"jitter_profile", py_jitter_profile, METH_VARARGS, "A jittered copy of a registered race profile (guided.opponents); its id."},
+    {"race_floats", py_race_floats, METH_O, "The floats of a registered or jittered race profile, in jitter_profile's order."},
+    {"race_act", py_obs_race_act, METH_VARARGS, "_fast.race_act on an Observation, for a registered or jittered profile."},
     {"v3_shape", py_v3_shape, METH_VARARGS, "Encoding v3's per-discard shape paths, baotou and lookahead planes and the reference lookahead."},
     {"v3_events", py_v3_events, METH_VARARGS, "Encoding v3's event tails, decayed rivers and call timing."},
     {NULL, NULL, 0, NULL},
