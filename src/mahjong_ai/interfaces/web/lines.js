@@ -11,7 +11,7 @@
     rl: { name: "RL 线", color: "var(--blue)" },
     reference: { name: "参照", color: "var(--red)" },
   };
-  const STATUS = { keep: "成功", discard: "失败", unconfirmed: "开发集高但未确认", crash: "崩溃", invalid: "无效", cancelled: "已取消", reference: "参照" };
+  const STATUS = { keep: "成功", discard: "失败", unconfirmed: "高于最好版本但未确认", crash: "崩溃", invalid: "无效", cancelled: "已取消", reference: "参照" };
   const time = (s) => new Date(s * 1000).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
   const signed = (v, d = 2) => (v == null ? "—" : (v >= 0 ? "+" : "") + v.toFixed(d));
 
@@ -28,13 +28,15 @@
   }
 
   // The attempts that raised the line's best, in the order the versions were made:
-  // a kept attempt at least as high as every kept one before it (equal for an
-  // equivalent rewrite). The same rule applies to versions replayed on a new pool.
+  // every kept attempt (it was judged better than the best of its time, by the
+  // confirmation set or, for a close development score, the paired hand-by-hand
+  // comparison, so its development score may sit a little below). A version
+  // replayed on a new pool raises it only when at least as high as every kept one before it.
   function raised(rows, at) {
     const steps = new Set();
     let best = null;
     for (const a of rows.slice().sort((a, b) => at.get(a) - at.get(b))) {
-      if (a.status === "keep" && a.score != null && (best == null || a.score >= best)) {
+      if (a.status === "keep" && a.score != null && (best == null || !a.rebased || a.score >= best)) {
         steps.add(a);
         best = a.score;
       }
@@ -119,7 +121,9 @@
         const note = a.rebased ? `\n换池重算（旧池 ${signed(a.rebased.old_score)}）` + (l.steps.has(a) ? "" : "：没有高过此前最好版本")
           + (a.shown_only ? "\n仅供展示，未记入迭代记录" : "") : "";
         const redone = a.refreshed ? `\n当前条件下重测开发集（原 ${signed(a.refreshed.old_score)}）` : "";
-        const tip = `${a.id} ${STATUS[a.status] || a.status} ${signed(a.score)} ± ${a.se?.toFixed(2)}（${a.games} 场）${note}${redone}\n${a.description}`;
+        const judged = (a.pdl ? `\n逐手对比 ${signed(a.pdl.diff)} ± ${a.pdl.se.toFixed(2)}（下界 ${signed(a.pdl.lower90)}，对 ${a.pdl.against}）` : "")
+          + (a.rejudged ? `\n按 10-07 规则重判（原${STATUS[a.rejudged.old_status] || a.rejudged.old_status}）` : "");
+        const tip = `${a.id} ${STATUS[a.status] || a.status} ${signed(a.score)} ± ${a.se?.toFixed(2)}（${a.games} 场）${note}${redone}${judged}\n${a.description}`;
         const cls = l.steps.has(a) ? `fill="${meta.color}"` : a.status === "unconfirmed" ? 'fill="none" stroke="#c9822b" stroke-width="2"' : 'fill="#b8c4c9"';
         const x = X(at.get(a));
         if (a.score < y0) {
@@ -260,7 +264,7 @@
       `<span><i style="background:var(--teal)"></i>规则线（${counts("rule")}）</span>`,
       `<span><i style="background:var(--blue)"></i>RL 线（${counts("rl")}）</span>`,
       '<span><i style="background:#b8c4c9"></i>失败或未提高</span>',
-      '<span><i class="hollow"></i>开发集高但未确认</span>',
+      '<span><i class="hollow"></i>高于最好版本但未确认</span>',
 '<span><i class="dash"></i>参照（对手池成员）</span>',
     ].join("");
   }
@@ -273,16 +277,17 @@
       .slice()
       .sort((a, b) => when(b) - when(a))
       .map((a) => {
-        const c = a.confirm;
+        const c = a.confirm, p = a.pdl;
         const status = (a.rebased ? `换池重算（旧池 ${signed(a.rebased.old_score)}${a.shown_only ? "，仅展示" : ""}）` : STATUS[a.status] || a.status)
-          + (a.refreshed ? `，当前条件重测（原 ${signed(a.refreshed.old_score)}）` : "");
+          + (a.refreshed ? `，当前条件重测（原 ${signed(a.refreshed.old_score)}）` : "")
+          + (a.rejudged ? `，按 10-07 规则重判（原${STATUS[a.rejudged.old_status] || a.rejudged.old_status}）` : "");
         return `<tr class="${steps.has(a) ? "kept" : ""}">
           <td>${esc(a.id)}<div class="muted">${esc(LINES[a.line]?.name || a.line)}</div></td>
           <td>${esc(status)}</td>
           <td>${esc(a.description)}</td>
           <td>${signed(a.score)} ± ${a.se == null ? "—" : a.se.toFixed(2)}</td>
           <td>${signed(a.diff)}</td>
-          <td>${c ? `${signed(c.diff)} ± ${c.se.toFixed(2)}（下界 ${signed(c.lower90)}）` : "—"}</td>
+          <td>${c ? `${signed(c.diff)} ± ${c.se.toFixed(2)}（下界 ${signed(c.lower90)}）` : p ? `逐手 ${signed(p.diff)} ± ${p.se.toFixed(2)}（下界 ${signed(p.lower90)}）` : "—"}</td>
           <td>${a.games}</td>
           <td>${esc(time(when(a)))}</td>
         </tr>`;

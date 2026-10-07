@@ -283,7 +283,7 @@ def application(project, tailscale_url=None):
             for r in chosen.values():
                 row = {k: r.get(k) for k in (
                     "id", "line", "status", "description", "started_at", "finished_at",
-                    "games", "score", "se", "best_before", "diff", "confirm", "stats",
+                    "games", "score", "se", "best_before", "diff", "confirm", "pdl", "stats",
                     "design_seconds")}
                 row["pool"] = pool_id
                 if r["line"] == "reference":
@@ -295,6 +295,8 @@ def application(project, tailscale_url=None):
                     row["rebased"] = {"old_score": r["rebased"].get("old_score")}
                 if r.get("refreshed"):
                     row["refreshed"] = {"old_score": r["refreshed"].get("old_score")}
+                if r.get("rejudged"):
+                    row["rejudged"] = {k: r["rejudged"].get(k) for k in ("old_status", "old_games", "old_score")}
                 rows.append(row)
             pools.append({"id": pool_id, "first_at": min(r["finished_at"] for r in records.values()),
                           "current": pool_id == pool["id"], "members": names})
