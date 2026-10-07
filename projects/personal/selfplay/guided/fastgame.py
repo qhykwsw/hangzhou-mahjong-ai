@@ -18,6 +18,7 @@ import hashlib
 import inspect
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
 from mahjong_ai import _fast
 
@@ -134,8 +135,8 @@ class Mirror:
         return state
 
 
-def python_act(game, mirror, hand, seat):
-    """A Python rule seat's turn: its action on the mirror's Observation, played on both hands."""
+def python_act(game, mirror, hand, seat, policy=None):
+    """A Python rule seat's turn: its action (the game's policy of the seat, or ``policy``) on the mirror's Observation, played on both hands."""
     from selfplay_core.actions import action_index
 
     state = mirror.sync(hand)
@@ -143,7 +144,7 @@ def python_act(game, mirror, hand, seat):
     obs = state.observation(legal)
     if game.stage:
         obs = staged(obs, game.stage, state, game.config.rounds)
-    action = game.policies[seat].act(obs)
+    action = (game.policies[seat] if policy is None else policy).act(obs)
     if action not in legal:
         raise ValueError("frozen opponent returned an illegal action")
     state.step(action, legal)
@@ -329,6 +330,7 @@ class FastGame(Game):
             return super().apply(response)
         row, legal, seat = self.pending
         index, logprob, value, *more = response
+        candidates = more.pop() if more and isinstance(more[-1], tuple) else None
         greedy = more[:1]
         if index not in legal:
             raise ValueError("neural policy returned an illegal action")
@@ -345,9 +347,40 @@ class FastGame(Game):
                     if self.vine:
                         move, index = index, move
                     self.shadows.append(FastShadow(self, self.state.fork(), move, row))
+            if candidates is not None:
+                self._branched(row, legal, candidates, greedy)
             self.rows.append(row)
         self.pending = None
         self.state.step(index)
+
+    def _branch_copy(self, world, index, legal, result):
+        """A copy of ``world`` playing the candidate ``index`` (FastBranch)."""
+        if self.seats is None:
+            return super()._branch_copy(world, index, legal, result)
+        if index not in legal:
+            raise ValueError("a branch candidate is not a legal action")
+        if self._branch_seats is None:
+            self._branch_seats = self._branch_plan()
+        self.shadows.append(FastBranch(self, world.fork(), index, result, self._branch_seats))
+
+    def _branch_plan(self):
+        """guided.branches.seat_plan for the C hand: run's profiles, the seats deciding in Python, the model slots."""
+        from .branches import seat_plan
+
+        profiles, fallbacks, python, policies, slots = [], [], set(), {}, {}
+        for seat, (kind, who) in enumerate(seat_plan(self)):
+            member = None
+            if kind == "model":
+                slots[seat] = who
+            else:
+                policies[seat] = who
+                member = race_member(who) or rule131_member(who)
+                if member is None:
+                    python.add(seat)
+            profiles.append(-1 if member is None else member[0])
+            fallbacks.append(None if member is None else member[1])
+        return SimpleNamespace(profiles=tuple(profiles), fallbacks=tuple(fallbacks), python=frozenset(python),
+                               policies=policies, slots=slots)
 
 
 class FastShadow:
@@ -395,6 +428,52 @@ class FastShadow:
         if response[0] not in legal:
             raise ValueError("neural policy returned an illegal action")
         self.state.step(response[0])
+
+
+class FastBranch(FastShadow):
+    """guided.branches.Branch (one candidate's copy of the hand) on native.Hand.
+
+    ``plan`` is FastGame._branch_plan's: the profiles run plays in C, the
+    seats deciding in Python (on a Mirror of the copy, built on first use),
+    and the model slots the parent answers.
+    """
+
+    def __init__(self, game, state, move, result, plan):
+        self.plan = plan
+        super().__init__(game, state, move, result)
+
+    def advance(self):
+        game, state, plan = self.game, self.state, self.plan
+        while True:
+            seat = state.run(plan.profiles, plan.fallbacks)
+            if seat is None:
+                break
+            if seat in plan.python:
+                if self.mirror is None:
+                    self.mirror = Mirror(game, self.hand_no, self.dealer, self.start_scores, self.history, self.views)
+                python_act(game, self.mirror, state, seat, plan.policies[seat])
+                continue
+            self.pending = state.legal()
+            row = self.encode(state, seat)
+            row["teacher"] = -1
+            return {"row": row, "slot": plan.slots[seat], "train": False, "bc": False}
+        from .branches import finished
+
+        self.done, self.state, self.mirror = True, None, None
+        finished(self.row, game, self.start_scores, state.delta, state.winner, self.dealer)
+        if game.luck:
+            self.row["playout_luck_pay"], self.row["playout_luck_deal"] = state.luck
+        return None
+
+    def encode(self, state, seat):
+        """The seat's row in this copy, as FastShadow encodes it."""
+        game = self.game
+        row = game.encode(state, seat)
+        if game.stage:
+            from .stage import rewrite
+
+            rewrite(row, game.stage, self.start_scores, self.hand_no, game.config.rounds, seat)
+        return row
 
 
 def observation(snap, seat, config):

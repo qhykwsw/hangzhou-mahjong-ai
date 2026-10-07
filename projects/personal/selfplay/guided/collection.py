@@ -23,13 +23,33 @@ def request_groups(pending, history_band=0):
     return [(slot, group) for (slot, _), group in sorted(groups.items())]
 
 
+def fixed_width(hook, width):
+    """hooks["branches"] as K = ``width`` columns: fewer are padded with -1, more are an error."""
+    import torch
+
+    def branches(logits, mask, actions):
+        out = torch.as_tensor(hook(logits, mask, actions), device=logits.device).long()
+        if out.dim() == 1:
+            out = out[:, None]
+        if out.dim() != 2 or out.shape[0] != logits.shape[0] or out.shape[1] > width:
+            raise ValueError(f"hooks['branches'] answers (rows, at most {width}) candidates, not {tuple(out.shape)}")
+        if out.shape[1] < width:
+            out = torch.cat((out, out.new_full((out.shape[0], width - out.shape[1]), -1)), 1)
+        return out
+
+    return branches
+
+
 def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None, *, inference_session=None):
     """Play games in CPU workers; the parent runs every network.
 
     Optional training-recipe hooks apply only to the learning seat during
     collection: hooks["sample"](logits, mask) -> (actions, behaviour logprobs)
     replaces multinomial sampling, and hooks["values"](rows) -> values replaces
-    the built-in privileged Critic. Evaluation never uses hooks. With CUDA
+    the built-in privileged Critic. Under cfg["branches"] = K (guided.branches),
+    hooks["branches"](logits, mask, actions) -> (n, K) action indices padded
+    with -1 names each learning row's candidates after its move is chosen; the
+    worker plays each in a copy of the hand. Evaluation never uses hooks. With CUDA
     graphs the sampling hook gets the logits of the rollout's fp16 snapshot
     (like every other graph decision) and its batch's rows only; it must stay
     on the device (no host synchronization) to keep the launches overlapped.
@@ -46,6 +66,16 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
 
     history = history or {}
     hooks = hooks or {}
+    # cfg["branches"]: the recipe's candidates per learning row (guided.branches), K columns wide.
+    branch_width = cfg.get("branches") if command["kind"] != "evaluate" else None
+    branch_hook = None
+    if branch_width:
+        from .branches import options
+
+        options(cfg, True)
+        if "branches" not in hooks:
+            raise ValueError("cfg['branches'] needs hooks['branches']")
+        branch_hook = fixed_width(hooks["branches"], branch_width)
     teacher = command.get("teacher") if command.get("labels") and command["kind"] != "evaluate" else None
     teacher_model = history[teacher] if teacher and teacher.startswith("model:") else None
     actor.eval()
@@ -69,6 +99,7 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
             if device.type == "cuda" and cfg.get("cuda_graphs", True)
             and (not cfg["bc_only"] or teacher_model is not None)
             and ("sample" not in hooks or graph_hooks)
+            and (branch_hook is None or graph_hooks)
             and (critic is None or "values" in hooks) else None
         )
         inference_actor = actor
@@ -129,10 +160,14 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
         inflight = deque()  # rounds launched on the device, oldest first
 
         def finish(groups, replies):
-            for group, rows_, learning, decided, complete, taught in groups:
+            for group, rows_, learning, decided, complete, taught, branched in groups:
                 mark = time.perf_counter()
-                # (action, logprob, argmax), with the value (and the teacher's label) when complete
+                # (action, logprob, argmax), with the value (and the teacher's label) when complete,
+                # and the branch candidates last
                 output = decided.result()
+                candidates = None
+                if branched:
+                    output, candidates = output[:, :-branch_width], output[:, -branch_width:]
                 if not complete:
                     values = np.zeros(len(group), dtype=np.float32)
                     if learning and "values" in hooks:
@@ -146,9 +181,13 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
                             output[:, 0] = output[:, 4]
                 timers["forward"] += time.perf_counter() - mark
                 mark = time.perf_counter()
-                # (action, logprob, value, argmax), then a model teacher's label on the learner's rows.
-                for (conn, ident, _), (action, prob, value, *indices) in zip(group, output):
-                    replies[conn].append((ident, (int(action), float(prob), float(value), *map(int, indices))))
+                # (action, logprob, value, argmax), then a model teacher's label on the learner's rows,
+                # and under cfg["branches"] a tuple of the row's candidates (the -1 padding dropped).
+                for k, ((conn, ident, _), (action, prob, value, *indices)) in enumerate(zip(group, output)):
+                    answer = (int(action), float(prob), float(value), *map(int, indices))
+                    if candidates is not None:
+                        answer += (tuple(int(c) for c in candidates[k] if c >= 0),)
+                    replies[conn].append((ident, answer))
                 timers["reply"] += time.perf_counter() - mark
             mark = time.perf_counter()
             for conn, response in replies.items():
@@ -221,6 +260,8 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
                 sample = command["kind"] != "evaluate" and slot != GREEDY and (
                     slot == "model:current" or not cfg.get("playout_baseline"))
                 labelled = teacher_model is not None and slot == "model:current"
+                # The learner's sampled rows get the recipe's branch candidates.
+                branched = learning and branch_hook is not None and sample
                 rows_ = [item[2]["row"] for item in group]
                 with torch.no_grad():
                     if graphs is not None:
@@ -229,11 +270,13 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
                         # round is read after the next one has been launched.
                         # The learner's sampling hook chooses from the graph's logits.
                         hook = {"hook": hooks["sample"]} if learning and "sample" in hooks else {}
+                        if branched:
+                            hook["branches"] = branch_hook
                         decided = graphs.decide(slot, model, rows_, sample=sample, **hook)
                         # The teacher's argmax on the same rows, under its own
                         # slot (no seat's), so no graph buffer ring is shared.
                         taught = graphs.decide(teacher, teacher_model, rows_, sample=False) if labelled else None
-                        groups.append((group, rows_, learning, decided, False, taught))
+                        groups.append((group, rows_, learning, decided, False, taught, branched))
                         timers["batch"] += time.perf_counter() - mark
                         continue
                     batch = make_batch(rows_, device)
@@ -280,9 +323,11 @@ def collect(actor, critic, cfg, bundle, panel, command, history=None, hooks=None
                     columns = (actions.float(), selected, values, logp.argmax(-1).float())
                     if labelled:
                         columns += (batch["teacher"].float(),)
+                    if branched:
+                        columns += tuple(branch_hook(logits, batch["mask"], actions).float().unbind(1))
                     output = torch.stack(columns, -1).cpu().numpy()
                     timers["forward"] += time.perf_counter() - mark
-                    groups.append((group, rows_, learning, Decided(output), True, None))
+                    groups.append((group, rows_, learning, Decided(output), True, None, branched))
             inflight.append((groups, replies))
             if graphs is None or len(inflight) > 1:
                 finish(*inflight.popleft())

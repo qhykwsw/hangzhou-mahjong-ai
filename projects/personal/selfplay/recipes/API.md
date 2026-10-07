@@ -116,10 +116,29 @@
 - 和残局开局（`starts`）一起用：每场一开局就是窗口，算力集中在这些局面上。
 - 损失由方案决定，例如：只在最好候选与 argmax 的配对差显著时，把 Actor 拉向最好候选，其余行用 KL 锚住冻结副本。
 
+## 分支候选（branches）
+
+`cfg["branches"] = K`（正整数，须同时开 `playout_baseline`）时，每个学习决策除了对局本身和 playout 基线的单个偏离副本，还可以由方案点名最多 K 个候选动作，各开一个副本打到本局结束。实现与字段定义见 `guided/branches.py`。
+
+**候选**
+- 父进程在学习座位选定动作之后调用 `hooks["branches"](logits, mask, actions)`，返回 (行数, K) 的整数张量，每行是要额外评估的动作编号，空位填 −1；少于 K 列自动补 −1，多于 K 列报错。`actions` 是这一步实际选中的动作（采样钩子或默认采样的结果）。
+- 走 CUDA 图时，带分支的学习决策只重放 logits 的图，采样钩子（标了 `capturable` 的也一样）和分支钩子都在图外、同一条流上对这一批的行运行，结果与 eager 路径的算法相同。
+- 默认钩子由方案提供，框架只负责调用和执行；`cfg["branches"]` 开着却没给钩子时报错。
+
+**副本**
+- 每个候选从同一决策点各 fork 一份，走该候选；之后学习座位走当前 Actor 的 argmax，其余座位照常（规则照常决策，模型对手取 argmax），牌墙、稳定牌墙与运气记录沿用对局本身的。
+- 对局本身和单个偏离副本的行为不变；两种引擎（Python 的 `Game`、C 的 `FastGame`）逐位一致。
+
+**写回该行的字段**
+- `branches`：按候选顺序的列表，每项 `{"action", "truncated": False, "playout", "playout_scores", "playout_dealer", "playout_deals_next"}`，含义同偏离行的同名字段；开 `luck` 时另有 `playout_luck_pay`、`playout_luck_deal`。
+- 没有候选的行不带 `branches`。`finish_game` 在该场所有副本打完后才调用。
+- 副本不产生训练行、不计入 `samples` 和局数预算，但要多打：多出的推理请求约等于候选数乘以本局剩余的学习决策数。
+
 `hooks` 在主进程里对学习座位生效：
 
 - `hooks["values"](rows) -> 数组`：给出每行的价值估计，写入 `value`。采集时 Critic 为空，所以使用 PPO 的方案必须提供它。
 - `hooks["sample"](logits, mask) -> (actions, logprobs)`：替换默认的按策略概率采样，例如调温度来增加探索。返回的 `logprobs` 必须是实际采样分布下的对数概率。
+- `hooks["branches"](logits, mask, actions) -> (行数, K) 动作编号`：`cfg["branches"]` 开启时点名每行的候选，见「分支候选」。
 
 评估时不调用任何钩子，Actor 取概率最大的动作。
 

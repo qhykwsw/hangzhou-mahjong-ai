@@ -128,6 +128,26 @@ def hooked_decision(logits, mask, hook):
     return torch.stack((actions.float(), selected.float(), logp.argmax(-1).float()), -1)
 
 
+def multinomial(logits, mask):
+    """The default sampling (an unhooked decision's, ActorGraphs._decide), as a sample hook."""
+    logp = logits.masked_fill(~mask, -1e9).log_softmax(-1)
+    return torch.multinomial(logp.exp(), 1).squeeze(1), None
+
+
+def branched_decision(logits, mask, hook, branches):
+    """hooked_decision (with the default sampling when ``hook`` is None), then the row's branch candidates.
+
+    branches(logits, mask, actions) -> (n, K) candidates (collection's
+    hooks["branches"], made K wide); they follow the three answer columns.
+    """
+    logp = logits.masked_fill(~mask, -1e9).log_softmax(-1)
+    actions, selected = (hook or multinomial)(logits, mask)
+    if selected is None:
+        selected = logp.gather(1, actions[:, None]).squeeze(1)
+    decision = torch.stack((actions.float(), selected.float(), logp.argmax(-1).float()), -1)
+    return torch.cat((decision, branches(logits, mask, actions).float()), -1)
+
+
 class ActorGraphs:
     """CUDA graphs of a model's decision, one per padded input shape.
 
@@ -151,6 +171,13 @@ class ActorGraphs:
     are read back. Its random draws come from the default CUDA generator,
     whose graph-safe Philox offset advances on every replay, as the captured
     multinomial of an unhooked sample does.
+
+    A branches hook (collection's hooks["branches"], cfg["branches"]) also
+    runs outside the graph: a sampled decision with one replays the logits
+    alone, then the sample hook (captured or not, or the default
+    multinomial) and the branches hook run on the batch's rows of the
+    graph's output, as on the eager path (branched_decision), and the
+    candidates come back after the three answer columns.
     """
 
     BATCH_BUCKETS = (1, 2, 4, 8, 16, 32, 64, 128)
@@ -219,6 +246,23 @@ class ActorGraphs:
         self.turn[(key, size, width, inputs)] = (turn + 1) % self.IN_FLIGHT
         return ring[turn]
 
+    def _answers(self, key, size, width, inputs, columns):
+        """A pinned answer buffer of ``columns`` per row, for a decision with branch candidates.
+
+        A ring of IN_FLIGHT per model and shape like _host's, turned with it
+        (every decision of a branching model and shape takes one), so a buffer
+        is reused only after its decision's event, recorded on _host's ring
+        entry, has been read.
+        """
+        name = ("answers", key, size, width, inputs, columns)
+        ring = self.hosts.get(name)
+        if ring is None:
+            ring = self.hosts[name] = [torch.zeros((size, columns), dtype=torch.float32).pin_memory()
+                                       for _ in range(self.IN_FLIGHT)]
+        turn = self.turn.get(name, 0)
+        self.turn[name] = (turn + 1) % self.IN_FLIGHT
+        return ring[turn]
+
     @staticmethod
     def _decide(model, planes, scalars, events, mask, sample):
         # fp16 tensor cores: the large pool Actor answers about twice as fast
@@ -259,13 +303,15 @@ class ActorGraphs:
         self.pool = graph.pool()
         return out, graph
 
-    def decide(self, key, model, rows, sample, hook=None):
+    def decide(self, key, model, rows, sample, hook=None, branches=None):
         """Launch (action, log-probability, argmax) per row: the action sampled from the policy, or its argmax.
 
         With a sample hook (and ``sample``) the hook chooses the action and its
         logprob column from the logits and mask of the batch's rows
         (hooked_decision), as the collection parent's eager path does; a hook
-        marked ``capturable`` runs inside the graph (see the class).
+        marked ``capturable`` runs inside the graph (see the class). With a
+        branches hook (and ``sample``) each row's candidates follow the three
+        columns (branched_decision), the hooks outside the graph.
 
         Returns a Decided whose result() waits for the device. The answers are
         copied straight out of the graph into a pinned buffer on the same
@@ -276,13 +322,16 @@ class ActorGraphs:
         """
         start = time.perf_counter()
         hook = hook if sample else None
+        branches = branches if sample else None
         rows = widen(rows, model)
         shape = self.shape(rows)
         device = next(model.parameters()).device
         if shape is None:
             batch = policy_batch(rows, device)
             inputs = (batch["planes"], batch["scalars"], batch["events"], batch["mask"])
-            if hook is None:
+            if branches is not None:
+                decided = Decided(branched_decision(self._logits(model, *inputs), batch["mask"], hook, branches))
+            elif hook is None:
                 decided = Decided(self._decide(model, *inputs, sample))
             else:
                 decided = Decided(hooked_decision(self._logits(model, *inputs), batch["mask"], hook))
@@ -306,11 +355,11 @@ class ActorGraphs:
         # A hooked decision replays the logits alone, unless the hook is
         # capturable: then hook and forward are one graph per hook (the entry
         # keeps the hook alive, so its id cannot name another one later).
-        in_graph = hook is not None and getattr(hook, "capturable", False) is True
+        in_graph = hook is not None and branches is None and getattr(hook, "capturable", False) is True
         if in_graph:
             mode = ("hooked", id(hook))
             compute = lambda *inputs: self._hooked(*inputs, hook)  # noqa: E731
-        elif hook is not None:
+        elif hook is not None or branches is not None:
             mode, compute = "logits", self._logits
         else:
             mode = sample
@@ -335,6 +384,15 @@ class ActorGraphs:
         if in_graph:
             self.counts["hooked"] += 1
             self.counts["in_graph"] += 1
+        elif branches is not None:
+            # As a hook out of the graph, with the candidates' columns after the answer's three.
+            n = len(rows)
+            out = branched_decision(out[:n], static[3][:n], hook, branches)
+            answers = self._answers(key, size, width, count, out.shape[1])[:n]
+            now = time.perf_counter()
+            self.seconds["hook"] += now - mark
+            self.counts["hooked"] += 1
+            mark = now
         elif hook is not None:
             # On the replay's stream, so the hook reads these logits before any
             # later replay can overwrite the graphs' shared output memory.
