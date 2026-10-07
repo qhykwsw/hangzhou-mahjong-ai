@@ -42,6 +42,7 @@
 | `learning` / `networks` / `encoding` | PPO 与教师交叉熵、Actor 与带隐藏信息的 PopArt Critic、含本手完整公开历史的合法观察编码 |
 | `environment` / `collection` | CPU worker 驱动完整对局，父进程集中做 GPU 推理 |
 | `branches` | 训练采集的分支候选（`cfg["branches"]`）：父进程的 `hooks["branches"]` 给学习决策点名候选，worker 为每个候选 fork 一份打到本局结束，结果写进该行的 `branches`；Python 引擎的 `Branch` 与 C 引擎的 `fastgame.FastBranch` 逐位一致。接口见 [recipes/API.md](../recipes/API.md) |
+| `walls` / `opponents` | 只在训练对局生效、默认关闭：稳定牌墙与学习座位的摸牌运气（即时与竞速两种 AIVAT 控制变量，`cfg["luck_kind"]`），训练对手的 race profile 抖动（`opponent_jitter`）与平台超时默认动作（`opponent_timeout`）；C 与 Python 引擎逐位一致，cfg 格式见[方案接口](../recipes/API.md) |
 | `evaluation` / `statistics` / `inference` | 共同牌墙、四座轮换的配对评估，指导强度函数，评估专用的 Actor 批量推理 |
 | `artifacts` / `sync` | 教师包的导出、校验与跨机发布 |
 | `deployment` | Actor 导出、基准测试与独立 HTTP 推理服务 |

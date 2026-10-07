@@ -113,7 +113,7 @@ class Mirror:
         if game.stable or game.luck:
             from .walls import train_hand
 
-            train_hand(state, stable=game.stable, luck_seat=game.focal if game.luck else None)
+            train_hand(state, stable=game.stable, luck_seat=game.focal if game.luck else None, race=game.race_luck)
         if game.stage:
             from .stage import attach
 
@@ -144,9 +144,16 @@ class Mirror:
 
 
 def python_act(game, mirror, hand, seat, policy=None):
-    """A Python rule seat's turn: its action (the game's policy of the seat, or ``policy``) on the mirror's Observation, played on both hands."""
+    """A Python rule seat's turn: its action (the game's policy of the seat, or ``policy``) on the mirror's
+    Observation, played on both hands (the platform's on the C hand when its time runs out; the mirror
+    catches up from the log)."""
     from selfplay_core.actions import action_index
 
+    if game.timeouts:
+        index = hand.timeout()
+        if index is not None:
+            hand.step(index)
+            return
     state = mirror.sync(hand)
     legal = state.legal_actions()
     obs = state.observation(legal)
@@ -180,7 +187,11 @@ class FastGame(Game):
         if self.stable:
             self.state.stabilize()
         if self.luck:
-            self.state.track_luck(self.focal)
+            self.state.track_luck(self.focal, self.race_luck)
+        if self.timeouts:
+            from .opponents import hand_keys
+
+            self.state.timeouts(self.timeouts, hand_keys(self.seed, self.hand_no))
         self.start = (self.dealer, tuple(self.scores))
         self.mirror = None
 
@@ -195,7 +206,8 @@ class FastGame(Game):
                 if not spec.startswith("model:"):
                     python.add(seat)
                 continue
-            profiles.append(member[0])
+            # A jittered member (guided.opponents) decides on its own copy of the profile.
+            profiles.append(self.jitter[seat][0] if seat in self.jitter else member[0])
             fallbacks.append(member[1])
         self.python_seats = frozenset(python)
         # fp-rule-131 as the teacher labels on the C hand (_label).
@@ -250,6 +262,8 @@ class FastGame(Game):
                     self.rows[-1]["reward"] += delta[self.focal] / self.config.base_score
                     if self.luck:
                         self.rows[-1]["end_luck_pay"], self.rows[-1]["end_luck_deal"] = state.luck
+                    if self.race_luck:
+                        self.rows[-1]["end_luck_race_pay"], self.rows[-1]["end_luck_race_deal"] = state.race_luck
                     if self.stage:  # the game's four scores after the hand, by absolute seat
                         self.rows[-1]["end_scores"] = [s / self.config.base_score for s in self.scores]
                 else:
@@ -294,6 +308,8 @@ class FastGame(Game):
                 row.update(state.oracle(seat) if not features else hook(features, None)(StateView(self, state), seat))
                 if self.luck:
                     row["luck_pay"], row["luck_deal"] = state.luck
+                if self.race_luck:
+                    row["luck_race_pay"], row["luck_race_deal"] = state.race_luck
                 if self.stage:
                     from .stage import row_fields
 
@@ -459,6 +475,8 @@ class FastShadow:
         self.row["playout_scores"] = [(s + d) / game.config.base_score for s, d in zip(self.start_scores, state.delta)]
         if game.luck:
             self.row["playout_luck_pay"], self.row["playout_luck_deal"] = state.luck
+        if game.race_luck:
+            self.row["playout_luck_race_pay"], self.row["playout_luck_race_deal"] = state.race_luck
         return None
 
     def apply(self, response):
@@ -615,7 +633,7 @@ def replay(game, snap):
         if game.stable or game.luck:
             from .walls import train_hand
 
-            train_hand(state, stable=game.stable, luck_seat=game.focal if game.luck else None)
+            train_hand(state, stable=game.stable, luck_seat=game.focal if game.luck else None, race=game.race_luck)
         for index in log:
             legal = state.legal_actions()
             state.step(next(a for a in legal if action_index(a) == index), legal)
