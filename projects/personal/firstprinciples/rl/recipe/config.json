@@ -32,7 +32,10 @@
     "pool_weight": 4,
     "versions": [
       "fp-rl-184",
-      "fp-rule-131"
+      "fp-rule-131",
+      "fp-rl-226",
+      "fp-rl-226",
+      "fp-rl-226"
     ]
   },
   "belief_aux": {
