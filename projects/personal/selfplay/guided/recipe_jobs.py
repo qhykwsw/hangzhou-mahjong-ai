@@ -93,6 +93,7 @@ START_EXPORT = r"""
 import json,sys,torch
 from pathlib import Path
 from guided.trial import export_actor
+from guided.networks import actor_options
 source,output=Path(sys.argv[1]),sys.argv[2]
 if source.is_dir():
     weights=torch.load(source/'actor.pt',map_location='cpu',weights_only=True)
@@ -100,7 +101,7 @@ if source.is_dir():
 else:
     state=torch.load(source,map_location='cpu',weights_only=False)
     weights,cfg=state['actor'],state['config']
-cfg={k:cfg[k] for k in ('dim','layers','heads','lookahead')}
+cfg={k:cfg[k] for k in ('dim','layers','heads','lookahead')}|actor_options(cfg)
 meta=export_actor(weights,cfg,output)
 print(json.dumps(meta))
 """

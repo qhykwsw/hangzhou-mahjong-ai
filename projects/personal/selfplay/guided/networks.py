@@ -59,10 +59,14 @@ class HistoryEncoder(nn.Module):
     ``event_tail`` rows embed the events' last field (guided.encoding.EVENT_TAILS):
     before v3 that field is always 0 and an encoder built for 4 rows reads it as
     0 whatever it is given.
+
+    With ``belief_head`` (an Actor option, see Actor) ``belief_head`` reads the
+    34 tile tokens after ``belief_layer = layers // 2`` blocks and ``belief_in``
+    adds its sigmoid, without gradient, back to them before the next block.
     """
 
     def __init__(self, dim, layers, heads, max_events=4096, *, state_only=False,
-                 planes=N_PLANES, scalars=N_SCALARS, event_tail=4):
+                 planes=N_PLANES, scalars=N_SCALARS, event_tail=4, belief_head=False):
         super().__init__()
         if dim % heads or dim < 2:
             raise ValueError("dim must be divisible by heads and at least 2")
@@ -109,8 +113,38 @@ class HistoryEncoder(nn.Module):
             nn.init.xavier_uniform_(block.linear2.weight)
         self.transformer.layers[-1].output_tokens = slice(34, 35) if state_only else 35
         self.norm = nn.LayerNorm(dim)
+        self.belief_layer = None
+        if belief_head:
+            if layers < 2:
+                raise ValueError("a belief head needs at least two layers")
+            self.belief_layer = layers // 2
+            self.belief_head = nn.Sequential(
+                nn.LayerNorm(dim), nn.Linear(dim, dim), nn.GELU(), nn.Linear(dim, 3)
+            )
+            # Starts at zero: the blocks after it first see exactly what they saw without it.
+            self.belief_in = nn.Linear(3, dim)
+            nn.init.zeros_(self.belief_in.weight)
+            nn.init.zeros_(self.belief_in.bias)
 
-    def forward(self, planes, scalars, events):
+    def _transform_with_belief(self, x, padding):
+        """The transformer's blocks with the belief head after block belief_layer.
+
+        Runs TransformerEncoder.forward's path for these blocks (no nested
+        tensors, an additive padding mask), so with belief_in at zero every
+        output is the plain transformer's, bit for bit.
+        """
+        padding = torch.zeros_like(padding, dtype=x.dtype).masked_fill_(padding, float("-inf"))
+        for index, block in enumerate(self.transformer.layers):
+            if index == self.belief_layer:
+                tiles = x[:, :34]
+                belief = self.belief_head(tiles)
+                # Stop-gradient: the policy reads the belief but never trains the head.
+                injected = self.belief_in(torch.sigmoid(belief).detach())
+                x = torch.cat([tiles + injected, x[:, 34:]], dim=1)
+            x = block(x, src_key_padding_mask=padding)
+        return x, belief.transpose(1, 2)
+
+    def forward(self, planes, scalars, events, return_belief=False):
         valid = events[..., 0] != 0
         # Ignore every field of padding, including arbitrary sentinel values.
         events = events.long().masked_fill(~valid[..., None], 0)
@@ -145,31 +179,85 @@ class HistoryEncoder(nn.Module):
             ],
             dim=1,
         )
-        encoded = self.norm(self.transformer(tokens, src_key_padding_mask=padding))
+        if self.belief_layer is None:
+            if return_belief:
+                raise ValueError("this encoder has no belief head")
+            encoded = self.norm(self.transformer(tokens, src_key_padding_mask=padding))
+        else:
+            encoded, belief = self._transform_with_belief(tokens, padding)
+            encoded = self.norm(encoded)
         if self.state_only:
-            return encoded[:, 0], encoded[:, :0]
-        return encoded[:, 34], encoded[:, :34]
+            result = encoded[:, 0], encoded[:, :0]
+        else:
+            result = encoded[:, 34], encoded[:, :34]
+        return (*result, belief) if return_belief else result
 
 
-def actor_of(encoding, dim, layers, heads):
+def actor_options(config):
+    """The optional Actor structures ``config`` turns on, as Actor keyword arguments.
+
+    ``"belief_head": true`` adds the opponents' tile belief (Actor). Options at
+    their defaults are dropped, so an Actor without any keeps its original
+    config, weights and exported files bit for bit.
+    """
+    options = {}
+    belief = config.get("belief_head", False)
+    if type(belief) is not bool:
+        raise ValueError("belief_head must be true or false")
+    if belief:
+        options["belief_head"] = True
+    return options
+
+
+def actor_of(encoding, dim, layers, heads, **options):
     """An Actor built for ``encoding``'s inputs (guided.encoding.INPUTS and EVENT_TAILS)."""
     from .encoding import EVENT_TAILS, inputs
 
     planes, scalars = inputs(encoding)
-    return Actor(dim, layers, heads, planes=planes, scalars=scalars, event_tail=EVENT_TAILS[encoding])
+    return Actor(dim, layers, heads, planes=planes, scalars=scalars, event_tail=EVENT_TAILS[encoding], **options)
+
+
+def belief_target(oracle_planes):
+    """The belief head's training target from rows' oracle_planes: [batch, 3, 34] copies / 4.
+
+    Planes 4i..4i+3 hold the concealed counts >= 1..4 of the opponent i + 1
+    seats after the actor (guided.encoding.oracle, a recipe's critic_features),
+    so their sum is that count. A loss: binary_cross_entropy_with_logits(belief, target).
+    """
+    return oracle_planes[:, :12].float().unflatten(1, (3, 4)).sum(2) / 4
 
 
 class Actor(nn.Module):
-    def __init__(self, dim=128, layers=4, heads=4, *, planes=N_PLANES, scalars=N_SCALARS, event_tail=4):
+    """Logits over the 231 actions from legal inputs only.
+
+    Optional structure (actor_options; the artifact's meta.json config):
+
+    ``belief_head``: the encoder predicts, from the tile tokens after
+    layers // 2 blocks, which tiles each opponent holds concealed: logits
+    [batch, 3, 34], opponents in turn order after the actor, whose sigmoid is
+    the expected copies / 4 (belief_target). The sigmoid, without gradient, is
+    projected by ``encoder.belief_in`` and added to the tile tokens before the
+    later blocks; ``forward(..., return_belief=True)`` returns (logits, belief
+    logits) for a training loss on hidden state (ADR-0009), and the policy loss
+    never reaches the head. The head reads only legal inputs, so inference is
+    unchanged: one forward pass, logits only.
+    """
+
+    def __init__(self, dim=128, layers=4, heads=4, *, planes=N_PLANES, scalars=N_SCALARS, event_tail=4,
+                 belief_head=False):
         super().__init__()
         self.dim, self.layers, self.heads = dim, layers, heads
-        self.encoder = HistoryEncoder(dim, layers, heads, planes=planes, scalars=scalars, event_tail=event_tail)
+        self.encoder = HistoryEncoder(dim, layers, heads, planes=planes, scalars=scalars, event_tail=event_tail,
+                                      belief_head=belief_head)
         self.discard_head = nn.Linear(dim, 1)
         self.claim_head = nn.Linear(dim, 4)
         self.state_head = nn.Linear(dim, 65)
 
-    def forward(self, planes, scalars, events):
-        state, tiles = self.encoder(planes, scalars, events)
+    def forward(self, planes, scalars, events, return_belief=False):
+        if return_belief:
+            state, tiles, belief = self.encoder(planes, scalars, events, return_belief=True)
+        else:
+            state, tiles = self.encoder(planes, scalars, events)
         discard = self.discard_head(tiles).squeeze(-1)
         claims = self.claim_head(tiles[:, :33])
         rest = self.state_head(state)
@@ -187,7 +275,7 @@ class Actor(nn.Module):
             dim=-1,
         )
         assert logits.shape[-1] == N_ACTIONS
-        return logits
+        return (logits, belief) if return_belief else logits
 
 
 class PopArt(nn.Module):

@@ -74,6 +74,33 @@ def test_v3_actor_and_narrower_actors_on_v3_rows_match_reference():
         np.testing.assert_allclose(actual, expected, rtol=0.01, atol=0.005)
 
 
+def test_belief_head_matches_reference():
+    """The belief head and its injection: logits and belief logits as torch computes them."""
+    from guided.encoding import ENCODING, ENCODING_V3, EVENT_TAILS, INPUTS
+    from guided.networks import actor_of
+
+    torch.manual_seed(596)
+    rng = np.random.default_rng(459)
+    for encoding, layers in ((ENCODING, 2), (ENCODING_V3, 3)):
+        actor = actor_of(encoding, 32, layers, 4, belief_head=True).eval()
+        torch.nn.init.normal_(actor.encoder.belief_in.weight, std=0.5)  # a live injection
+        row = blank(*INPUTS[encoding])
+        events = np.zeros((3, 32, 5), np.int32)
+        for field, size in enumerate([7, 5, 35, 35, EVENT_TAILS[encoding]]):
+            events[:, 8:24, field] = rng.integers(1 if field < 4 else 0, size, size=(3, 16))
+        events[:, :8, 1:] = -999  # padding fields must be ignored
+        args = [rng.normal(size=(3, *row["planes"].shape)).astype(np.float16),
+                rng.normal(size=(3, *row["scalars"].shape)).astype(np.float16), events]
+        with torch.inference_mode():
+            expected, belief = actor(*(torch.from_numpy(a) for a in args), return_belief=True)
+        metal = MetalActor(actor)
+        logits, metal_belief = metal.outputs(*(mx.array(a) for a in args))
+        np.testing.assert_allclose(np.asarray(logits), expected.numpy(), rtol=0.01, atol=0.005)
+        np.testing.assert_allclose(np.asarray(metal_belief), belief.numpy(), rtol=0.01, atol=0.005)
+        compiled = np.asarray(metal.logits(*(mx.array(a) for a in args)))
+        np.testing.assert_allclose(compiled, expected.numpy(), rtol=0.01, atol=0.005)
+
+
 def test_service_two_inflight_batches_reuse_slots_without_stale_answers():
     torch.manual_seed(139)
     actor = MetalActor(Actor(32, 1, 4).eval())

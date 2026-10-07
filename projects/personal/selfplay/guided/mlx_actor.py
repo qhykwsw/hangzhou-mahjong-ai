@@ -34,6 +34,8 @@ class Actor:
         self.timed_events = actor.encoder.timed_events
         self.dim, self.heads, self.layers = actor.dim, actor.heads, actor.layers
         self.max_events = actor.encoder.max_events
+        # The block before which the belief head feeds the tile tokens (None without one).
+        self.belief_layer = actor.encoder.belief_layer
         mx.eval(self.w, self.positions)
         self.logits = mx.compile(self.forward)
         self.decide = mx.compile(self.decision)
@@ -49,6 +51,16 @@ class Actor:
         )
 
     def forward(self, planes, scalars, events):
+        return self.outputs(planes, scalars, events)[0]
+
+    def believe(self, tiles):
+        """The belief head's logits [batch, 34, 3] from the tile tokens (guided.networks.Actor)."""
+        h = self.linear(self.norm(tiles, "encoder.belief_head.0"), "encoder.belief_head.1")
+        h = nn.gelu(h.astype(mx.float32)).astype(mx.float16)
+        return self.linear(h, "encoder.belief_head.3")
+
+    def outputs(self, planes, scalars, events):
+        """(logits, belief logits [batch, 3, 34] or None without a belief head)."""
         if events.shape[1] > self.max_events:
             raise ValueError(
                 f"history exceeds {self.max_events} events; refusing truncation"
@@ -79,7 +91,12 @@ class Actor:
         mask = mx.concatenate(
             [mx.ones((events.shape[0], 35), mx.bool_), valid], axis=1
         )[:, None, None, :]
+        belief = None
         for layer in range(self.layers):
+            if layer == self.belief_layer:
+                belief = self.believe(x[:, :34])
+                injected = self.linear(mx.sigmoid(belief.astype(mx.float32)), "encoder.belief_in")
+                x = mx.concatenate([x[:, :34] + injected, x[:, 34:]], axis=1)
             prefix = f"encoder.transformer.layers.{layer}."
             normed = self.norm(x, prefix + "norm1")
             batch, length, dim = normed.shape
@@ -113,7 +130,7 @@ class Actor:
         discard = self.linear(tiles, "discard_head").squeeze(-1)
         claims = self.linear(tiles[:, :33], "claim_head")
         rest = self.linear(state, "state_head")
-        return mx.concatenate(
+        logits = mx.concatenate(
             [
                 discard,
                 rest[:, :63],
@@ -125,6 +142,7 @@ class Actor:
             ],
             axis=-1,
         )
+        return logits, None if belief is None else belief.transpose(0, 2, 1)
 
     def decision(self, planes, scalars, events, mask):
         logits = self.forward(planes, scalars, events).astype(mx.float32)

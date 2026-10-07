@@ -91,10 +91,10 @@ def export_actor(weights, config, output, source=None):
     import torch
     from .deployment import FORMAT, load_actor
     from .encoding import ENCODING
-    from .networks import actor_of
+    from .networks import actor_of, actor_options
 
     encoding = config.get("encoding", ENCODING)
-    actor = actor_of(encoding, config["dim"], config["layers"], config["heads"])
+    actor = actor_of(encoding, config["dim"], config["layers"], config["heads"], **actor_options(config))
     actor.load_state_dict(weights, strict=True)
     for value in actor.state_dict().values():
         if not bool(torch.isfinite(value).all()):
@@ -105,7 +105,7 @@ def export_actor(weights, config, output, source=None):
     meta = {
         "format": FORMAT,
         "encoding": encoding,
-        "config": {k: config[k] for k in ("dim", "layers", "heads", "lookahead")},
+        "config": {k: config[k] for k in ("dim", "layers", "heads", "lookahead")} | actor_options(config),
         "weights_sha256": _sha256(output / "actor.pt"),
         "source_checkpoint_sha256": source or _sha256(output / "actor.pt"),
         "backend": "pytorch",
@@ -205,10 +205,10 @@ class Context:
 
     def new_actor(self):
         """A fresh Actor with the fixed architecture (e.g. for opponent snapshots)."""
-        from .networks import actor_of
+        from .networks import actor_of, actor_options
 
         c = self.actor_config
-        return actor_of(c["encoding"], c["dim"], c["layers"], c["heads"]).to(self.device)
+        return actor_of(c["encoding"], c["dim"], c["layers"], c["heads"], **actor_options(c)).to(self.device)
 
     def starts(self, name):
         """A frozen set of openings shipped in the recipe package (recipe/starts/<name>.json.gz)."""
