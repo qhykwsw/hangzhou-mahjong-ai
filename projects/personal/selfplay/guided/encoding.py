@@ -30,6 +30,9 @@ it on the row of a semifinal or final observation as ``risk_beta`` (no key
 elsewhere: an input of 0) and augment appends it; the C engine's rows get it
 with the stage's other scalars (guided.stage.rewrite), and match workers'
 binary requests carry it to a model that reads it (selfplay_core.wire).
+Those rows also carry ``stage_state`` (guided.stage_value.stage_state), no
+input of any encoding: the stage re-rank of an Actor with the outcome head
+reads it (guided.outcome), carried the same way to a model that asks for it.
 """
 
 import math
@@ -50,7 +53,7 @@ from selfplay_core.encoding import (
     encode as base_encode,
 )
 
-from .stage_value import risk_of
+from .stage_value import risk_of, stage_state_of
 
 # The engine silently falls back to pure Python without the native extension,
 # which makes shape features about an order of magnitude slower. Fail instead.
@@ -130,6 +133,9 @@ def encode(obs, lookahead=True):
     risk = risk_of(obs.stage, obs.base_score)
     if risk is not None:  # a semifinal or final: v4's scalar (augment)
         row["risk_beta"] = risk
+    stage = stage_state_of(obs.stage, obs.base_score)
+    if stage is not None:  # likewise: what the stage re-rank reads (guided.outcome), not an input
+        row["stage_state"] = stage
     return row
 
 

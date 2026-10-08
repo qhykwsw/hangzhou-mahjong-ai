@@ -51,6 +51,11 @@ def load_actor(source, device="cuda", *, oracle=False):
     Service deployment accepts only exported directories. Loading a training
     checkpoint here is for local export/benchmark, never an HTTP-supplied path.
 
+    An artifact's meta.json may turn on the stage re-rank (``"outcome_rerank"``,
+    guided.outcome): it is checked against the Actor (it needs the outcome
+    head) and returned normalized in the metadata (None when off), for the
+    services that act on it.
+
     An Actor with the training-only oracle inputs (ADR-0018, guided.oracle:
     ``oracle_inputs`` in its config, or any oracle parameter) is refused unless
     ``oracle``: only a trial's training start (guided.trial.Context) and
@@ -90,6 +95,14 @@ def load_actor(source, device="cuda", *, oracle=False):
         metadata = {"format": FORMAT, "encoding": encoding, "config": config}
     if not oracle and any(name.startswith(ORACLE_PREFIX) for name in weights):
         raise ValueError(f"refusing Actor weights with oracle parameters (ADR-0018: training only): {source}")
+    if "outcome_rerank" in metadata:
+        # The stage re-rank switch (guided.outcome), normalized; it needs the outcome head.
+        from .outcome import rerank_options
+
+        rerank = rerank_options(metadata["outcome_rerank"])
+        if rerank is not None and "outcome_head" not in config:
+            raise ValueError(f"outcome_rerank needs an Actor with the outcome head: {source}")
+        metadata = dict(metadata, outcome_rerank=rerank)
     actor = actor_of(metadata["encoding"], config["dim"], config["layers"], config["heads"], **actor_options(config))
     actor.load_state_dict(weights, strict=True)
     for value in actor.state_dict().values():
@@ -309,10 +322,13 @@ class BatchService:
         import torch
         from .encoding import encoder
         from .learning import make_batch, masked_log_probs
+        from .outcome import choice_options, choose, outcome_bins, stage_of_row, utilities
         from selfplay_core.actions import action_index
 
         device = next(self.actor.parameters()).device
         encode = encoder(self.metadata["encoding"])
+        rerank = self.metadata.get("outcome_rerank")
+        bins = outcome_bins(self.metadata["config"]["outcome_head"]) if rerank else None
         while not self.closed.is_set():
             try:
                 first = self.queue.get(timeout=0.05)
@@ -349,15 +365,18 @@ class BatchService:
             try:
                 with torch.inference_mode():
                     batch = make_batch(rows, device)
-                    logits = self.actor(
-                        batch["planes"], batch["scalars"], batch["events"]
-                    )
-                    indices = (
-                        masked_log_probs(logits, batch["mask"])
-                        .argmax(-1)
-                        .cpu()
-                        .tolist()
-                    )
+                    inputs = (batch["planes"], batch["scalars"], batch["events"])
+                    # The stage re-rank (meta.json outcome_rerank) acts only on semifinal and final rows.
+                    stages = [stage_of_row(row) for row in rows] if rerank else []
+                    if any(s is not None for s in stages):
+                        logits, outcome = self.actor(*inputs, return_outcome=True)
+                        log_probs = masked_log_probs(logits, batch["mask"])
+                        utility = torch.as_tensor(utilities(stages, bins, rerank["per_hand_sd"]), device=device)
+                        chosen = choose(log_probs, outcome, batch["mask"], utility, log_probs.argmax(-1),
+                                        **choice_options(rerank))
+                    else:
+                        chosen = masked_log_probs(self.actor(*inputs), batch["mask"]).argmax(-1)
+                    indices = chosen.cpu().tolist()
                 for (obs, future, deadline), index in zip(valid, indices):
                     if time.perf_counter() >= deadline:
                         self._complete(

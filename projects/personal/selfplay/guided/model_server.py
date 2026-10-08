@@ -24,6 +24,15 @@ action from softmax(log-probabilities / T) instead of taking the argmax (for
 opponents that imitate people, whose own choices vary); torch backends only.
 Every other artifact keeps the argmax.
 
+An artifact whose meta.json has ``"outcome_rerank": {...}`` (an Actor with the
+outcome head, guided.outcome) re-ranks the policy's near-ties toward the
+stage's places on semifinal and final rows: their stage_state (on the
+observation's row, or after a binary request's mask for a model whose
+/inputs answer says ``"stage": true``) becomes a per-bin chance of finishing
+in place, a fifth input of the batch's slot and graph, and the decision
+on the device takes it (guided.outcome.choose). A batch without such rows,
+and every other artifact, decides exactly as before. Both backends.
+
     python -m guided.model_server --root DIR --port 8830 [--device auto]
 """
 
@@ -106,14 +115,21 @@ class Models:
                 temperature = (meta.get("sampling") or {}).get("temperature")
                 if temperature is not None and self.device == "mlx":
                     raise ValueError("sampling artifacts need a torch backend")
+                rerank = meta.get("outcome_rerank")  # normalized by load_actor (guided.outcome)
+                if rerank and temperature is not None:
+                    raise ValueError("an artifact either samples or re-ranks, not both")
                 if self.device == "mlx":
                     from .mlx_actor import Actor
 
-                    actor = Actor(actor)
+                    actor = Actor(actor, rerank=rerank)
                 else:
                     actor = prepare(actor, self.device)
                     if temperature is not None:
                         actor.sampling_temperature = float(temperature)
+                    if rerank:
+                        from .outcome import choice_options
+
+                        actor.outcome_choice = choice_options(rerank)
                 self.loaded[name] = (actor, meta)
             return self.loaded[name]
 
@@ -125,11 +141,14 @@ def prepare(actor, device):
     return prepare_frozen(actor, device)
 
 
-def decide(actor, planes, scalars, events, mask):
+def decide(actor, planes, scalars, events, mask, utility=None):
     """The whole decision on the device: chosen action per row and one validity flag.
 
     masked_log_probs without its host-side checks, which would sync (and, on
     CUDA, break a graph capture); the flag is read together with the choices.
+    With ``utility`` [n, B] (a re-ranking artifact's batch with stage rows,
+    guided.outcome.utilities) the Actor's outcome head is computed too and the
+    argmax re-ranked (guided.outcome.choose); a row of zeros keeps its argmax.
     """
     import torch
     import torch.nn.functional as F
@@ -138,7 +157,11 @@ def decide(actor, planes, scalars, events, mask):
     with torch.autocast(
         device, torch.float16, enabled=device != "cpu", cache_enabled=False
     ):
-        logits = actor(planes, scalars, events).float()
+        if utility is None:
+            logits = actor(planes, scalars, events).float()
+        else:
+            logits, outcome = actor(planes, scalars, events, return_outcome=True)
+            logits, outcome = logits.float(), outcome.float()
     log_probs = F.log_softmax(logits.masked_fill(~mask, -1e9), dim=-1)
     temperature = getattr(actor, "sampling_temperature", None)
     if temperature:
@@ -147,6 +170,10 @@ def decide(actor, planes, scalars, events, mask):
         choice = (log_probs / temperature - torch.log(-torch.log(uniform))).argmax(-1)
     else:
         choice = log_probs.argmax(-1)
+    if utility is not None:
+        from .outcome import choose
+
+        choice = choose(log_probs, outcome, mask, utility, choice, **actor.outcome_choice)
     valid = mask.any(-1).all() & torch.isfinite(logits).all()
     return choice, valid
 
@@ -167,7 +194,7 @@ class Slot:
     batch stays valid.
     """
 
-    def __init__(self, size, width, device, planes, scalars=None, tail=4):
+    def __init__(self, size, width, device, planes, scalars=None, tail=4, bins=0):
         import torch
         from selfplay_core.actions import N_ACTIONS
         from selfplay_core.encoding import N_SCALARS
@@ -187,6 +214,8 @@ class Slot:
             host((size, width, 5), torch.int64),
             host((size, N_ACTIONS), torch.bool),
         )
+        if bins:  # a re-ranking batch's per-bin chances (decide's utility)
+            self.inputs += (host((size, bins), torch.float32),)
         self.choice = host((size,), torch.int64)
         # 0-d like the flag itself: a broadcasting non-blocking copy silently reads
         # as False on Apple GPUs.
@@ -198,8 +227,8 @@ class Slot:
         self.event = None  # set while a launched batch has not been taken
         self.done = False  # set once the event has fired
 
-    def fill(self, rows):
-        planes, scalars, events, mask = self.views
+    def fill(self, rows, utility=None):
+        planes, scalars, events, mask = self.views[:4]
         for i, row in enumerate(rows):
             planes[i] = row["planes"]
             scalars[i] = row["scalars"]
@@ -207,6 +236,8 @@ class Slot:
             events[i, : len(history)] = history
             events[i, len(history) :] = 0
             mask[i] = row["mask"]
+        if utility is not None:
+            self.views[4][: len(rows)] = utility
         self.rows = len(rows)
 
 
@@ -276,16 +307,16 @@ class Runner:
                 target=self._wait, name="device-waiter", daemon=True
             ).start()
 
-    def slot(self, count, length, planes, scalars=None, tail=4):
+    def slot(self, count, length, planes, scalars=None, tail=4, bins=0):
         """A free slot of the shape for these rows; None while all are in flight."""
-        shape = (*bucket(count, length), planes, scalars, tail)
+        shape = (*bucket(count, length), planes, scalars, tail, bins)
         ring = self.slots.get(shape)
         if ring is None:
             ring = self.slots[shape] = [self.new_slot(*shape) for _ in range(IN_FLIGHT)]
         return next((s for s in ring if s.event is None), None)
 
-    def new_slot(self, size, width, planes, scalars=None, tail=4):
-        return Slot(size, width, self.device, planes, scalars, tail)
+    def new_slot(self, size, width, planes, scalars=None, tail=4, bins=0):
+        return Slot(size, width, self.device, planes, scalars, tail, bins)
 
     def launch(self, name, actor, slot):
         import torch
@@ -415,13 +446,15 @@ class Service:
             rows, parsed = self._rows(
                 [request for _, request in items], meta, pre_encoded
             )
+            utility = staged_utility(rows, meta)
             slot = self.runner.slot(
                 len(rows), max(len(r["events"]) for r in rows), len(rows[0]["planes"]),
                 len(rows[0]["scalars"]), EVENT_TAILS[meta.get("encoding", ENCODING)],
+                0 if utility is None else utility.shape[1],
             )
             if slot is None:
                 raise RuntimeError("no free staging slot")
-            slot.fill(rows)
+            slot.fill(rows, utility)
             self.stats["prepare_seconds"] += time.perf_counter() - started
             self.runner.launch(model, actor, slot)
         except Exception as exc:  # a bad request fails its batch, not the server
@@ -518,35 +551,54 @@ class Service:
 
     def inputs(self, model):
         """What a match worker's binary request to ``model`` carries beyond the v1 row (selfplay_core.wire):
-        risk_beta for an encoding that reads it (guided-current-hand-v4)."""
+        risk_beta for an encoding that reads it (guided-current-hand-v4), stage_state for an
+        artifact with the stage re-rank (guided.outcome)."""
         from .encoding import ENCODING, RISK, inputs
 
         _, meta = self.models.get(model)
         encoding = meta.get("encoding", ENCODING)
-        return {"encoding": encoding, "risk_beta": inputs(encoding)[1] > RISK}
+        return {"encoding": encoding, "risk_beta": inputs(encoding)[1] > RISK,
+                "stage": bool(meta.get("outcome_rerank"))}
 
     def load(self, model):
         """Load a model and run every padded shape once, so play never pays for it."""
+        import numpy as np
         from .encoding import ENCODING, EVENT_TAILS, INPUTS
+        from .outcome import outcome_bins
 
         actor, meta = self.models.get(model)
         if model in self.warmed:
             return {"ok": True}
         encoding = meta.get("encoding", ENCODING)
         planes, scalars = INPUTS[encoding]
+        # A re-ranking artifact also decides stage batches, with a slot (and graph) of their own.
+        bins = [0] + ([len(outcome_bins(meta["config"]["outcome_head"]))] if meta.get("outcome_rerank") else [])
         for size in BATCH_BUCKETS[:5]:
             for length in WARM_EVENTS:
-                row = blank(planes, scalars)
-                row["events"] = row["events"].repeat(length, axis=0)
-                # A slot of its own: the ring's may be in flight for another worker.
-                slot = self.runner.new_slot(*bucket(size, length), planes, scalars, EVENT_TAILS[encoding])
-                slot.fill([row] * size)
-                self.runner.launch(model, actor, slot)
-                while not self.runner.ready(slot):
-                    self.wait()
-                self.runner.take(slot)
+                for count in bins:
+                    row = blank(planes, scalars)
+                    row["events"] = row["events"].repeat(length, axis=0)
+                    # A slot of its own: the ring's may be in flight for another worker.
+                    slot = self.runner.new_slot(*bucket(size, length), planes, scalars, EVENT_TAILS[encoding],
+                                                count)
+                    slot.fill([row] * size, np.zeros((size, count), np.float32) if count else None)
+                    self.runner.launch(model, actor, slot)
+                    while not self.runner.ready(slot):
+                        self.wait()
+                    self.runner.take(slot)
         self.warmed.add(model)
         return {"ok": True}
+
+
+def staged_utility(rows, meta):
+    """[n, B] float32 per-bin chances for a re-ranking artifact's batch with stage rows, else None."""
+    rerank = meta.get("outcome_rerank")
+    if not rerank or not any(row.get("stage_state") is not None for row in rows):
+        return None
+    from .outcome import outcome_bins, stage_of_row, utilities
+
+    bins = outcome_bins(meta["config"]["outcome_head"])
+    return utilities([stage_of_row(row) for row in rows], bins, rerank["per_hand_sd"])
 
 
 def blank(planes=None, scalars=None):
@@ -580,6 +632,9 @@ def decode(data):
     }
     if "risk_beta" in raw:  # a semifinal or final row's v4 scalar (guided.encoding), one float16
         row["risk_beta"] = float(np.frombuffer(raw["risk_beta"], dtype=np.float16).reshape(1)[0])
+    if "stage_state" in raw:  # its stage_state (guided.outcome), six float64
+        places, left, *scores = np.frombuffer(raw["stage_state"], dtype=np.float64).reshape(6).tolist()
+        row["stage_state"] = (int(places), int(left), *scores)
     return row
 
 

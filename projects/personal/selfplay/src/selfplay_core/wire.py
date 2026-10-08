@@ -10,6 +10,12 @@ request is the plain body, byte for byte as before v4, which a service from
 before v4 accepts. pack writes the plain body and keeps the row's risk_beta
 beside it (Body.risk); SocketClient appends it only for a model the service
 says reads it (POST /inputs, asked once per model; no answer: the plain body).
+
+A model with the stage re-rank (guided.outcome) also reads a semifinal or
+final row's ``stage_state`` (places, hands left, the four stage totals from
+the learner): STAGE, 24 bytes after the mask and any risk coefficient, kept
+beside the body as Body.stage and appended the same way, only for a model
+whose service answers ``"stage": true``. Every other request is unchanged.
 """
 import struct
 
@@ -20,12 +26,17 @@ from .encoding import N_PLANES, N_SCALARS
 
 _HEADER = struct.Struct('<4s64sBI')
 _MAGIC = b'MJE1'
+# A row's stage_state: magic, places (1 or 2), a pad byte, hands left, the four totals in base scores.
+STAGE = struct.Struct('<4sBxH4f')
+_STAGE_MAGIC = b'MJS1'
 
 
 class Body(bytes):
-    """A packed request: the plain body, and ``risk`` (a row's risk_beta as a float16, or b'') beside it."""
+    """A packed request: the plain body, and beside it ``risk`` (a row's risk_beta as a float16, or b'')
+    and ``stage`` (its stage_state as STAGE, or b'')."""
 
     risk = b''
+    stage = b''
 
 
 def _size(length):
@@ -42,6 +53,9 @@ def pack(model, row, *, lookahead):
     body = Body(_HEADER.pack(_MAGIC, model, bool(lookahead), len(arrays[2])) + b''.join(a.tobytes() for a in arrays))
     if 'risk_beta' in row:
         body.risk = np.asarray([row['risk_beta']], dtype='<f2').tobytes()
+    if row.get('stage_state') is not None:
+        places, left, *scores = row['stage_state']
+        body.stage = STAGE.pack(_STAGE_MAGIC, int(places), int(left), *(float(s) for s in scores))
     return body
 
 
@@ -58,17 +72,24 @@ def unpack(body):
               ('events', '<i2', length * 5, 2, (length, 5)),
               ('mask', '?', N_ACTIONS, 1, (N_ACTIONS,))]
     expected = _size(length)
-    if len(body) not in (expected, expected + 2):
+    extra = len(body) - expected
+    if extra not in (0, 2, STAGE.size, 2 + STAGE.size):
         raise ValueError('incorrect Actor input body size')
     row, offset = {}, _HEADER.size
     for name, dtype, count, itemsize, shape in layout:
         row[name] = np.frombuffer(body, dtype=dtype, count=count, offset=offset).reshape(shape)
         offset += count * itemsize
-    if len(body) > expected:
-        risk = float(np.frombuffer(body, dtype='<f2', count=1, offset=expected)[0])
+    if extra in (2, 2 + STAGE.size):
+        risk = float(np.frombuffer(body, dtype='<f2', count=1, offset=offset)[0])
         if not -1.0 <= risk <= 1.0:
             raise ValueError('invalid risk coefficient')
         row['risk_beta'] = risk
+        offset += 2
+    if extra >= STAGE.size:
+        magic, places, left, *scores = STAGE.unpack_from(body, offset)
+        if magic != _STAGE_MAGIC or places not in (1, 2) or left < 1 or not np.isfinite(scores).all():
+            raise ValueError('invalid stage state')
+        row['stage_state'] = (places, left, *scores)
     return dict(model=model.decode('ascii'), lookahead=bool(lookahead), encoded=row, _binary=True)
 
 
@@ -84,7 +105,7 @@ class SocketClient:
     def __init__(self, host, port, timeout):
         self.host, self.port, self.timeout = host, port, timeout
         self.socket = None
-        self.reads_risk = {}  # model -> whether its encoding reads risk_beta (the service's /inputs)
+        self.reads = {}  # model -> (reads risk_beta, reads stage_state), the service's /inputs
 
     def _read(self, count):
         data = bytearray()
@@ -98,9 +119,10 @@ class SocketClient:
     def decide(self, body):
         import socket
 
-        risk = getattr(body, 'risk', b'')
-        if risk and self._reads_risk(body[4:68].decode('ascii')):
-            body = bytes(body) + risk
+        risk, stage = getattr(body, 'risk', b''), getattr(body, 'stage', b'')
+        if risk or stage:
+            risky, staged = self._reads(body[4:68].decode('ascii'))
+            body = bytes(body) + (risk if risky else b'') + (stage if staged else b'')
         if self.socket is None:
             self.socket = socket.create_connection((self.host, self.port), self.timeout)
             self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -114,14 +136,17 @@ class SocketClient:
             raise ValueError('invalid inference action index')
         return {'index': value}
 
-    def _reads_risk(self, model):
-        """Whether ``model`` reads risk_beta, asked of the service once (only for a row that has one).
+    def _reads(self, model):
+        """Whether ``model`` reads risk_beta and stage_state, asked of the service once (only for a row
+        that has either).
 
         A service from before v4 answers 404 and one that cannot load the
-        model 400: both mean no. Without an answer it is no as well, kept for
-        the model: a service that does not answer must not cost a wait per decision.
+        model 400: both mean neither. Without an answer it is neither as well,
+        kept for the model: a service that does not answer must not cost a
+        wait per decision. A service from before the stage re-rank does not
+        name ``stage``: no.
         """
-        if model not in self.reads_risk:
+        if model not in self.reads:
             import http.client
             import json
 
@@ -132,16 +157,17 @@ class SocketClient:
                 response = connection.getresponse()
                 data = response.read()
             except (OSError, http.client.HTTPException):
-                self.reads_risk[model] = False
-                return False
+                self.reads[model] = (False, False)
+                return self.reads[model]
             finally:
                 connection.close()
             try:
-                answer = response.status == 200 and json.loads(data).get('risk_beta') is True
-            except ValueError:
-                answer = False
-            self.reads_risk[model] = answer
-        return self.reads_risk[model]
+                answer = json.loads(data) if response.status == 200 else {}
+                answer = (answer.get('risk_beta') is True, answer.get('stage') is True)
+            except (ValueError, AttributeError):
+                answer = (False, False)
+            self.reads[model] = answer
+        return self.reads[model]
 
     def close(self):
         if self.socket is not None:

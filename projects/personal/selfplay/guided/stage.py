@@ -25,7 +25,7 @@ The C engine (guided.fastgame) encodes its rows from the game's own scores and
 hand; their stage-dependent scalars (the score context, the horizon and the
 stage kind, and a v4 row's risk coefficient; the planes do not read the
 stage) are rewritten here with the encoder's arithmetic, and every row gets
-the encoder's ``risk_beta``, so both engines' rows are the same bytes.
+the encoder's ``risk_beta`` and ``stage_state``, so both engines' rows are the same bytes.
 """
 
 from dataclasses import replace
@@ -98,12 +98,12 @@ def rewrite(row, info, scores, hand_no, rounds, seat):
     """Rewrite a row's stage-dependent scalars (a C row encodes the game alone) as the encoder does under the stage.
 
     The first scalars, and a v4 row's last one (guided.encoding.RISK); the
-    row's ``risk_beta`` is the encoder's (guided.encoding.encode).
+    row's ``risk_beta`` and ``stage_state`` are the encoder's (guided.encoding.encode).
     """
     from .encoding import RISK
 
-    values, risk = _scalars(info["prior"], info["game"], info["games"], info["kind"], tuple(scores), hand_no,
-                            rounds, seat)
+    values, risk, state = _scalars(info["prior"], info["game"], info["games"], info["kind"], tuple(scores),
+                                   hand_no, rounds, seat)
     scalars = np.array(row["scalars"], copy=True)
     scalars[: len(values)] = values.astype(scalars.dtype)
     if len(scalars) > RISK:
@@ -113,16 +113,20 @@ def rewrite(row, info, scores, hand_no, rounds, seat):
         row.pop("risk_beta", None)
     else:
         row["risk_beta"] = risk
+    if state is None:
+        row.pop("stage_state", None)
+    else:
+        row["stage_state"] = state
     return row
 
 
 @lru_cache(maxsize=4096)
 def _scalars(prior, game, games, kind, scores, hand_no, rounds, seat):
-    """The encoder's first scalars and risk_beta under the stage; the same for a seat throughout a hand."""
+    """The encoder's first scalars, risk_beta and stage_state under the stage; the same for a seat throughout a hand."""
     from mahjong_ai.domain.types import StageKind
     from selfplay_core.encoding import _midranks, symlog
 
-    from .stage_value import risk_input
+    from .stage_value import risk_input, stage_state
 
     fields = context({"prior": prior, "game": game, "games": games, "kind": kind}, scores, hand_no, rounds)
     stage_scores = fields["stage_scores"]
@@ -145,4 +149,5 @@ def _scalars(prior, game, games, kind, scores, hand_no, rounds, seat):
     ], dtype=np.float32)
     values.flags.writeable = False
     # The game's scores are in base scores: training plays at a base score of 1.
-    return values, risk_input(fields["kind"], stage_scores, seat, current, total)
+    return (values, risk_input(fields["kind"], stage_scores, seat, current, total),
+            stage_state(fields["kind"], stage_scores, seat, current, total))

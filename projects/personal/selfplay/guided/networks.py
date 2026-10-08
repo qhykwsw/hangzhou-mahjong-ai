@@ -348,14 +348,66 @@ class HistoryEncoder(nn.Module):
         return (*result, belief) if return_belief else result
 
 
+class OutcomeHead(nn.Module):
+    """Per action, logits over the bins of the learner's score for the rest of the hand (guided.outcome).
+
+    Laid out as the policy's heads: each tile token's hidden layer
+    (``tile_hidden``) feeds that tile's discard (``discard``) and its four
+    claims (``claim``), the state token's (``state_hidden``) the 65 state
+    actions (``state``), B bins each; the result follows the canonical action
+    order, [batch, 231, B]. It reads the encoder's final tokens and feeds
+    nothing back, so the policy's logits are the Actor's without it. The
+    output layers start at zero (every action's distribution uniform); the
+    hidden layers are drawn from a fixed seed of their own (OUTCOME_SEED),
+    leaving the caller's random stream as it was.
+    """
+
+    def __init__(self, dim, bins):
+        super().__init__()
+        self.bins = tuple(float(b) for b in bins)
+        count = len(self.bins)
+        with torch.random.fork_rng(devices=[]):
+            torch.manual_seed(OUTCOME_SEED)
+            self.tile_hidden = nn.Linear(dim, dim)
+            self.state_hidden = nn.Linear(dim, dim)
+            self.discard = nn.Linear(dim, count)
+            self.claim = nn.Linear(dim, 4 * count)
+            self.state = nn.Linear(dim, 65 * count)
+        for layer in (self.discard, self.claim, self.state):
+            nn.init.zeros_(layer.weight)
+            nn.init.zeros_(layer.bias)
+
+    def forward(self, state, tiles):
+        count = len(self.bins)
+        hidden = F.gelu(self.tile_hidden(tiles))
+        discard = self.discard(hidden)
+        claims = self.claim(hidden[:, :33]).unflatten(-1, (4, count))
+        rest = self.state(F.gelu(self.state_hidden(state))).unflatten(-1, (65, count))
+        # Canonical selfplay_core.actions order, as Actor.forward's logits.
+        return torch.cat([discard, rest[:, :63], claims[:, :, 0], claims[:, :, 1], claims[:, :, 2],
+                          claims[:, :, 3], rest[:, 63:65]], dim=1)
+
+
+OUTCOME_SEED = 20261008
+OUTCOME_PREFIX = "outcome_head."
+
+
+def outcome_parameters(actor):
+    """The parameters of an Actor's outcome head (empty without one)."""
+    head = getattr(actor, "outcome_head", None)
+    return [] if head is None else list(head.parameters())
+
+
 def actor_options(config):
     """The optional Actor structures ``config`` turns on, as Actor keyword arguments.
 
     ``"belief_head": true`` adds the opponents' tile belief, ``"belief_head":
     "v2"`` the wider v2 belief, ``"suit_embedding": "shared"`` shares the
     suits' rank embeddings, ``"oracle_inputs": true`` adds the training-only
-    oracle inputs (Actor). Options at their defaults are dropped, so an Actor
-    without any keeps its original config, weights and exported files bit for bit.
+    oracle inputs, ``"outcome_head": {"bins": [...]}`` (or true: the default
+    bins) the per-action hand-outcome head (Actor). Options at their defaults
+    are dropped, so an Actor without any keeps its original config, weights
+    and exported files bit for bit.
     """
     options = {}
     belief = config.get("belief_head", False)
@@ -373,6 +425,11 @@ def actor_options(config):
         raise ValueError("oracle_inputs must be true or false")
     if oracle:
         options["oracle_inputs"] = True
+    outcome = config.get("outcome_head")
+    if outcome is not None and outcome is not False:
+        from .outcome import outcome_bins
+
+        options["outcome_head"] = {"bins": outcome_bins(outcome)}
     return options
 
 
@@ -408,7 +465,7 @@ def with_oracle_inputs(actor):
                        scalars=encoder.state_in.in_features, event_tail=encoder.event_embeddings[4].num_embeddings,
                        belief_head={1: True, 2: "v2"}.get(encoder.belief_version, False),
                        suit_embedding=encoder.suit_embedding,
-                       oracle_inputs=True)
+                       oracle_inputs=True, outcome_head=actor.outcome_spec)
     missing, unexpected = oracle.load_state_dict(actor.state_dict(), strict=False)
     if unexpected or any(not k.startswith(ORACLE_PREFIX) for k in missing):
         raise ValueError(f"cannot add oracle inputs: missing {missing}, unexpected {unexpected}")
@@ -511,10 +568,23 @@ class Actor(nn.Module):
     values kept from 1 to 0 so that the policy stops depending on them; every
     export strips them (guided.trial.export_actor) and every inference loader
     refuses an Actor that has them (guided.deployment.load_actor).
+
+    ``outcome_head`` ({"bins": [...]}, guided.outcome): ``outcome_head`` (an
+    OutcomeHead) predicts, for every action, the distribution of the learner's
+    score change for the rest of the current hand over B score bins in
+    base-score units (guided.outcome.DEFAULT_BINS by default):
+    ``forward(..., return_outcome=True)`` also returns its logits [batch, 231,
+    B], after the belief when both are asked for; ``return_outcome="detached"``
+    computes them on the encoder's tokens without gradient into the trunk. It
+    reads the final tokens and feeds nothing back, so the policy's logits are
+    bit for bit the Actor's without it; its output layers start at zero.
+    guided.outcome.outcome_loss trains it, guided.outcome.choose re-ranks
+    near-ties with it inside a stage (an artifact's meta.json
+    "outcome_rerank"); expand --outcome-head adds it to an exported Actor.
     """
 
     def __init__(self, dim=128, layers=4, heads=4, *, planes=N_PLANES, scalars=N_SCALARS, event_tail=4,
-                 belief_head=False, suit_embedding=None, oracle_inputs=False):
+                 belief_head=False, suit_embedding=None, oracle_inputs=False, outcome_head=None):
         super().__init__()
         self.dim, self.layers, self.heads = dim, layers, heads
         self.encoder = HistoryEncoder(dim, layers, heads, planes=planes, scalars=scalars, event_tail=event_tail,
@@ -523,8 +593,17 @@ class Actor(nn.Module):
         self.discard_head = nn.Linear(dim, 1)
         self.claim_head = nn.Linear(dim, 4)
         self.state_head = nn.Linear(dim, 65)
+        # The option as actor_options gives it ({"bins": [...]}), None without the head.
+        self.outcome_spec = None
+        if outcome_head is not None and outcome_head is not False:
+            from .outcome import outcome_bins
 
-    def forward(self, planes, scalars, events, return_belief=False, oracle=None):
+            self.outcome_spec = {"bins": outcome_bins(outcome_head)}
+            self.outcome_head = OutcomeHead(dim, self.outcome_spec["bins"])
+
+    def forward(self, planes, scalars, events, return_belief=False, oracle=None, return_outcome=False):
+        if return_outcome and self.outcome_spec is None:
+            raise ValueError("this Actor has no outcome head")
         if return_belief:
             state, tiles, belief = self.encoder(planes, scalars, events, return_belief=True, oracle=oracle)
         else:
@@ -546,7 +625,14 @@ class Actor(nn.Module):
             dim=-1,
         )
         assert logits.shape[-1] == N_ACTIONS
-        return (logits, belief) if return_belief else logits
+        if not return_outcome:
+            return (logits, belief) if return_belief else logits
+        if return_outcome == "detached":
+            state, tiles = state.detach(), tiles.detach()
+        elif return_outcome is not True:
+            raise ValueError('return_outcome must be False, True or "detached"')
+        outcome = self.outcome_head(state, tiles)
+        return (logits, belief, outcome) if return_belief else (logits, outcome)
 
 
 class PopArt(nn.Module):

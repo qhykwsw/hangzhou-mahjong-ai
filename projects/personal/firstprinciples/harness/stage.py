@@ -12,7 +12,13 @@ block by block with a reference version (by default its line's best).
 
   python -m harness.stage run <version> --kind semi|final --host <host> [--against <version>] [--stages N]
   python -m harness.stage run <name> --spec <policy.json> --kind semi|final --host <host> --against <version> [--stages N]
+  python -m harness.stage run <name> --weights <model id> --against <version> --kind ... --host ...
   python -m harness.stage list
+
+``--weights`` plays a model of the research model store by its id under
+``name`` without an evaluation record, e.g. a version with the stage re-rank
+switched on (``python -m guided.outcome variant <its artifact> <model store>``
+prints the id), paired with ``--against`` (e.g. the same version without it).
 
 A record holds the advance rate (semifinal: top two, a tie for second
 counting half; final: first), the paired difference with the reference and
@@ -185,10 +191,15 @@ def main(argv=None):
     r.add_argument("--against")
     r.add_argument("--stages", type=int, default=STAGES)
     r.add_argument("--spec", type=Path, help="a model policy (JSON) to play under the name given as version")
+    r.add_argument("--weights", help="play this model id of the model store as <version> (needs --against)")
     sub.add_parser("list")
     args = parser.parse_args(argv)
     if args.command == "run":
         spec = json.loads(args.spec.read_text()) if args.spec else None
+        if args.weights:  # a model of the store by its id, e.g. a re-rank variant (guided.outcome)
+            if spec is not None:
+                raise SystemExit("--spec 和 --weights 只能用一个")
+            spec = {"family": "model", "version": args.version, "parameters": {"weights": args.weights}}
         try:
             print(report(run(args.version, args.kind, args.host, args.against, args.stages, spec)))
         except E.Refused as exc:

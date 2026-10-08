@@ -3,6 +3,11 @@
 Linear layers use fp16; embeddings, normalization and residuals stay fp32.
 Different Metal kernels can round near ties differently from torch MPS.
 Changing this backend requires a new evaluation runtime and reference scores.
+
+An Actor with the outcome head (guided.networks.OutcomeHead) computes it with
+the same equation (``outcome``); given an artifact's stage re-rank options
+(``rerank``, guided.outcome) ``decide_reranked`` takes a batch's per-bin
+chances as a fifth input and re-ranks as guided.outcome.choose does.
 """
 
 import mlx.core as mx
@@ -11,7 +16,7 @@ import numpy as np
 
 
 class Actor:
-    def __init__(self, actor):
+    def __init__(self, actor, rerank=None):
         import torch
 
         if getattr(actor.encoder, "oracle_inputs", False):
@@ -68,6 +73,15 @@ class Actor:
         mx.eval(self.w, self.positions)
         self.logits = mx.compile(self.forward)
         self.decide = mx.compile(self.decision)
+        spec = getattr(actor, "outcome_spec", None)
+        self.outcome_bins = len(spec["bins"]) if spec else 0
+        if rerank:
+            if not self.outcome_bins:
+                raise ValueError("the stage re-rank needs an Actor with the outcome head")
+            from .outcome import choice_options
+
+            self.choice = choice_options(rerank)
+            self.decide_reranked = mx.compile(self.reranked_decision)
 
     def linear(self, x, name):
         return mx.addmm(
@@ -81,6 +95,19 @@ class Actor:
 
     def forward(self, planes, scalars, events):
         return self.outputs(planes, scalars, events)[0]
+
+    def outcome(self, state, tiles):
+        """The outcome head's logits [batch, 231, B] from the final tokens (guided.networks.OutcomeHead)."""
+        count = self.outcome_bins
+        hidden = self.linear(tiles, "outcome_head.tile_hidden")
+        hidden = nn.gelu(hidden.astype(mx.float32)).astype(mx.float16)
+        discard = self.linear(hidden, "outcome_head.discard")
+        claims = self.linear(hidden[:, :33], "outcome_head.claim").reshape(-1, 33, 4, count)
+        rest = self.linear(state, "outcome_head.state_hidden")
+        rest = nn.gelu(rest.astype(mx.float32)).astype(mx.float16)
+        rest = self.linear(rest, "outcome_head.state").reshape(-1, 65, count)
+        return mx.concatenate([discard, rest[:, :63], claims[:, :, 0], claims[:, :, 1], claims[:, :, 2],
+                               claims[:, :, 3], rest[:, 63:65]], axis=1)
 
     def believe(self, tiles):
         """The belief head's logits [batch, 34, 3] from the tile tokens (guided.networks.Actor)."""
@@ -111,9 +138,9 @@ class Actor:
         x = mx.concatenate([tiles + injected, state[:, None], x[:, 35:]], axis=1)
         return x, mx.concatenate([hands, rest], axis=-1), progress
 
-    def outputs(self, planes, scalars, events):
+    def outputs(self, planes, scalars, events, outcome=False):
         """(logits, belief logits: [batch, 3, 34] for v1, (tiles [batch, 7, 34], state [batch, 6]) for v2,
-        None without a belief head)."""
+        None without a belief head), and with ``outcome`` the outcome head's logits third."""
         if events.shape[1] > self.max_events:
             raise ValueError(
                 f"history exceeds {self.max_events} events; refusing truncation"
@@ -197,11 +224,11 @@ class Actor:
             ],
             axis=-1,
         )
-        if belief is None:
-            return logits, None
-        if self.belief_version == 2:
-            return logits, (belief.transpose(0, 2, 1), progress)
-        return logits, belief.transpose(0, 2, 1)
+        if belief is not None:
+            belief = (belief.transpose(0, 2, 1), progress) if self.belief_version == 2 else belief.transpose(0, 2, 1)
+        if outcome:
+            return logits, belief, self.outcome(state, tiles)
+        return logits, belief
 
     def decision(self, planes, scalars, events, mask):
         logits = self.forward(planes, scalars, events).astype(mx.float32)
@@ -209,4 +236,28 @@ class Actor:
         choices = mx.argmax(
             masked - mx.logsumexp(masked, axis=-1, keepdims=True), axis=-1
         )
+        return choices, mx.all(mx.any(mask, axis=-1)) & mx.all(mx.isfinite(logits))
+
+    def reranked_decision(self, planes, scalars, events, mask, utility):
+        """decision with the stage re-rank: guided.outcome.choose's equation on this backend."""
+        logits, _, outcome = self.outputs(planes, scalars, events, outcome=True)
+        logits, outcome = logits.astype(mx.float32), outcome.astype(mx.float32)
+        masked = mx.where(mask, logits, -1e9)
+        log_probs = masked - mx.logsumexp(masked, axis=-1, keepdims=True)
+        greedy = mx.argmax(log_probs, axis=-1)
+        options = self.choice
+        k = min(options["top_k"], log_probs.shape[-1])
+        order = mx.argsort(-log_probs, axis=-1)[:, :k]
+        top = mx.take_along_axis(log_probs, order, axis=-1)
+        probs = mx.exp(top)
+        before = mx.cumsum(probs, axis=-1) - probs
+        candidate = (mx.take_along_axis(mask, order, axis=-1) & (before < options["mass"])
+                     & (top >= top[:, :1] - options["margin"]))
+        dist = mx.softmax(mx.take_along_axis(outcome, order[..., None], axis=1), axis=-1)
+        value = mx.where(candidate, (dist * utility[:, None, :]).sum(-1), -mx.inf)
+        own = mx.softmax(mx.take_along_axis(outcome, greedy[:, None, None], axis=1)[:, 0], axis=-1)
+        own = (own * utility).sum(-1)
+        best = mx.argmax(value, axis=-1)
+        gain = mx.take_along_axis(value, best[:, None], axis=-1)[:, 0] - own
+        choices = mx.where(gain > options["min_gain"], mx.take_along_axis(order, best[:, None], axis=-1)[:, 0], greedy)
         return choices, mx.all(mx.any(mask, axis=-1)) & mx.all(mx.isfinite(logits))
