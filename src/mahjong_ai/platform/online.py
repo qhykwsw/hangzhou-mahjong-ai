@@ -272,6 +272,19 @@ def _id(value):
     return quote(str(value), safe="")
 
 
+def _transient(exc):
+    """Whether a platform failure (ApiError or ConnectionError) passes: throttling,
+    a server error, a room busy at a deal or settlement (the tournament endpoint
+    answers 404 TOURNAMENT_GONE or 5xx while the server reshuffles stages), a lost
+    connection. A live event outlasts these; only OUTAGE_SECONDS of them end it."""
+    return (
+        isinstance(exc, ConnectionError)
+        or exc.status == 429
+        or exc.status >= 500
+        or (exc.status == 404 and exc.code == "TOURNAMENT_GONE")
+    )
+
+
 def _redact(value):
     if isinstance(value, dict):
         return {
@@ -557,7 +570,18 @@ DIAG_COUNTERS = (
     "history_rebuilt",
     "late_passes_skipped",
     "policy_restarts",
+    "transient_errors",
 )
+# A table waits out throttling or an outage this long before it fails, as the
+# room loop does for the tournament endpoint.
+OUTAGE_SECONDS = 300.0
+# Between looks at a throttled or unreachable table: the client's own backoff
+# has already waited, and a window lasts only 1-3 s.
+TRANSIENT_WAIT = 0.5
+# A failed table restarts from its own record while the others play on; more
+# failures than this within TABLE_FAILURE_WINDOW seconds stop the run.
+TABLE_RESTARTS = 3
+TABLE_FAILURE_WINDOW = 120.0
 # A pass posted with less time than this left may land after its window closed,
 # and the server then counts it in our next window (the chi window after a peng
 # window), refusing the claim we meant there.  Timing out passes just the same.
@@ -950,6 +974,23 @@ class TournamentRunner:
             notify_thread.start()
         accepts_priority = "priority" in inspect.signature(self.client.request).parameters
         levels = {"low": 0, "medium": 1, "high": 2}
+
+        def look(path, **kwargs):
+            """GET ``path``, waiting out throttling and outages: a 429 on one
+            table must not stop the others (a GET is safe to repeat)."""
+            failing_since = None
+            while True:
+                try:
+                    return self.client.request("GET", path, **kwargs)
+                except (ApiError, ConnectionError) as exc:
+                    if not _transient(exc) or self.stop.is_set():
+                        raise
+                    failing_since = failing_since or time.monotonic()
+                    if time.monotonic() - failing_since > OUTAGE_SECONDS:
+                        raise
+                    diag["transient_errors"] += 1
+                    self.stop.wait(TRANSIENT_WAIT)
+
         last_snap = None
         last_key = None  # dedupe key of last_snap when it asked us to act
         fetched_seq = 0
@@ -1149,8 +1190,8 @@ class TournamentRunner:
             cursor = 0
             force_snapshot = False
             fetch_began = time.perf_counter()
-            res = self.client.request(
-                "GET", f"/api/games/{_id(gid)}/state?seq={cursor}", **({"priority": levels.get(priority, 2)} if accepts_priority else {})
+            res = look(
+                f"/api/games/{_id(gid)}/state?seq={cursor}", **({"priority": levels.get(priority, 2)} if accepts_priority else {})
             )
             fetch_ms = (time.perf_counter() - fetch_began) * 1000
             diag["fetch_" + (priority if priority in levels else "high")] += 1
@@ -1170,7 +1211,7 @@ class TournamentRunner:
                 log_fetch("pending", priority, res, None, fetch_ms, time.time())
                 continue
             if res.get("snapshot") is None:
-                res = self.client.request("GET", f"/api/games/{_id(gid)}/state?seq=0")
+                res = look(f"/api/games/{_id(gid)}/state?seq=0")
             snap = res.get("snapshot")
             if snap is None:
                 raise SnapshotError("full state response lacks snapshot")
@@ -1276,8 +1317,8 @@ class TournamentRunner:
                 diag["history_fetches"] += 1
                 # A decision waits on it; the routine refresh can wait for everyone else.
                 urgency = levels["high"] if deciding else levels["low"]
-                delta = self.client.request(
-                    "GET", f"/api/games/{_id(gid)}/state?seq={seq}", **({"priority": urgency} if accepts_priority else {})
+                delta = look(
+                    f"/api/games/{_id(gid)}/state?seq={seq}", **({"priority": urgency} if accepts_priority else {})
                 )
                 ingest(delta)
                 if delta.get("snapshot"):
@@ -1285,8 +1326,8 @@ class TournamentRunner:
                     snap = delta["snapshot"]
                     seq = max(seq, delta.get("seq", seq))
                 elif delta.get("seq", 0) > res.get("seq", 0):
-                    res = self.client.request(
-                        "GET", f"/api/games/{_id(gid)}/state?seq=0", **({"priority": levels.get(priority, 2)} if accepts_priority else {})
+                    res = look(
+                        f"/api/games/{_id(gid)}/state?seq=0", **({"priority": levels.get(priority, 2)} if accepts_priority else {})
                     )
                     if res.get("snapshot"):
                         snap = res["snapshot"]
@@ -1484,9 +1525,15 @@ class TournamentRunner:
                         seq = 1
             except ApiError as exc:
                 record.update(http_status=exc.status, error_code=exc.code)
-                if exc.status != 409:
+                if exc.status == 409:
+                    diag["rejected"] += 1
+                elif _transient(exc):
+                    # Throttled past the client's retries (not taken) or a server
+                    # error (perhaps taken): look again. The key stays seen, so
+                    # nothing is sent twice.
+                    diag["transient_errors"] += 1
+                else:
                     raise
-                diag["rejected"] += 1
                 force_snapshot = True
             except ConnectionError:
                 force_snapshot = True
@@ -1595,18 +1642,6 @@ class TournamentRunner:
         if seconds <= 0:
             raise ValueError("positive online time budget required")
         tid, scoped, _ = self.client.discover(tournament_id)
-
-        def transient(exc):
-            # The tournament endpoint occasionally answers 404 TOURNAMENT_GONE or
-            # 5xx while the server reshuffles stages; a live event must outlast
-            # that, so only a persistent failure ends the run.
-            return (
-                isinstance(exc, ConnectionError)
-                or exc.status == 429
-                or exc.status >= 500
-                or (exc.status == 404 and exc.code == "TOURNAMENT_GONE")
-            )
-
         if self.join:
             # Tournament detail is forbidden before registration for global tokens.
             for operation in ("register", "ready"):
@@ -1619,11 +1654,14 @@ class TournamentRunner:
                     except (ApiError, ConnectionError) as exc:
                         if isinstance(exc, ApiError) and exc.status == 409:
                             break
-                        if not transient(exc) or attempt == 4:
+                        if not _transient(exc) or attempt == 4:
                             raise
                         time.sleep(2 * (attempt + 1))
         futures, completed = {}, set()
+        failures = {}  # game id -> monotonic times its table failed lately
+        restarts = 0
         failing_since = None
+        me_failing_since = None
         last_join = 0.0
         waiting = True  # no table dealt yet: the next poll is what sees the deal
         accepts_retries = "retries" in inspect.signature(self.client.request).parameters
@@ -1641,10 +1679,10 @@ class TournamentRunner:
                             **({"retries": 0} if waiting and accepts_retries else {}),
                         )
                     except (ApiError, ConnectionError) as exc:
-                        if not transient(exc):
+                        if not _transient(exc):
                             raise
                         failing_since = failing_since or time.monotonic()
-                        if time.monotonic() - failing_since > 300:
+                        if time.monotonic() - failing_since > OUTAGE_SECONDS:
                             raise
                         # TOURNAMENT_GONE is most common while the room deals: ask
                         # again at once instead of sitting out the 1-2-4 s backoff.
@@ -1674,13 +1712,27 @@ class TournamentRunner:
                         except (ApiError, ConnectionError) as exc:
                             if isinstance(exc, ApiError) and exc.status == 409:
                                 pass
-                            elif not transient(exc):
+                            elif not _transient(exc):
                                 raise
                     for gid, future in list(futures.items()):
-                        if future.done():
-                            future.result()  # worker failures stop this run, never disappear
+                        if not future.done():
+                            continue
+                        del futures[gid]
+                        error = future.exception()
+                        if error is None:
                             completed.add(gid)
-                            del futures[gid]
+                            continue
+                        # The other tables play on; this one restarts from its own
+                        # record when the room lists it below. A table failing
+                        # again and again stops the run (never disappears).
+                        now = time.monotonic()
+                        failures[gid] = [
+                            t for t in failures.get(gid, []) if now - t < TABLE_FAILURE_WINDOW
+                        ] + [now]
+                        self._note_failure(gid, error)
+                        if len(failures[gid]) > TABLE_RESTARTS:
+                            future.result()
+                        restarts += 1
                     if not warmed:
                         # 只在开桌之前预热：此时没有窗口等着，预热占住线程池也无所谓；
                         # 房间已经在打就直接开桌，首次拉取自己建连。
@@ -1688,7 +1740,18 @@ class TournamentRunner:
                         if status != "running":
                             self._warm_workers(pool)
                     if status == "running":
-                        me = self.client.request("GET", "/api/me")
+                        try:
+                            me = self.client.request("GET", "/api/me")
+                        except (ApiError, ConnectionError) as exc:
+                            # Dealt tables play on; the room is listed again next poll.
+                            if not _transient(exc):
+                                raise
+                            me_failing_since = me_failing_since or time.monotonic()
+                            if time.monotonic() - me_failing_since > OUTAGE_SECONDS:
+                                raise
+                            self.stop.wait(1)
+                            continue
+                        me_failing_since = None
                         games = active_games(me, t, scoped)
                         if len(set(games) - completed) > self.workers:
                             raise RuntimeError(
@@ -1706,6 +1769,7 @@ class TournamentRunner:
                     waiting = (
                         not futures
                         and not completed
+                        and not failures
                         and status in ("registering", "running")
                         and time.time() >= start_at - START_LEAD
                     )
@@ -1717,5 +1781,24 @@ class TournamentRunner:
         return {
             "status": "stopped",
             "games_finished": len(completed),
+            "table_restarts": restarts,
             "output": str(self.root),
         }
+
+    def _note_failure(self, gid, error):
+        """Append a failed table to table-failures.jsonl (the run goes on)."""
+        try:
+            with (self.root / "table-failures.jsonl").open("a") as stream:
+                stream.write(
+                    json.dumps(
+                        {
+                            "t": round(time.time(), 3),
+                            "game_id": gid,
+                            "error": f"{type(error).__name__}: {error}"[:300],
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+        except OSError:
+            pass
