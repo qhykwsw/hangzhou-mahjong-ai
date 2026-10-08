@@ -9,7 +9,7 @@
 | `strategies/` | 可运行启发式、收益预测、PPO 与搜索基线 |
 | `research/` | 长期注册表、实验、分支迭代、共同大乱斗与主机可用性的状态转换，以及网页只读进度投影 |
 | `evaluation/` | 有放回对手抽样、配对评估、四座赛程与成绩 |
-| `execution/` | 模型配置、会话、依赖沙箱、资源与进程调度；`remote.py` 远程主机的同步、批量派发、探测与大乱斗抢占训练，`model_seat.py`/`model_service.py` 模型座位（可带一个按阶段比分切换的第二个模型，目前只在 `harness.stage` 的模拟阶段里用）与本机批量推理服务 |
+| `execution/` | 模型配置、会话、依赖沙箱、资源与进程调度；`remote.py` 远程主机的同步、批量派发、探测与大乱斗抢占训练，`model_seat.py`/`model_service.py` 模型座位（可带一个按阶段比分切换的第二个模型，目前只在 `harness.stage` 的模拟阶段里用；平台不下发阶段累计比分，切换在正式赛不会触发。`stage_view` 决定模型看到的阶段：`platform` 只留平台客户端给的阶段类型与本场比分、局数，`blind` 再把阶段类型当作海选）与本机批量推理服务 |
 | `persistence/` | SQLite 事务、幂等回执和冻结工件 |
 | `platform/` | 导出、官方协议与牌谱审计 |
 | `interfaces/` | CLI、研究 MCP、HTTP 与网页 |

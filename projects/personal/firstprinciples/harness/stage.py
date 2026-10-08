@@ -32,10 +32,12 @@ A model policy that is no recorded version (--spec, e.g. one that switches
 between two models by the stage's score, model_seat.Switch) plays under a
 name of its own and pairs with the version given. Its jobs are keyed by the
 spec and the runtime it plays on, so they are never another spec's. A seat
-with a switch is newer than the pool's runtime: it plays on the pool's
+with a switch or a stage view (model_seat.STAGE_VIEWS, e.g. the stage as the
+platform's client shows it) is newer than the pool's runtime: it plays on the pool's
 runtime with the repository's model seat files (seat_runtime), where the
 other three seats, and a seat without a switch, play exactly as on the pool's
-own, so it pairs with versions played there. Its record keeps the spec and
+own, so it pairs with versions played there (two specs on the same stages
+pair with each other too, block by block). Its record keeps the spec and
 the share of its decisions made by the second model.
 """
 import argparse
@@ -125,7 +127,7 @@ def custom(name, spec, t):
     missing = [w[:12] for w in sorted(served_weights(spec)) if not (E.MODELS / w).is_dir()]
     if missing:
         raise E.Refused(f"模型库里没有 {', '.join(missing)}")
-    if spec["parameters"].get("switch"):
+    if spec["parameters"].get("switch") or spec["parameters"].get("stage_view"):
         t = dict(t, runtime_path=seat_runtime(t))
     key = hashlib.sha256(json.dumps([spec, Path(t["runtime_path"]).name], sort_keys=True).encode()).hexdigest()
     return spec, t, f"-spec{key[:12]}"

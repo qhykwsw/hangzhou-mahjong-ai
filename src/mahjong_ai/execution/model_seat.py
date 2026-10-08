@@ -9,6 +9,10 @@ A seat may hold a second model and a rule for when to play it instead
 (``parameters["switch"]`` of a model policy, see Switch); the rule reads the
 observation's stage and nothing else. Without one a seat sends exactly what it
 did before switching existed.
+
+A seat may also show its model another view of the stage
+(``parameters["stage_view"]``, see STAGE_VIEWS); without one the model sees
+the observation as it is.
 """
 
 import http.client
@@ -19,6 +23,7 @@ import re
 import sys
 import threading
 import time
+from dataclasses import replace
 from functools import lru_cache
 from urllib.parse import urlparse
 
@@ -54,6 +59,24 @@ def _encoder():
             found = (encode, action_index)
         _ENCODER.append(found)
     return _ENCODER[0]
+
+
+# What a seat's model is shown of the stage (parameters["stage_view"]):
+#   platform  what the official client sends (platform/official.py): the stage
+#             kind, number and tiebreak flag with this game's scores and hand
+#             of its rounds; no stage totals, ranks or stage horizon
+#   blind     the platform's view as a qualifier outside a tiebreak, the only
+#             stage the RL line's models were trained on
+STAGE_VIEWS = ("platform", "blind")
+
+
+def stage_view(observation, view):
+    """The observation with its stage as ``view`` shows it (STAGE_VIEWS)."""
+    ctx = replace(observation.stage, stage_scores=None, rank_by_seat=None,
+                  stage_round_no=None, stage_rounds_total=None)
+    if view == "blind":
+        ctx = replace(ctx, kind=StageKind.QUALIFIER, in_tiebreak=False)
+    return replace(observation, stage=ctx)
 
 
 # Places that advance from a stage: a semifinal's top two, a final's winner
@@ -145,8 +168,11 @@ class Switch:
 
 
 class ModelPolicy:
-    def __init__(self, weights, version, action_seconds=10.0, switch=None):
+    def __init__(self, weights, version, action_seconds=10.0, switch=None, view=None):
+        if view is not None and view not in STAGE_VIEWS:
+            raise ValueError(f"stage_view must be one of {STAGE_VIEWS}")
         self.weights, self.version, self.action_seconds = weights, version, action_seconds
+        self.view = view
         self.stats = {"actions": 0, "timeouts": 0, "errors": 0, "elapsed_seconds": 0.0,
                       "compute_seconds": 0.0, "ipc_seconds": 0.0, "fallback_actions": 0}
         # A second model and when to play it; its decisions are counted apart.
@@ -187,16 +213,17 @@ class ModelPolicy:
                 self.stats["alt_actions"] += 1
             if self.connection is None:
                 self._connect()
+            shown = observation if self.view is None else stage_view(observation, self.view)
             codec = encoder()
             if codec:
                 encode, action_index = codec
-                row = encode(observation, lookahead=True)
+                row = encode(shown, lookahead=True)
                 from selfplay_core.wire import pack as pack_inputs
 
                 body = pack_inputs(weights, row, lookahead=True)
                 reply = self.connection.decide(body)
             else:
-                data, _ = observation_payload(observation, None)
+                data, _ = observation_payload(shown, None)
                 body = json.dumps({"model": weights, "observation": data})
                 self.connection.request("POST", "/act", body, {"Content-Type": "application/json"})
                 response = self.connection.getresponse()
