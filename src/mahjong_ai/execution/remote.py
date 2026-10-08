@@ -366,10 +366,13 @@ def job_inputs(task):
 
 
 def model_weights(task):
+    from mahjong_ai.execution.model_seat import served_weights
+
     return {
-        spec["parameters"]["weights"]
+        weights
         for spec in task.get("policies", {}).values()
         if spec.get("family") == "model"
+        for weights in served_weights(spec)
     }
 
 

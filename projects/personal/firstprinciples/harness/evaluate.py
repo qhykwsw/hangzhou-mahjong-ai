@@ -962,6 +962,9 @@ def _collect(value, scores, stats, places=None):
         places.update((b, 4 - g) for b, g in zip(focal["group_blocks"], focal["group_means"]))
     for key in stats:
         stats[key] += int(focal.get(key) or 0)
+    for key in ("actions", "alt_actions"):  # a seat that switches models (harness.stage --spec)
+        if key in focal:
+            stats[key] = stats.get(key, 0) + int(focal[key])
 
 
 def _job_env(pool):
@@ -976,7 +979,7 @@ def _play_local(pool, attempt_id, spec, blocks, seed, label):
     """Run the jobs as local processes, the way the research executor does."""
     import subprocess
 
-    from mahjong_ai.execution.model_seat import ENCODER_ENV
+    from mahjong_ai.execution.model_seat import ENCODER_ENV, served_weights
     from mahjong_ai.execution.model_service import SERVER_ENV, ModelService
 
     runtime = pool["runtime_path"]
@@ -984,7 +987,7 @@ def _play_local(pool, attempt_id, spec, blocks, seed, label):
     fingerprint = subprocess.run(
         [sys.executable, "-c", "from mahjong_ai.persistence.artifacts import runtime_fingerprint;print(runtime_fingerprint())"],
         env=env, capture_output=True, text=True, check=True).stdout.strip()
-    weights = {m["parameters"]["weights"] for m in [*pool["members"].values(), spec] if m.get("family") == "model"}
+    weights = {w for m in [*pool["members"].values(), spec] if m.get("family") == "model" for w in served_weights(m)}
     if weights:
         service = _services.setdefault("local", ModelService(root=MODELS, log=LOCAL / "model-server.log"))
         service.warm(weights)

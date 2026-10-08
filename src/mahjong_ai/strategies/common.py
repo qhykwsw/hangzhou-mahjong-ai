@@ -464,12 +464,17 @@ class PolicySpec:
             return
         if self.family == "model":
             # An exported Actor served by the host's inference service,
-            # addressed by the SHA-256 of its weights.
+            # addressed by the SHA-256 of its weights; "switch" adds a second
+            # Actor and when to play it (model_seat.Switch).
             weights = self.parameters.get("weights")
-            if set(self.parameters) != {"weights"} or not (
+            if set(self.parameters) - {"switch"} != {"weights"} or not (
                 isinstance(weights, str) and len(weights) == 64
             ):
                 raise ValueError("model policy requires exactly its weights SHA-256")
+            if "switch" in self.parameters:
+                from mahjong_ai.execution.model_seat import check_switch
+
+                check_switch(self.parameters["switch"])
             return
         if self.family not in ("rule", "rl"):
             raise ValueError("unknown builtin policy family")
@@ -517,7 +522,11 @@ class PolicySpec:
         if self.family == "model":
             from mahjong_ai.execution.model_seat import ModelPolicy
 
-            return ModelPolicy(self.parameters["weights"], self.version)
+            return ModelPolicy(
+                self.parameters["weights"],
+                self.version,
+                switch=self.parameters.get("switch"),
+            )
         if self.family == "rule":
             return RulePolicy(
                 version=self.version, program=self.program, **self.parameters
