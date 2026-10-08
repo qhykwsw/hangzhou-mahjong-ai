@@ -4,7 +4,7 @@
 
 ## 固定不变
 
-- Actor 的网络结构和观察编码。`ctx.actor` 从本方案线的固定起点加载；返回的权重必须能严格载入同一结构，否则本次尝试记为崩溃。起点可以带可选结构（起点 `meta.json` 的 `config`，如信念头、花色共享嵌入，见 [guided README](../guided/README.md) 的「Actor 的可选结构」），`ctx.new_actor()` 与导出沿用它；带信念头（`belief_head`）时 `actor(..., return_belief=True)` 另返回三家对手手牌的 3×34 logits，方案可用行里的 `oracle_planes` 经 `guided.networks.belief_target` 监督；`"belief_head": "v2"` 时另返回的是 `BeliefV2(tiles [n, 7, 34], state [n, 6])`，目标用 `guided.networks.belief_target_v2(oracle_planes, oracle_scalars, opp_waits)`，`opp_waits` 由 `critic_features` 调用 `guided.encoding.opponent_waits(state, seat)` 加进行里（或直接用钩子 `guided.encoding:belief_features`）。起点带 oracle 输入（`oracle_inputs`）时见「Oracle 输入」；它只在训练里存在，导出时剥离，所以返回的权重带不带这部分参数都能导出。
+- Actor 的网络结构和观察编码。`ctx.actor` 从本方案线的固定起点加载；返回的权重必须能严格载入同一结构，否则本次尝试记为崩溃。起点可以带可选结构（起点 `meta.json` 的 `config`，如信念头、花色共享嵌入，见 [guided README](../guided/README.md) 的「Actor 的可选结构」），`ctx.new_actor()` 与导出沿用它；带信念头（`belief_head`）时 `actor(..., return_belief=True)` 另返回三家对手手牌的 3×34 logits，方案可用行里的 `oracle_planes` 经 `guided.networks.belief_target` 监督；`"belief_head": "v2"` 时另返回的是 `BeliefV2(tiles [n, 7, 34], state [n, 6])`，目标用 `guided.networks.belief_target_v2(oracle_planes, oracle_scalars, opp_waits)`，`opp_waits` 由 `critic_features` 调用 `guided.encoding.opponent_waits(state, seat)` 加进行里（或直接用钩子 `guided.encoding:belief_features`）。起点带 oracle 输入（`oracle_inputs`）时见「Oracle 输入」；它只在训练里存在，导出时剥离，所以返回的权重带不带这部分参数都能导出。起点带结果分布头（`outcome_head`）时，`actor(..., return_outcome=True)` 另返回逐动作的本手结果分布 logits [n, 231, B]（同时要信念时排在信念之后；`return_outcome="detached"` 不回传到主干），训练见「结果分布头」。
 - 游戏环境、规则和奖励：每局结束时，学习座位得到该局桌面分（除以底分）。
 - 教师：默认是冻结规则包里的规则冠军（`ctx.teacher`），方案可以用 `cfg["teacher"]` 换成 `ctx.teachers` 里的任一规则，或 `ctx.catalog` 里的模型。训练对手由方案通过 `cfg["opponents"]` 选择，默认是本次迭代冻结的评估对手（最近一次共同大乱斗前三名，可能包含 RL 模型）；harness 可以在 `ctx.catalog` 里另外提供冻结版本供方案选作对手或教师；没有评估对手时用规则包里的规则代表。
 - 时间预算：从 `train` 被调用开始计时，到 `ctx.deadline` 截止；超过宽限期，进程被强制结束。只按局数限额的 harness（例如迭代线）把截止时刻设得很远，只用来防卡死。
@@ -200,6 +200,17 @@ Suphx 式 oracle guiding（[ADR-0018](../../../../docs/adr/0018-oracle-guided-po
 评估时不调用任何钩子，Actor 取概率最大的动作。
 
 在同一学习步里多次采集且 Actor、对手权重均不变时，可用 `with guided.collection_session.InferenceSession(actor) as session`，将 `inference_session=session` 传给各次 `ctx.collect`。会话只复用设备端推理快照与 CUDA Graph；每次采集仍创建独立游戏和规则策略，保持各自的 seed、完整收尾与预算统计。参数、buffer、模型对象或推理配置在会话内改变会报错。必须在训练更新前退出会话；不能用 `.data` 等绕过版本计数的方式修改会话内权重。推理快照与 CUDA Graph 会跨学习步保留（带不带会话都一样），每次采集开始时把 Actor 当前的全部参数与 buffer 原位复制进快照再复用，对手、推理配置或结构变了才重建；这部分显存在训练期间一直占用。
+
+## 结果分布头（outcome head）
+
+- 结构选项 `"outcome_head": {"bins": [...]}`（`guided.networks.OutcomeHead`，分箱与损失在 `guided.outcome`）。维护者用 `python -m guided.expand <起点> <模型库> --outcome-head` 给起点加上它（零初始化，logits 与原起点逐位相同）；它不回注主干，所以只训练它不会改变策略。导出照常带着它和它的参数。
+- 目标是该动作之后本手剩余部分学习座位的得分变化（基础分为单位）。分数只在本手结算时变动，所以就是这一手的结算分：一行所在这一手的 `reward` 之和（`reward` 只记在每手最后一个决策上）。
+- 每行哪个动作配哪个得分：
+  - 没有偏离的行（`deviated` 为假，或不开 `playout_baseline`）：`action` 配本手结算分。
+  - `cfg["vine"]` 下的偏离行：复制局走的是 `action`（采样动作），配该行的 `playout`；对局本身在这里走的是 argmax，配本手结算分，但行里没有记 argmax 的编号，要用的话用采集时的 Actor 在该行重新算。
+  - 只开 `playout_baseline`（不开 vine）的偏离行：对局本身走 `action`，配本手结算分；复制局走 argmax，配 `playout`（argmax 同样要重新算）。
+- 损失：`guided.outcome.outcome_loss(outcome_logits, actions, scores, bins, weights=None)`，即所给动作在该得分分箱上的交叉熵（`guided.outcome.bin_index` 把得分换成类别，`bins` 取 `actor.outcome_spec["bins"]`，即起点 `meta.json` 里 `config["outcome_head"]["bins"]`，`--outcome-head` 默认是 `guided.outcome.DEFAULT_BINS`）。头的参数用 `guided.networks.outcome_parameters(actor)` 取；用 `return_outcome="detached"` 时损失只训练头，用 `True` 时也会回传到主干（相当于辅助任务，会改变策略）。
+- 头只在推理时由维护者打开的阶段重排使用（导出目录 `meta.json` 的 `outcome_rerank`，见 [guided README](../guided/README.md)），训练和评估的采集不读它。
 
 ## 约定
 

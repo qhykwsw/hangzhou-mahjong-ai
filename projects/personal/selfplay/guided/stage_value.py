@@ -35,6 +35,11 @@ the wider one is). Choices:
     in [-1, 1];
   - no beta (None, an input of 0) outside a semifinal or a final or without
     stage scores: free play and the development set hold 0.
+
+The same rows carry their ``stage_state`` (stage_state: the places that
+count, the hands left with this one and the four totals from the learner in
+turn order), which the stage re-rank of an Actor with the outcome head reads
+(guided.outcome); it is not an Actor input.
 """
 from functools import lru_cache
 import math
@@ -124,3 +129,24 @@ def risk_of(ctx, base_score=1):
         return None
     current, total = ctx.effective_horizon
     return risk_input(ctx.kind, tuple(s / base_score for s in ctx.stage_scores), ctx.seat, current, total)
+
+
+def stage_state(kind, scores, seat, current, total):
+    """A row's ``stage_state``: (places, hands left, the four totals from ``seat`` in turn order), or None.
+
+    ``scores``: the four stage totals by seat in base scores; ``current``,
+    ``total``: the stage horizon. None outside a semifinal or a final (as
+    risk_input). Hands left count this hand, at least 1.
+    """
+    places = PLACES.get(kind)
+    if places is None or scores is None or len(scores) != 4:
+        return None
+    return (places, max(1, total - current + 1), *(float(scores[(seat + k) % 4]) for k in range(4)))
+
+
+def stage_state_of(ctx, base_score=1):
+    """stage_state of an observation's StageContext (obs.stage, obs.base_score)."""
+    if PLACES.get(ctx.kind) is None or ctx.stage_scores is None:
+        return None
+    current, total = ctx.effective_horizon
+    return stage_state(ctx.kind, tuple(s / base_score for s in ctx.stage_scores), ctx.seat, current, total)
