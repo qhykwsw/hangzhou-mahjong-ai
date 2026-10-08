@@ -247,7 +247,12 @@ def application(project, tailscale_url=None):
                 if line.strip():
                     r = json.loads(line)
                     # a reference played again replaces its earlier record
-                    latest.setdefault(r.get("pool"), {})[r["id"]] = r
+                    records = latest.setdefault(r.get("pool"), {})
+                    before = records.get(r["id"])
+                    if before and before.get("proxy") and not r.get("proxy"):
+                        # A later record (a rejudge) keeps the version's proxy tables: same version, same tables.
+                        r = dict(r, proxy=before["proxy"])
+                    records[r["id"]] = r
         shown_only = set()
         for folder in (lines_root / "rebase").glob("*-unrecorded"):
             for path in folder.glob("*.json"):
@@ -300,7 +305,7 @@ def application(project, tailscale_url=None):
                     row["rebased"] = {"old_score": r["rebased"].get("old_score")}
                 if r.get("refreshed"):
                     row["refreshed"] = {"old_score": r["refreshed"].get("old_score")}
-                if r.get("rejudged"):
+                if r.get("rejudged") and not r.get("override"):  # a user's verdict replaces the rejudge note
                     row["rejudged"] = {k: r["rejudged"].get(k) for k in ("old_status", "old_games", "old_score")}
                 rows.append(row)
             pools.append({"id": pool_id, "first_at": min(r["finished_at"] for r in records.values()),

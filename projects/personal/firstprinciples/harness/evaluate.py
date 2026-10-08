@@ -829,6 +829,8 @@ def rejudge(attempt_id, host=None, seed=None, against=None, seeds=None):
     if verdict == "keep":
         record["reference"] = against_platform(record)
         record["proxy"] = proxy_tables(attempt_id, old["spec"], host, champion)
+    elif old.get("proxy"):
+        record["proxy"] = old["proxy"]  # the version's proxy tables stand whatever the verdict
     with records_path().open("a") as f:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
     mark_reported([record])
