@@ -38,7 +38,7 @@ from . import evaluate as E
 
 sys.path.insert(0, str(E.REPO / "projects/personal/selfplay"))
 from guided import recipe_jobs, remote  # noqa: E402
-from mahjong_ai.execution.remote import opponent_specs  # noqa: E402
+from mahjong_ai.execution.remote import SERVICE_PORT, opponent_specs  # noqa: E402
 
 # The budget is training hands (16 per game), so an attempt trains the same
 # amount on any host. The agent chooses it per attempt up to MAX_HANDS (start
@@ -608,6 +608,11 @@ def train(state):
     if not (job / "launch-train.json").exists():
         # A fresh launch (the first, or after the work was lost): nothing left from an earlier run.
         remote.execute(host, f"import shutil\nshutil.rmtree({remote_job!r}, ignore_errors=True)", timeout=120)
+    # The host's inference service (evaluations; training does not use it) keeps the
+    # GPU memory its batches grew to: 5 GB on the 4070 after one evaluation, which with
+    # the trainer's cap overran the 12 GB card and stalled 257. The next evaluation starts it again.
+    remote.execute(host, "import subprocess\n"
+                   f"subprocess.run(['pkill','-f','guided.model_server .*--port {SERVICE_PORT}'])", timeout=120)
     opponents, offered, runtime = training_opponents(host)
     prebuild_fastgame(host, setup_["code"], runtime)
     # What this attempt could choose from, as the agent saw it.
