@@ -124,8 +124,14 @@ def standings(roster, receipts):
                 row["hand_appearances"] += 1
                 row["hand_utility_sum"] += 4 - ranks[seat]
                 row["hand_score_sum"] += delta[seat]
+            execution = receipt.get("execution", [{}] * 4)[seat]
             for key in ("errors", "timeouts", "fallback_actions"):
-                row[key] += receipt.get("execution", [{}] * 4)[seat].get(key, 0)
+                row[key] += execution.get(key, 0)
+            if "alt_actions" in execution:
+                # A model seat that switches models (model_seat.Switch): its
+                # decisions, and those its second model made.
+                for key in ("actions", "alt_actions"):
+                    row[key] = row.get(key, 0) + execution.get(key, 0)
     for row in rows.values():
         # 只有每一场都带分数时才给出场均分，避免把缺分的回执当成 0 分。
         row["mean_score"] = (
