@@ -471,11 +471,16 @@ def test_the_graph_path_feeds_the_learner_the_rows_oracle(rules, monkeypatch):
     assert any(len(key[3]) == 3 for key in graphs.graphs) and any(len(key[3]) == 2 for key in graphs.graphs)
 
 
-def test_the_gpu_probe_passes_on_the_cpu_stand_in():
+@pytest.mark.parametrize("belief_head", [False, True, "v2"])
+def test_the_gpu_probe_passes_on_the_cpu_stand_in(belief_head):
     """guided.probe_oracle_graphs (the CUDA check for the maintainer) on CpuGraphs, so its logic stays sound."""
     from guided.probe_oracle_graphs import check, passed
 
     torch.manual_seed(23)
-    actor = trained(Actor(32, 2, 4)).eval()
+    actor = trained(Actor(32, 2, 4, belief_head=belief_head)).eval()
+    with torch.no_grad():  # the beliefs reach the policy
+        for name in ("belief_in", "belief_state_in"):
+            if hasattr(actor.encoder, name):
+                torch.nn.init.normal_(getattr(actor.encoder, name).weight, std=0.5)
     report = check(actor, CpuGraphs(), "cpu", 8)
     assert passed(report) and report["argmax_agree"] == report["refreshed"] == report["plain_agree"] == 1.0

@@ -52,6 +52,19 @@ class Actor:
         self.max_events = actor.encoder.max_events
         # The block before which the belief head feeds the tile tokens (None without one).
         self.belief_layer = actor.encoder.belief_layer
+        self.belief_version = actor.encoder.belief_version
+        if self.belief_version == 2:
+            # As torch computes them (networks.HistoryEncoder._belief_v2): v1's leading
+            # channels of the tile head's output layer and belief_in by their own matmuls.
+            from .networks import BELIEF_V1_TILES as k
+
+            for name, parts in (("encoder.belief_head.3.weight", (slice(None, k), slice(k, None))),
+                                ("encoder.belief_head.3.bias", (slice(None, k), slice(k, None))),
+                                ("encoder.belief_in.weight", ((slice(None), slice(None, k)),
+                                                              (slice(None), slice(k, None))))):
+                whole = np.asarray(self.w.pop(name))
+                for i, part in enumerate(parts):
+                    self.w[f"{name}.{i}"] = mx.array(np.ascontiguousarray(whole[part]))
         mx.eval(self.w, self.positions)
         self.logits = mx.compile(self.forward)
         self.decide = mx.compile(self.decision)
@@ -75,8 +88,32 @@ class Actor:
         h = nn.gelu(h.astype(mx.float32)).astype(mx.float16)
         return self.linear(h, "encoder.belief_head.3")
 
+    def believe_v2(self, x):
+        """v2's beliefs at the belief block and the tokens with them added (networks.HistoryEncoder._belief_v2).
+
+        Returns (tokens, tile logits [batch, 34, 7], state logits [batch, 6]).
+        """
+        w = self.w
+        tiles, state = x[:, :34], x[:, 34]
+        h = self.linear(self.norm(tiles, "encoder.belief_head.0"), "encoder.belief_head.1")
+        h = nn.gelu(h.astype(mx.float32)).astype(mx.float16)
+        out = "encoder.belief_head.3"
+        hands = mx.addmm(w[out + ".bias.0"], h, w[out + ".weight.0"].T)
+        rest = mx.addmm(w[out + ".bias.1"], h, w[out + ".weight.1"].T)
+        p = self.linear(self.norm(state, "encoder.belief_state_head.0"), "encoder.belief_state_head.1")
+        p = nn.gelu(p.astype(mx.float32)).astype(mx.float16)
+        progress = self.linear(p, "encoder.belief_state_head.3")
+        injected = mx.addmm(
+            w["encoder.belief_in.bias"], mx.sigmoid(hands.astype(mx.float32)).astype(mx.float16),
+            w["encoder.belief_in.weight.0"].T,
+        ) + mx.sigmoid(rest.astype(mx.float32)).astype(mx.float16) @ w["encoder.belief_in.weight.1"].T
+        state = state + self.linear(mx.sigmoid(progress.astype(mx.float32)), "encoder.belief_state_in")
+        x = mx.concatenate([tiles + injected, state[:, None], x[:, 35:]], axis=1)
+        return x, mx.concatenate([hands, rest], axis=-1), progress
+
     def outputs(self, planes, scalars, events):
-        """(logits, belief logits [batch, 3, 34] or None without a belief head)."""
+        """(logits, belief logits: [batch, 3, 34] for v1, (tiles [batch, 7, 34], state [batch, 6]) for v2,
+        None without a belief head)."""
         if events.shape[1] > self.max_events:
             raise ValueError(
                 f"history exceeds {self.max_events} events; refusing truncation"
@@ -109,7 +146,9 @@ class Actor:
         )[:, None, None, :]
         belief = None
         for layer in range(self.layers):
-            if layer == self.belief_layer:
+            if layer == self.belief_layer and self.belief_version == 2:
+                x, belief, progress = self.believe_v2(x)
+            elif layer == self.belief_layer:
                 belief = self.believe(x[:, :34])
                 injected = self.linear(mx.sigmoid(belief.astype(mx.float32)), "encoder.belief_in")
                 x = mx.concatenate([x[:, :34] + injected, x[:, 34:]], axis=1)
@@ -158,7 +197,11 @@ class Actor:
             ],
             axis=-1,
         )
-        return logits, None if belief is None else belief.transpose(0, 2, 1)
+        if belief is None:
+            return logits, None
+        if self.belief_version == 2:
+            return logits, (belief.transpose(0, 2, 1), progress)
+        return logits, belief.transpose(0, 2, 1)
 
     def decision(self, planes, scalars, events, mask):
         logits = self.forward(planes, scalars, events).astype(mx.float32)

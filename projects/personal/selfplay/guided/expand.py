@@ -2,7 +2,7 @@
 shared suits start from a fit.
 
     python -m guided.expand <Actor artifact dir or guided-v1 checkpoint> <models root> \
-        [--encoding guided-current-hand-v3 | guided-current-hand-v4] [--belief-head] [--share-suits] \
+        [--encoding guided-current-hand-v3 | guided-current-hand-v4] [--belief-head [v1 | v2]] [--share-suits] \
         [--oracle-inputs]
 
 A wider encoding appends planes and scalars and may give the events' last
@@ -16,7 +16,13 @@ learns to use the new inputs. ``--belief-head`` and ``--share-suits`` keep
 the source's encoding unless ``--encoding`` is given. ``--belief-head`` adds the opponents' tile belief (networks.Actor): its output layer
 and the projection that feeds it back start at zero, so the logits stay the
 source's bit for bit; its hidden layer is drawn from a fixed seed (a dead
-zero layer would never learn). ``--share-suits`` is the one step that does
+zero layer would never learn). ``--belief-head v2`` adds the wider v2 belief
+(networks.Actor) the same way, or widens a v1 head to it: the v1 head's hidden
+layers, its three output channels and belief_in's three input columns become
+v2's leading ones (computed by their own matmuls, so bit for bit as before),
+every new output row, injection column and the state head's output layer and
+injection start at zero, the state head's hidden layer from the fixed seed.
+``--share-suits`` is the one step that does
 change decisions: the Actor's per-tile embeddings become shared-suit tables
 (networks.SuitEmbedding), started at the least-squares additive fit of the
 source's tables (rank: the mean over the three suits; suit: its mean over the
@@ -38,24 +44,34 @@ import tempfile
 from . import bootstrap  # noqa: F401
 
 
-def _belief_weights(config):
-    """The belief head's tensors for an Actor of ``config``: output layer and belief_in zero."""
+def _belief_weights(config, source):
+    """The belief head's tensors for an Actor of ``config``: outputs and injections zero.
+
+    Hidden layers come from a fixed seed, except that a v1 head in the
+    ``source`` weights going to v2 keeps its hidden layers, and its output
+    channels and belief_in's input columns (and bias) as v2's leading ones.
+    """
     import torch
-    from .networks import actor_of, actor_options
+    from .networks import BELIEF_V1_TILES, actor_of, actor_options
 
     # A fixed seed: the same source always gives the same artifact.
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(0)
         template = actor_of(config["encoding"], config["dim"], config["layers"], config["heads"],
                             **actor_options(config))
-    weights = {
-        k: v.detach().clone()
-        for k, v in template.state_dict().items()
-        if k.startswith(("encoder.belief_head.", "encoder.belief_in."))
-    }
-    for name in ("encoder.belief_head.3.weight", "encoder.belief_head.3.bias",
-                 "encoder.belief_in.weight", "encoder.belief_in.bias"):
-        weights[name].zero_()
+    weights = {k: v.detach().clone() for k, v in template.state_dict().items() if k.startswith("encoder.belief_")}
+    for name, value in weights.items():
+        if name.startswith(("encoder.belief_head.3.", "encoder.belief_in.",
+                            "encoder.belief_state_head.3.", "encoder.belief_state_in.")):
+            value.zero_()
+    if config["belief_head"] == "v2" and "encoder.belief_head.3.weight" in source:
+        k = BELIEF_V1_TILES
+        for name in ("0.weight", "0.bias", "1.weight", "1.bias"):
+            weights["encoder.belief_head." + name] = source["encoder.belief_head." + name].clone()
+        weights["encoder.belief_head.3.weight"][:k] = source["encoder.belief_head.3.weight"]
+        weights["encoder.belief_head.3.bias"][:k] = source["encoder.belief_head.3.bias"]
+        weights["encoder.belief_in.weight"][:, :k] = source["encoder.belief_in.weight"]
+        weights["encoder.belief_in.bias"][:] = source["encoder.belief_in.bias"]
     return weights
 
 
@@ -88,9 +104,13 @@ def expand(source, root, encoding=None, *, belief_head=False, suit_embedding=Non
         raise ValueError(f"{encoding} does not extend {meta['encoding']}")
     config = dict(meta["config"], encoding=encoding)
     if belief_head:
-        if config.get("belief_head"):
+        # True (or "v1") is v1, "v2" is v2; v2 can widen a v1 head.
+        version, present = "v2" if belief_head == "v2" else True, config.get("belief_head", False)
+        if present == "v2":
+            raise ValueError(f"the Actor already has a v2 belief head (asked for {belief_head!r})")
+        if present and version is True:
             raise ValueError("the Actor already has a belief head")
-        config["belief_head"] = True
+        config["belief_head"] = version
     if suit_embedding:
         if suit_embedding != "shared" or config.get("suit_embedding"):
             raise ValueError(f"cannot change suit_embedding {config.get('suit_embedding')!r} to {suit_embedding!r}")
@@ -114,7 +134,7 @@ def expand(source, root, encoding=None, *, belief_head=False, suit_embedding=Non
     if suit_embedding:
         weights = _shared_suit_weights(weights)
     if belief_head:
-        weights |= _belief_weights(config)
+        weights |= _belief_weights(config, weights)
     if oracle_inputs:
         # Bias-free and zero: no oracle, a zero one and any other give the source's logits until training moves them.
         dim = config["dim"]
@@ -140,14 +160,16 @@ def main():
     parser.add_argument("source", help="an exported Actor directory or a guided-v1 training checkpoint")
     parser.add_argument("root", help="models root; the artifact goes to <root>/<weights sha>/")
     parser.add_argument("--encoding", help=f"default {ENCODING_V3}, or the source's with another option")
-    parser.add_argument("--belief-head", action="store_true", help="add a zero-initialized belief head")
+    parser.add_argument("--belief-head", nargs="?", const="v1", choices=("v1", "v2"),
+                        help="add a zero-initialized belief head (v1, the default), or the v2 belief (widening a v1 head)")
     parser.add_argument("--share-suits", action="store_true",
                         help="share rank embeddings across the suits (changes decisions slightly)")
     parser.add_argument("--oracle-inputs", action="store_true",
                         help="a training start with zero oracle inputs (ADR-0018; refused outside training)")
     args = parser.parse_args()
     encoding = args.encoding or (None if args.belief_head or args.share_suits or args.oracle_inputs else ENCODING_V3)
-    print(expand(args.source, args.root, encoding, belief_head=args.belief_head,
+    belief_head = {None: False, "v1": True, "v2": "v2"}[args.belief_head]
+    print(expand(args.source, args.root, encoding, belief_head=belief_head,
                  suit_embedding="shared" if args.share_suits else None, oracle_inputs=args.oracle_inputs))
 
 

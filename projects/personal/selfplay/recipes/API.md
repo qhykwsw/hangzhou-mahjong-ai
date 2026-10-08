@@ -4,7 +4,7 @@
 
 ## 固定不变
 
-- Actor 的网络结构和观察编码。`ctx.actor` 从本方案线的固定起点加载；返回的权重必须能严格载入同一结构，否则本次尝试记为崩溃。起点可以带可选结构（起点 `meta.json` 的 `config`，如信念头、花色共享嵌入，见 [guided README](../guided/README.md) 的「Actor 的可选结构」），`ctx.new_actor()` 与导出沿用它；带信念头（`belief_head`）时 `actor(..., return_belief=True)` 另返回三家对手手牌的 3×34 logits，方案可用行里的 `oracle_planes` 经 `guided.networks.belief_target` 监督。起点带 oracle 输入（`oracle_inputs`）时见「Oracle 输入」；它只在训练里存在，导出时剥离，所以返回的权重带不带这部分参数都能导出。
+- Actor 的网络结构和观察编码。`ctx.actor` 从本方案线的固定起点加载；返回的权重必须能严格载入同一结构，否则本次尝试记为崩溃。起点可以带可选结构（起点 `meta.json` 的 `config`，如信念头、花色共享嵌入，见 [guided README](../guided/README.md) 的「Actor 的可选结构」），`ctx.new_actor()` 与导出沿用它；带信念头（`belief_head`）时 `actor(..., return_belief=True)` 另返回三家对手手牌的 3×34 logits，方案可用行里的 `oracle_planes` 经 `guided.networks.belief_target` 监督；`"belief_head": "v2"` 时另返回的是 `BeliefV2(tiles [n, 7, 34], state [n, 6])`，目标用 `guided.networks.belief_target_v2(oracle_planes, oracle_scalars, opp_waits)`，`opp_waits` 由 `critic_features` 调用 `guided.encoding.opponent_waits(state, seat)` 加进行里（或直接用钩子 `guided.encoding:belief_features`）。起点带 oracle 输入（`oracle_inputs`）时见「Oracle 输入」；它只在训练里存在，导出时剥离，所以返回的权重带不带这部分参数都能导出。
 - 游戏环境、规则和奖励：每局结束时，学习座位得到该局桌面分（除以底分）。
 - 教师：默认是冻结规则包里的规则冠军（`ctx.teacher`），方案可以用 `cfg["teacher"]` 换成 `ctx.teachers` 里的任一规则，或 `ctx.catalog` 里的模型。训练对手由方案通过 `cfg["opponents"]` 选择，默认是本次迭代冻结的评估对手（最近一次共同大乱斗前三名，可能包含 RL 模型）；harness 可以在 `ctx.catalog` 里另外提供冻结版本供方案选作对手或教师；没有评估对手时用规则包里的规则代表。
 - 时间预算：从 `train` 被调用开始计时，到 `ctx.deadline` 截止；超过宽限期，进程被强制结束。只按局数限额的 harness（例如迭代线）把截止时刻设得很远，只用来防卡死。

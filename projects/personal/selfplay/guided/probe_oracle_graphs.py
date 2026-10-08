@@ -1,6 +1,6 @@
 """Check the CUDA-graph path of the learner's oracle inputs (guided.oracle, ADR-0018) on a CUDA host.
 
-    python -m guided.probe_oracle_graphs [--actor <oracle start dir>] [--rounds 48]
+    python -m guided.probe_oracle_graphs [--actor <Actor dir> | --belief-head v1|v2] [--rounds 48]
 
 The CPU tests replace the graphs with a stand-in; this runs the real ones, as
 collection.collect does (the fp16 precast snapshot, pinned buffers, two
@@ -19,7 +19,10 @@ fp16 decision fed the same oracle (exact batch, no padding):
   pinned           the oracle's host buffers are page-locked
   oracle_graphs    graphs captured with the oracle inputs
 
-and prints one JSON line; "ok" is their conjunction.
+and prints one JSON line; "ok" is their conjunction. ``--actor`` may be any
+Actor (one without oracle inputs gets them at zero, then randomized as for a
+fresh one); ``--belief-head`` gives the fresh Actor a belief head with live
+injections, so the graphs also run its equation (guided.networks).
 """
 
 import argparse
@@ -99,7 +102,8 @@ def passed(report):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--actor", help="an Actor with oracle inputs (expand --oracle-inputs); default a fresh one")
+    parser.add_argument("--actor", help="an exported Actor (oracle inputs added if it has none); default a fresh one")
+    parser.add_argument("--belief-head", choices=("v1", "v2"), help="the fresh Actor's belief head")
     parser.add_argument("--rounds", type=int, default=48)
     args = parser.parse_args()
     from .networks import Actor, with_oracle_inputs
@@ -108,11 +112,18 @@ def main():
         from .deployment import load_actor
 
         actor, _ = load_actor(args.actor, "cuda", oracle=True)
+        if not actor.encoder.oracle_inputs:
+            actor = with_oracle_inputs(actor)
     else:
-        actor = with_oracle_inputs(Actor(128, 4, 4)).cuda()
+        belief = {None: False, "v1": True, "v2": "v2"}[args.belief_head]
+        actor = with_oracle_inputs(Actor(128, 4, 4, belief_head=belief)).cuda()
     with torch.no_grad():  # trained-looking projections, so the oracle matters
         torch.nn.init.normal_(actor.encoder.oracle_tile_in.weight, std=0.5)
         torch.nn.init.normal_(actor.encoder.oracle_state_in.weight, std=0.5)
+        if not args.actor and args.belief_head:  # and the beliefs reach the policy
+            for name in ("belief_in", "belief_state_in"):
+                if hasattr(actor.encoder, name):
+                    torch.nn.init.normal_(getattr(actor.encoder, name).weight, std=0.5)
     # The collection's rollout snapshot (collection.collect, precast_collection).
     model = prepare_frozen(copy.deepcopy(actor).eval().requires_grad_(False), "cuda")
     graphs = ActorGraphs()
