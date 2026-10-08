@@ -132,6 +132,34 @@ def test_409_resync_does_not_submit_duplicate_action(tmp_path):
     assert calls[post_index + 1][1].endswith("seq=0")
 
 
+def test_a_table_throttled_past_the_client_retries_looks_again(tmp_path, monkeypatch):
+    import mahjong_ai.platform.online as online
+
+    monkeypatch.setattr(online, "TRANSIENT_WAIT", 0.001)
+    data = fixture(HandState(RoundConfig(), 4))
+    calls = []
+
+    class Client:
+        reads = 0
+
+        def request(self, method, path, body=None):
+            calls.append(method)
+            if method == "POST":
+                raise ApiError(429, "RATE_LIMITED")
+            self.reads += 1
+            if self.reads <= 3:
+                raise ApiError(429, "RATE_LIMITED")
+            return {"finished": True} if self.reads == 6 else data | {"seq": 10}
+
+    runner = TournamentRunner(Client(), PolicySpec(), adapter(), tmp_path)
+    runner.tournament = {}
+    _play_bounded(runner, "throttled")
+    assert calls.count("POST") == 1  # a throttled action is not sent again
+    state = json.loads(next(tmp_path.glob("game-*.json")).read_text())
+    assert state["status"] == "finished"
+    assert state["client"]["transient_errors"] == 4  # three looks and the action
+
+
 def test_history_refresh_keeps_snapshot_sequence_and_round_together(tmp_path):
     initial = fixture(HandState(RoundConfig(), 4)) | {"seq": 10}
     refreshed = fixture(HandState(RoundConfig(), 5, hand_no=2)) | {"seq": 14}
@@ -316,6 +344,66 @@ def test_stage_loop_registers_before_detail_and_runs_games_concurrently(
     from mahjong_ai.persistence.artifacts import read_json
 
     assert read_json(tmp_path / "tournament.json")["ranking"][0]["total_score"] == 30
+
+
+class _RoomClient:
+    """A running room listing ``games``, finished once ``done`` holds them all;
+    its first /api/me answers 429 past the client's own retries."""
+
+    def __init__(self, games, done):
+        self.games, self.done, self.me_calls = games, done, 0
+
+    def discover(self, tid=None):
+        return "t", True, {}
+
+    def request(self, method, path, body=None):
+        if path == "/api/me":
+            self.me_calls += 1
+            if self.me_calls == 1:
+                raise ApiError(429, "RATE_LIMITED")
+            return {"active_games": [{"game_id": g} for g in self.games]}
+        finished = set(self.games) <= self.done
+        return {"status": "finished" if finished else "running", "qualified": True}
+
+
+def test_a_failed_table_restarts_alone_while_the_others_play_on(tmp_path, monkeypatch):
+    done, starts = set(), []
+    runner = TournamentRunner(
+        _RoomClient(["a", "b"], done), PolicySpec(), adapter(), tmp_path, workers=2
+    )
+
+    def play(gid):
+        starts.append(gid)
+        if gid == "a" and starts.count("a") == 1:
+            raise ApiError(429, "RATE_LIMITED")
+        done.add(gid)
+
+    monkeypatch.setattr(runner, "_play", play)
+    monkeypatch.setattr(runner.stop, "wait", lambda timeout: time.sleep(0.005))
+    result = runner.run(seconds=5)
+    assert done == {"a", "b"}
+    assert starts.count("a") == 2 and starts.count("b") == 1
+    assert result["table_restarts"] == 1
+    failure = json.loads((tmp_path / "table-failures.jsonl").read_text())
+    assert failure["game_id"] == "a" and "429" in failure["error"]
+
+
+def test_a_table_failing_again_and_again_stops_the_run(tmp_path, monkeypatch):
+    import mahjong_ai.platform.online as online
+
+    runner = TournamentRunner(
+        _RoomClient(["a"], set()), PolicySpec(), adapter(), tmp_path, workers=1
+    )
+
+    def play(gid):
+        raise SnapshotError("full state response lacks snapshot")
+
+    monkeypatch.setattr(runner, "_play", play)
+    monkeypatch.setattr(runner.stop, "wait", lambda timeout: time.sleep(0.005))
+    with pytest.raises(SnapshotError):
+        runner.run(seconds=5)
+    lines = (tmp_path / "table-failures.jsonl").read_text().splitlines()
+    assert len(lines) == online.TABLE_RESTARTS + 1
 
 
 def test_connections_warm_up_only_before_the_room_starts(tmp_path, monkeypatch):
