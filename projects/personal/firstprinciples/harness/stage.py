@@ -11,7 +11,13 @@ taking the four seats in turn. Every version plays the same stages, paired
 block by block with a reference version (by default its line's best).
 
   python -m harness.stage run <version> --kind semi|final --host <host> [--against <version>] [--stages N]
+  python -m harness.stage run <name> --weights <model id> --against <version> --kind ... --host ...
   python -m harness.stage list
+
+``--weights`` plays a model of the research model store by its id under
+``name`` without an evaluation record, e.g. a version with the stage re-rank
+switched on (``python -m guided.outcome variant <its artifact> <model store>``
+prints the id), paired with ``--against`` (e.g. the same version without it).
 
 A record holds the advance rate (semifinal: top two, a tie for second
 counting half; final: first), the paired difference with the reference and
@@ -61,15 +67,23 @@ def results_path():
     return E.LOCAL / "stage-results.jsonl"
 
 
-def run(version, kind, host, against=None, stages=STAGES):
+def run(version, kind, host, against=None, stages=STAGES, weights=None):
     t = tables(kind)
     E.check_seal()
+    if weights is not None:
+        if against is None:
+            raise E.Refused("--weights 需要 --against 指定配对的版本")
+        if not (E.MODELS / weights / "meta.json").is_file():
+            raise E.Refused(f"模型库里没有 {weights}")
+        spec = {"family": "model", "version": version, "parameters": {"weights": weights}}
+    else:
+        spec = spec_of(version)
     if against is None:
         line = next(r["line"] for r in E.attempts() if r["id"] == version)
         against = E.best(E.load_pool()["id"], line)["id"]
     blocks = range(stages)
     advance = KINDS[kind]["advance"]
-    mine_scores, mine_places, stats = play(t, version, spec_of(version), host, stages)
+    mine_scores, mine_places, stats = play(t, version, spec, host, stages)
     theirs_scores, theirs_places, _ = play(t, against, spec_of(against), host, stages)
     mine = {b: advanced(mine_places[b], advance) for b in blocks}
     theirs = {b: advanced(theirs_places[b], advance) for b in blocks}
@@ -77,6 +91,7 @@ def run(version, kind, host, against=None, stages=STAGES):
     diff, se = E.paired(mine, theirs, blocks)
     score_diff, score_se = E.paired(mine_scores, theirs_scores, blocks)
     out = {"version": version, "kind": kind, "against": against, "host": host, "stages": stages,
+           **({"weights": weights} if weights is not None else {}),
            "games": stages * GAMES, "seed": t["stage_seed"], "pool": E.load_pool()["id"],
            "rate": rate, "rate_se": rate_se, "against_rate": sum(theirs.values()) / stages,
            "diff": diff, "se": se, "lower90": diff - E.CONFIRM_Z * se,
@@ -105,10 +120,14 @@ def main():
     r.add_argument("--host", required=True)
     r.add_argument("--against")
     r.add_argument("--stages", type=int, default=STAGES)
+    r.add_argument("--weights", help="play this model id of the model store as <version> (needs --against)")
     sub.add_parser("list")
     args = parser.parse_args()
     if args.command == "run":
-        print(report(run(args.version, args.kind, args.host, args.against, args.stages)))
+        try:
+            print(report(run(args.version, args.kind, args.host, args.against, args.stages, args.weights)))
+        except E.Refused as exc:
+            raise SystemExit(str(exc))
     elif results_path().exists():
         for line in results_path().read_text().splitlines():
             print(report(json.loads(line)))
