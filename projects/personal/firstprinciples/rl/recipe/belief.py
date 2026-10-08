@@ -34,16 +34,17 @@ def _kl(old, new, mask):
 
 class BeliefTrainer:
     def __init__(self, actor, spec):
-        from guided.networks import belief_target
+        from guided.networks import belief_parameters, belief_target, belief_target_v2
 
-        self.target = belief_target
+        self.version = 2 if getattr(actor.encoder, "belief_version", 1) == 2 else 1
+        self.target = belief_target if self.version == 1 else belief_target_v2
         self.steps = int(spec.get("steps", 200))
         self.warm_steps = int(spec.get("warm_steps", 1500))
         self.size = int(spec.get("microbatch", 256))
         self.keep = int(spec.get("keep_rows", 60000))
         self.kl_target = float(spec.get("kl_target", 0.002))
         self.anchor = float(spec.get("anchor", 30.0))
-        head = list(actor.encoder.belief_head.parameters())
+        head = list(belief_parameters(actor))
         self.head_opt = torch.optim.Adam(head, lr=float(spec.get("head_lr", 3e-4)), eps=1e-5)
         self.opt = torch.optim.Adam([p for p in actor.parameters() if p.requires_grad],
                                     lr=float(spec.get("lr", 3e-5)), eps=1e-5)
@@ -80,7 +81,11 @@ class BeliefTrainer:
             mb = make_batch([rows[i] for i in idx], device, oracle=True)
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=torch.device(device).type == "cuda"):
                 logits, belief = actor(*actor_args(mb), return_belief=True)
-            loss = F.binary_cross_entropy_with_logits(belief.float(), self.target(mb["oracle_planes"]))
+            if self.version == 2:
+                target = self.target(mb["oracle_planes"], mb["oracle_scalars"], mb["opp_waits"])
+                loss = sum(F.binary_cross_entropy_with_logits(p.float(), t) for p, t in zip(belief, target))
+            else:
+                loss = F.binary_cross_entropy_with_logits(belief.float(), self.target(mb["oracle_planes"]))
             losses.append(loss.detach())
             if warm:
                 self.head_opt.zero_grad(set_to_none=True)

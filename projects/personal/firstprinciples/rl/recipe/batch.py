@@ -18,6 +18,8 @@ def make_batch(rows, device, *, oracle=False):
     if oracle:
         fields += [("oracle_planes", (16, 34), np.float32),
                    ("oracle_scalars", (4,), np.float32)]
+        if rows and "opp_waits" in rows[0]:
+            fields.append(("opp_waits", (3, 34), np.float32))
     for key, shape, dtype in fields:
         batch[key] = torch.as_tensor(
             np.stack([np.asarray(row[key], dtype=dtype) for row in rows]), device=device

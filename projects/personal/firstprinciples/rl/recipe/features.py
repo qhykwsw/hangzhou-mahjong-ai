@@ -11,6 +11,8 @@ import numpy as np
 def critic_features(state, seat):
     from mahjong_ai.sdk.shape import shanten
 
+    from guided.encoding import opponent_waits
+
     planes = np.zeros((16, 34), dtype=np.float32)
     scalars = np.zeros(4, dtype=np.float32)
     for i, tiles in enumerate([state.hands[(seat + j) % 4] for j in (1, 2, 3)] + [state.wall]):
@@ -37,4 +39,6 @@ def critic_features(state, seat):
         "seat": float(seat),
         "hand_scores": np.asarray(scores, dtype=np.float32) / config.base_score,
         "rounds": float(config.rounds),
+        # The v2 belief head's waits label (guided.encoding.opponent_waits): hidden state, a label only.
+        "opp_waits": opponent_waits(state, seat),
     }
