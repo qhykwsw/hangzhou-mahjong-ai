@@ -44,7 +44,5 @@
     "head_lr": 0.0003,
     "kl_target": 0.002,
     "anchor": 30.0
-  },
-  "portfolio": "fp-rule-131",
-  "portfolio_mix": 0.5
+  }
 }

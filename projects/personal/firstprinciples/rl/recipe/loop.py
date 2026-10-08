@@ -27,7 +27,6 @@ from selfplay_core.actions import GANG_EXPOSED, HU
 from guided.collection_session import InferenceSession
 
 from .batch import actor_args, make_batch, masked_log_probs, resident_rows
-from .portfolio import portfolio_advantages, repeat_deviations
 from .symmetry import SuitPermuter
 from .targets import advantages, playout_advantages
 
@@ -405,11 +404,6 @@ def train(ctx):
         mix = cfg["lineage_seats"]
         collect_cfg["opponents"] = list(ctx.opponents) * int(mix["pool_weight"]) + list(mix["versions"])
     pg_cfg = dict(collect_cfg, playout_baseline=bool(cfg.get("playout_baseline")))
-    # cfg["portfolio"] (portfolio.py): every deviation is played again, and its
-    # argmax with it, with fp-rule-131 continuing the learner's seat.
-    if cfg.get("portfolio"):
-        pg_cfg |= {"branches": 1, "branch_control": True,
-                   "branch_continuation": {"learner": cfg["portfolio"]}}
     if cfg["teacher"] not in ctx.teachers:
         raise ValueError(f"teacher {cfg['teacher']} is not in ctx.teachers: {ctx.teachers}")
     # The smoke run (about a minute) must still exercise one whole step.
@@ -476,8 +470,6 @@ def train(ctx):
         rows, opened = [], []
         ordinary = int(round(target_rows * (1.0 - share)))
         hooks = None if distilling or sampler is None else {"sample": sampler}
-        if hooks is not None and cfg.get("portfolio"):
-            hooks["branches"] = repeat_deviations
         play_cfg = (bc_cfg if bc else collect_cfg) if distilling else pg_cfg
         open_cfg = dict(pg_cfg, search=dict(cfg["search"])) if cfg.get("search") else pg_cfg
         with InferenceSession(actor) as session:
@@ -583,8 +575,6 @@ def train(ctx):
                                 if cfg.get("resident_rows", False) else None)
             if cfg.get("playout_baseline"):
                 weights, stats = playout_advantages(rows, cfg)
-                if cfg.get("portfolio"):
-                    weights, stats = portfolio_advantages(rows, cfg, weights, stats)
                 if improver is not None:
                     improver.add_chunk(actor, rows, weights * stats["adv_scale"])
                 if cfg.get("search"):
