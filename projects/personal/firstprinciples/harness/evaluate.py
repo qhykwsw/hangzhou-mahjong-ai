@@ -485,7 +485,11 @@ def distinct(rows):
 
 
 def best(pool_id, line):
-    kept = [r for r in attempts(pool_id, line) if r["status"] == "keep"]
+    """The line's best version: the last of the kept versions, each version by its latest record
+    (a version judged again, rejudge, is whatever that record says)."""
+    rows = attempts(pool_id, line)
+    last = {r["id"]: i for i, r in enumerate(rows)}
+    kept = [rows[i] for i in sorted(last.values()) if rows[i]["status"] == "keep"]
     return kept[-1] if kept else None
 
 
@@ -779,7 +783,7 @@ def extend(line, host=None):
     return record
 
 
-def rejudge(attempt_id, host=None, seed=None):
+def rejudge(attempt_id, host=None, seed=None, against=None, seeds=None):
     """Judge an earlier attempt again under the current rules, against the line's best now.
 
     For attempts judged before the 10-07 rules (the doubled development set,
@@ -787,7 +791,10 @@ def rejudge(attempt_id, host=None, seed=None):
     on its host, then judge() decides as for a new attempt; ``seed`` is that of
     a PDL measurement already made for it, which is then reused. The new record
     keeps the id (``rejudged`` holds the old status, games, score and diff); a
-    kept one, being the last kept record, becomes the line's best.
+    kept one, being the last kept record, becomes the line's best. ``against``
+    fixes the version compared with (an earlier best, when the version judged
+    in between lost its place); ``seeds`` are the forward and reverse PDL seeds
+    of measurements on record.
     """
     pool = load_pool()
     check_seal()
@@ -796,7 +803,10 @@ def rejudge(attempt_id, host=None, seed=None):
         raise Refused(f"{attempt_id} 在当前对手池下没有开发集成绩")
     old = rows[-1]
     line = old["line"]
-    champion = best(pool["id"], line)
+    if against:
+        champion = [r for r in attempts(pool["id"]) if r["id"] == against and r.get("dev_blocks")][-1]
+    else:
+        champion = best(pool["id"], line)
     if champion is None or champion["id"] == attempt_id:
         raise Refused(f"{attempt_id} 没有可比的最好版本")
     host = host or old.get("host") or EVAL_HOST[line]
@@ -807,7 +817,8 @@ def rejudge(attempt_id, host=None, seed=None):
         more, extra = play(pool, attempt_id, old["spec"], missing, pool["dev_seed"], "dev-extend", host)
         scores |= more
         stats = {k: int(stats.get(k) or 0) + int(extra.get(k) or 0) for k in set(stats) | set(extra)}
-    verdict, pdl, confirm, champion = judge(pool, line, attempt_id, old["spec"], scores, champion, host, seed)
+    verdict, pdl, confirm, champion = judge(pool, line, attempt_id, old["spec"], scores, champion, host, seed,
+                                            follow=not against, seeds=seeds)
     score, se = mean_se(scores[k] for k in range(DEV_BLOCKS))
     record = {k: v for k, v in old.items() if k not in ("proxy", "reference")} | dict(
         status=verdict, host=host, games=DEV_BLOCKS * 4, score=score, se=se, stats=stats,
@@ -1128,18 +1139,16 @@ def evaluate(line, spec, description, attempt_id=None, design_seconds=None, host
     return record
 
 
-def judge(pool, line, attempt_id, spec, scores, champion, host, seed=None):
+def judge(pool, line, attempt_id, spec, scores, champion, host, seed=None, follow=True, seeds=None):
     """The verdict against the line's best version: (status, pdl, confirm, the best compared with).
 
     Below the best by CLOSE or more: discarded. Within CLOSE: the paired
-    performance difference on fresh walls (harness.pdl, on the attempt's host), the best
-    version continuing at each of the attempt's decisions where it would act
-    otherwise. Further above: the confirmation set, both versions replaying the
-    same fresh walls. A best version that changes meanwhile is compared on the
-    development set again.
+    performance difference on fresh walls (harness.pdl, on the attempt's host)
+    both ways round, averaged (pdl_both). Further above: the confirmation set,
+    both versions replaying the same fresh walls. A best version that changes
+    meanwhile is compared on the development set again, unless the champion is
+    fixed (follow=False, rejudge against an earlier best).
     """
-    from . import pdl
-
     seed = seed or random.SystemRandom().getrandbits(62)
     mine = None
     while True:
@@ -1149,27 +1158,50 @@ def judge(pool, line, attempt_id, spec, scores, champion, host, seed=None):
             return "discard", None, None, champion
         if diff <= CLOSE:
             # On the attempt's own host: the Mac for the rule line, the GPU host that trained an RL attempt.
-            e = pdl.measure(champion["id"], attempt_id, seed=seed, a_spec=champion["spec"], b_spec=spec, host=host)
+            e = pdl_both(champion, attempt_id, spec, seed, host, seeds)
         else:
             if mine is None:
                 mine, _ = play(pool, attempt_id, spec, range(CONFIRM_BLOCKS), seed, "confirm", host)
-            if best(pool["id"], line)["id"] == champion["id"]:
+            if not follow or best(pool["id"], line)["id"] == champion["id"]:
                 # The best version replays the same fresh walls under its own id.
                 theirs, _ = play(pool, champion["id"], champion["spec"], range(CONFIRM_BLOCKS), seed,
                                  f"confirm-for-{attempt_id}", host)
         current = best(pool["id"], line)
-        if current["id"] != champion["id"]:
+        if follow and current["id"] != champion["id"]:
             log(f"{attempt_id}: best version is now {current['id']}")
             champion = current
             continue
         if diff <= CLOSE:
-            result = {k: e[k] for k in ("seed", "games", "k", "diff", "se", "lower90", "parts", "snapshots", "seconds")}
             status = "keep" if e["lower90"] > 0 else "discard" if e["diff"] <= 0 else "unconfirmed"
-            return status, result | {"against": champion["id"]}, None, champion
+            return status, e | {"against": champion["id"]}, None, champion
         d, s = paired(mine, theirs, range(CONFIRM_BLOCKS))
         confirm = {"seed": seed, "games": CONFIRM_BLOCKS * 4, "diff": d, "se": s, "lower90": d - CONFIRM_Z * s,
                    "against": champion["id"]}
         return "keep" if confirm["lower90"] > 0 else "unconfirmed", None, confirm, champion
+
+
+def pdl_both(champion, attempt_id, spec, seed, host, seeds=None):
+    """The paired performance difference both ways round, averaged (user 10-08).
+
+    Forward, the attempt sits and the best version continues where it would act
+    otherwise (V(attempt) - V(best)); reverse, the other way round (V(best) -
+    V(attempt)). Each is unbiased in principle; averaging the forward and the
+    negated reverse cancels any lean toward the seated or the continuing version
+    and lowers the error. ``seeds`` (forward, reverse) reuse measurements on record.
+    """
+    from . import pdl
+
+    s1, s2 = seeds or (seed, seed ^ 1)
+    f = pdl.measure(champion["id"], attempt_id, seed=s1, a_spec=champion["spec"], b_spec=spec, host=host)
+    r = pdl.measure(attempt_id, champion["id"], seed=s2, a_spec=spec, b_spec=champion["spec"], host=host)
+    diff, se = (f["diff"] - r["diff"]) / 2, math.hypot(f["se"], r["se"]) / 2
+    parts = {k: {"diff": ((f["parts"].get(k) or {}).get("diff", 0.0) - (r["parts"].get(k) or {}).get("diff", 0.0)) / 2,
+                 "se": math.hypot((f["parts"].get(k) or {}).get("se", 0.0), (r["parts"].get(k) or {}).get("se", 0.0)) / 2}
+             for k in set(f["parts"]) | set(r["parts"])}
+    one = lambda e: {k: e[k] for k in ("seed", "games", "diff", "se", "lower90", "snapshots", "seconds")}  # noqa: E731
+    return dict(diff=diff, se=se, lower90=diff - CONFIRM_Z * se, games=f["games"] + r["games"], k=f["k"],
+                snapshots=f["snapshots"] + r["snapshots"], seconds=f["seconds"] + r["seconds"], parts=parts,
+                seed=s1, forward=one(f), reverse=one(r))
 
 
 def proxy_tables(attempt_id, spec, host, champion=None):
@@ -1298,8 +1330,9 @@ def report(record):
             lines.append(f"确认集与代理桌各占一半：配对差 {m['diff']:+.2f} ± {m['se']:.2f}，90% 下界 {m['lower90']:+.2f}（判定依据）")
     if record.get("pdl"):
         p = record["pdl"]
+        both = (f"（正向 {p['forward']['diff']:+.2f}、反向 {-p['reverse']['diff']:+.2f} 的平均）" if p.get("forward") else "")
         lines.append(f"逐手对比（开发集差距在 {CLOSE} 分以内，以它为准）：{p['games']} 场新牌局、{p['snapshots']} 处分歧，"
-                     f"对 {p['against']} 差 {p['diff']:+.2f} ± {p['se']:.2f}，90% 下界 {p['lower90']:+.2f}")
+                     f"对 {p['against']} 差 {p['diff']:+.2f} ± {p['se']:.2f}{both}，90% 下界 {p['lower90']:+.2f}")
     if cost:
         lines.append(cost)
     s = record["stats"]
@@ -1357,6 +1390,8 @@ def main():
     rj.add_argument("attempt")
     rj.add_argument("--host", choices=tuple(EVAL_WORKERS))
     rj.add_argument("--seed", type=int, help="the seed of a PDL measurement already on record for it")
+    rj.add_argument("--against", help="compare with this version instead of the line's best now")
+    rj.add_argument("--seeds", type=int, nargs=2, help="forward and reverse PDL seeds on record")
     sub.add_parser("upgrade-runtime", help="move the pool onto its runtime plus src/mahjong_ai/_fast.c's new functions")
     sub.add_parser("seal", help="accept the current evaluation conditions (maintainer)")
     cmp = sub.add_parser("compare", help="paired development-set difference of two scored versions")
@@ -1405,7 +1440,7 @@ def main():
         return
     if args.command == "rejudge":
         try:
-            r = rejudge(args.attempt, args.host, args.seed)
+            r = rejudge(args.attempt, args.host, args.seed, args.against, args.seeds)
         except Refused as exc:
             raise SystemExit(str(exc))
         print(report(r))

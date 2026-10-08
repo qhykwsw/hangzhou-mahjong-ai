@@ -177,8 +177,10 @@ def test_new_best_during_confirmation_is_first_compared_on_dev(harness, monkeypa
     E, _, _ = harness
     P = importlib.import_module("harness.pdl")
     measured = []
+    # Both ways round: forward (the attempt sits) +0.5, reverse (the best sits) -0.5.
     monkeypatch.setattr(P, "measure", lambda a, b, **kw: measured.append(a) or dict(
-        seed=kw["seed"], games=8, k=2, diff=0.5, se=0.1, lower90=0.37, parts={}, snapshots=3, seconds=1.0))
+        seed=kw["seed"], games=8, k=2, diff=0.5 if b == "fp-rl-009" else -0.5, se=0.1, lower90=0.37, parts={},
+        snapshots=3, seconds=1.0))
     monkeypatch.setattr(E, "DEV_BLOCKS", 4)
     monkeypatch.setattr(E, "CONFIRM_BLOCKS", 2)
     monkeypatch.setattr(E, "check_seal", lambda: None)
@@ -200,7 +202,7 @@ def test_new_best_during_confirmation_is_first_compared_on_dev(harness, monkeypa
     result = E.evaluate("rl", {"parameters": {"weights": "mine"}}, "x", "fp-rl-009", host="4070", confirm_seed=5)
     assert result["status"] == verdict
     assert [a for a, label in calls if label.startswith("confirm-for-")] == replayed
-    assert measured == pdl
+    assert measured == [x for a in pdl for x in (a, "fp-rl-009")]
 
 
 @pytest.mark.parametrize("dev, pdl_diff, verdict", [
@@ -223,8 +225,9 @@ def test_a_close_development_difference_is_judged_by_pdl(harness, monkeypatch, d
 
     def measure(a, b, **kw):
         measured.append((a, b, kw["a_spec"], kw["b_spec"], kw["seed"], kw["host"]))
-        return dict(seed=kw["seed"], games=8, k=2, diff=pdl_diff, se=0.1, lower90=pdl_diff - E.CONFIRM_Z * 0.1,
-                    parts={"hu": {"diff": pdl_diff, "se": 0.1}}, snapshots=3, seconds=1.0)
+        d = pdl_diff if b == "fp-rl-009" else -pdl_diff  # V(b) - V(a)
+        return dict(seed=kw["seed"], games=8, k=2, diff=d, se=0.1, lower90=d - E.CONFIRM_Z * 0.1,
+                    parts={"hu": {"diff": d, "se": 0.1}}, snapshots=3, seconds=1.0)
 
     monkeypatch.setattr(E, "play", play)
     monkeypatch.setattr(P, "measure", measure)
@@ -233,9 +236,12 @@ def test_a_close_development_difference_is_judged_by_pdl(harness, monkeypatch, d
     if pdl_diff is None:
         assert measured == [] and r["pdl"] is None
     else:
-        assert measured == [("fp-rl-007", "fp-rl-009", {"weights": "old"}, {"weights": "mine"}, 5, "4070")]
-        assert r["pdl"]["against"] == "fp-rl-007" and r["pdl"]["diff"] == pdl_diff
-        assert f"差 {pdl_diff:+.2f} ± 0.10" in E.report(r)
+        # Both ways round on the attempt's host; the reverse on its own seed.
+        assert measured == [("fp-rl-007", "fp-rl-009", {"weights": "old"}, {"weights": "mine"}, 5, "4070"),
+                            ("fp-rl-009", "fp-rl-007", {"weights": "mine"}, {"weights": "old"}, 4, "4070")]
+        assert r["pdl"]["against"] == "fp-rl-007" and r["pdl"]["diff"] == pytest.approx(pdl_diff)
+        assert r["pdl"]["se"] == pytest.approx(0.1 / 2 ** 0.5)
+        assert f"差 {pdl_diff:+.2f} ± 0.07（正向 {pdl_diff:+.2f}、反向 {pdl_diff:+.2f} 的平均）" in E.report(r)
 
 
 def test_an_attempt_judged_on_the_mac_lets_its_host_go(harness, monkeypatch):
@@ -266,14 +272,25 @@ def test_rejudge_extends_an_earlier_attempt_and_judges_it_now(harness, monkeypat
 
     monkeypatch.setattr(E, "play", play)
     monkeypatch.setattr(P, "measure", lambda a, b, **kw: measured.append((a, b, kw["seed"])) or dict(
-        seed=kw["seed"], games=8, k=2, diff=0.3, se=0.1, lower90=0.17, parts={}, snapshots=3, seconds=1.0))
+        seed=kw["seed"], games=8, k=2, diff=0.3 if b == "fp-rl-009" else -0.3, se=0.1, lower90=0.17, parts={},
+        snapshots=3, seconds=1.0))
     r = E.rejudge("fp-rl-009", seed=11)
-    assert calls == [("fp-rl-009", [2, 3], "dev-extend", "5070ti")] and measured == [("fp-rl-007", "fp-rl-009", 11)]
+    assert calls == [("fp-rl-009", [2, 3], "dev-extend", "5070ti")]
+    assert measured == [("fp-rl-007", "fp-rl-009", 11), ("fp-rl-009", "fp-rl-007", 10)]
     assert r["status"] == "keep" and r["games"] == 16 and r["stats"] == {"timeouts": 1} and r["training"] == {"hands": 5}
     assert r["rejudged"]["old_status"] == "discard" and r["pdl"]["against"] == "fp-rl-007"
     assert E.best("pool-a", "rl")["id"] == "fp-rl-009" and "按 10-07 规则重判" in E.history("rl")
     with pytest.raises(E.Refused):
         E.rejudge("fp-rl-009")
+
+
+def test_a_version_judged_again_counts_by_its_latest_record(harness):
+    E, _, _ = harness
+    for i, (aid, status) in enumerate((("fp-rl-007", "keep"), ("fp-rl-008", "keep"), ("fp-rl-008", "unconfirmed"))):
+        record(E, id=aid, status=status, finished_at=i)
+    assert E.best("pool-a", "rl")["id"] == "fp-rl-007"
+    record(E, id="fp-rl-007", status="keep", finished_at=9, games=32)  # extended: still the best
+    assert E.best("pool-a", "rl")["games"] == 32
 
 
 def test_catalog_offers_every_version_that_became_a_line_best(harness):
