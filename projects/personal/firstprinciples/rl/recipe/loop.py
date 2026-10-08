@@ -27,6 +27,7 @@ from selfplay_core.actions import GANG_EXPOSED, HU
 from guided.collection_session import InferenceSession
 
 from .batch import actor_args, make_batch, masked_log_probs, resident_rows
+from .leaves import Leaves, boosted_candidates, branch_advantages, weighted_argmax
 from .symmetry import SuitPermuter
 from .targets import advantages, playout_advantages
 
@@ -404,6 +405,23 @@ def train(ctx):
         mix = cfg["lineage_seats"]
         collect_cfg["opponents"] = list(ctx.opponents) * int(mix["pool_weight"]) + list(mix["versions"])
     pg_cfg = dict(collect_cfg, playout_baseline=bool(cfg.get("playout_baseline")))
+    # cfg["branch_deviations"] (leaves.py): each deviation and its argmax
+    # control play in copies from the same fork; the hand itself only plays
+    # the argmax. With cfg["branch_truncate"] the copies stop at the learner's
+    # k-th later decision, valued by the leaf network; with
+    # cfg["branch_resample"] they start from a progress-matched re-dealt world
+    # (worlds.py); with cfg["branch_opponents"] = "styles" every collection's
+    # copies continue against one fixed-pool style in all three seats.
+    branching = bool(cfg.get("branch_deviations"))
+    truncate = int(cfg.get("branch_truncate", 0))
+    if branching:
+        pg_cfg |= {"branches": 1, "branch_control": True}
+        if truncate:
+            pg_cfg["branch_truncate"] = truncate
+        if cfg.get("branch_resample"):
+            pg_cfg["branch_resample"] = {"weights": "recipe.worlds:progress_code"}
+            pg_cfg["critic_features"] = "recipe.features:critic_features_progress"
+    styles = list(ctx.opponents) + ["fp-rule-131"] if cfg.get("branch_opponents") == "styles" else None
     if cfg["teacher"] not in ctx.teachers:
         raise ValueError(f"teacher {cfg['teacher']} is not in ctx.teachers: {ctx.teachers}")
     # The smoke run (about a minute) must still exercise one whole step.
@@ -428,6 +446,10 @@ def train(ctx):
         if not cfg.get("vine"):
             raise ValueError("deviation_boost needs vine: the hand must stay on the argmax path")
         sampler = boosted_deviations(float(cfg["deviation_boost"]))
+    brancher, leaves, warm_stats = None, None, {}
+    if branching:
+        sampler = weighted_argmax(float(cfg["deviation_boost"]))
+        brancher = boosted_candidates(float(cfg["deviation_boost"]))
     step, iteration, rollouts, last = 0, 0, 0, 0.0
     hands = lambda: ctx.hands_left() is None or ctx.hands_left() > 0  # noqa: E731
     # cfg["cv"] (cv.py): the all-action control variate's coefficient, set by each step's held-out fit.
@@ -472,8 +494,16 @@ def train(ctx):
         rows, opened = [], []
         ordinary = int(round(target_rows * (1.0 - share)))
         hooks = None if distilling or sampler is None else {"sample": sampler}
+        if hooks is not None and brancher is not None:
+            hooks["branches"] = brancher
         play_cfg = (bc_cfg if bc else collect_cfg) if distilling else pg_cfg
-        open_cfg = dict(pg_cfg, search=dict(cfg["search"])) if cfg.get("search") else pg_cfg
+        if styles and not distilling:
+            # One style per collection, in every opponent seat of its copies.
+            seats = set(pg_cfg.get("opponents") or ctx.opponents)
+            style = styles[int(rng.integers(len(styles)))]
+            play_cfg = dict(play_cfg, branch_continuation={"learner": "greedy", "opponents": {k: style for k in seats}})
+        open_base = pg_cfg if distilling else play_cfg
+        open_cfg = dict(open_base, search=dict(cfg["search"])) if cfg.get("search") else open_base
         with InferenceSession(actor) as session:
             while len(rows) < ordinary and hands() and ctx.time_left() > reserve:
                 iteration += 1
@@ -548,6 +578,8 @@ def train(ctx):
                 from .mpo import Improver
 
                 improver = Improver(ctx, actor, cfg, rng)
+            if branching and truncate:
+                leaves = Leaves(actor, cfg, ctx.device)
         params, direction, batches, parts, count = None, None, None, [], 0
         chunk_grads = []
         collected = fitted = 0.0
@@ -560,10 +592,24 @@ def train(ctx):
                 break
             collected += time.time() - started
             started = time.time()
+            warm = False
+            if branching:
+                # Before packing: the rows with a deviation take its action.
+                warm = leaves is not None and not leaves.ready
+                weights, stats, leaf_target = branch_advantages(rows, cfg, leaves)
             batch_source = (resident_rows(rows, ctx.device, ctx.resources["gpu_limit_bytes"],
                                           oracle=not cfg.get("playout_baseline"))
                             if cfg.get("resident_rows", False) else None)
             rollouts += 1
+            if leaves is not None:
+                # The leaf network fits this rollout only after valuing its leaves.
+                stats |= leaves.fit(rows, leaf_target, rng, batch_source=batch_source, epochs=2 if warm else 1)
+                if warm:
+                    # The first rollout only trains the leaf network.
+                    warm_stats = {f"warm_{k}": v for k, v in stats.items()}
+                    del rows, batch_source, weights, leaf_target
+                    torch.cuda.empty_cache()
+                    continue
             # Searched windows (cfg["search"]): each other candidate becomes a
             # row with its advantage over the argmax, the mean over worlds that
             # keep the opponents' real hands. These worlds know the hidden
@@ -575,8 +621,16 @@ def train(ctx):
                 batch_source = (resident_rows(rows + extra, ctx.device, ctx.resources["gpu_limit_bytes"],
                                               oracle=not cfg.get("playout_baseline"))
                                 if cfg.get("resident_rows", False) else None)
-            if cfg.get("playout_baseline"):
-                weights, stats = playout_advantages(rows, cfg)
+            if branching or cfg.get("playout_baseline"):
+                if branching:
+                    # A branched row's copies deviate as vine does (leaves.boosted_candidates: the
+                    # same rate, candidate and weight in the logprob slot), so the control variate
+                    # below applies to its truncated paired difference unchanged.
+                    for i, r in enumerate(rows):
+                        if r.get("branches") and r.get("branch_control") is not None:
+                            rows[i] = dict(r, deviated=True)
+                else:
+                    weights, stats = playout_advantages(rows, cfg)
                 if cfg.get("cv"):
                     from .cv import predicted_gaps
 
@@ -640,7 +694,9 @@ def train(ctx):
             break
         step += 1
         direction = [d / len(parts) for d in direction]
-        stats = {key: float(np.mean([p[key] for p in parts])) for key in parts[0]}
+        stats = {key: float(np.mean([p[key] for p in parts if key in p])) for key in parts[0]}
+        stats |= warm_stats
+        warm_stats = {}
         left = ctx.hands_left() if ctx.hands_left() is not None else ctx.time_left()
         # Heat, then cool: the step KL falls linearly from step_kl_start to
         # step_kl over the policy-gradient budget, so the early large steps can
