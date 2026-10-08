@@ -430,6 +430,8 @@ def train(ctx):
         sampler = boosted_deviations(float(cfg["deviation_boost"]))
     step, iteration, rollouts, last = 0, 0, 0, 0.0
     hands = lambda: ctx.hands_left() is None or ctx.hands_left() > 0  # noqa: E731
+    # cfg["cv"] (cv.py): the all-action control variate's coefficient, set by each step's held-out fit.
+    cv_c = 0.0
     # Near the optimum each KL step moves the policy along its noise as much as
     # its signal, and neighbouring steps' noise is uncorrelated: the mean of the
     # iterates over the second half of the policy-gradient steps keeps the
@@ -542,7 +544,7 @@ def train(ctx):
                     parameter.requires_grad_(name.startswith(trainable))
             # cfg["mpo"] (mpo.py): a Q network fitted to the kept deviations
             # replaces the gradient step after `mpo_warmup` steps.
-            if cfg.get("mpo"):
+            if cfg.get("mpo") or cfg.get("cv"):
                 from .mpo import Improver
 
                 improver = Improver(ctx, actor, cfg, rng)
@@ -575,7 +577,23 @@ def train(ctx):
                                 if cfg.get("resident_rows", False) else None)
             if cfg.get("playout_baseline"):
                 weights, stats = playout_advantages(rows, cfg)
-                if improver is not None:
+                if cfg.get("cv"):
+                    from .cv import predicted_gaps
+
+                    # The Improver fits the paired difference D itself, without the boost weight.
+                    raw = weights.astype(np.float64) * stats["adv_scale"]
+                    dev = np.flatnonzero([bool(r.get("deviated")) for r in rows])
+                    w = np.exp([float(rows[i].get("logprob", 0.0)) for i in dev]) if cfg.get("deviation_boost") else np.ones(len(dev))
+                    gap = np.zeros(len(rows))
+                    gap[dev] = raw[dev] / np.maximum(w, 1e-12)
+                    if cv_c > 0:
+                        q = predicted_gaps(improver, actor, rows, dev)
+                        raw[dev] -= cv_c * w * q
+                        stats |= {"cv_q_sd": float(q.std()) if len(q) else 0.0,
+                                  "cv_corr": float(np.corrcoef(q, gap[dev])[0, 1]) if len(q) > 2 and q.std() > 0 else 0.0}
+                    weights = (raw / stats["adv_scale"]).astype(np.float32)
+                    improver.add_chunk(actor, rows, gap)
+                elif improver is not None:
                     improver.add_chunk(actor, rows, weights * stats["adv_scale"])
                 if cfg.get("search"):
                     # Same units as the playout advantages, so the same scale;
@@ -636,7 +654,23 @@ def train(ctx):
                        for i, a in enumerate(chunk_grads) for b in chunk_grads[i + 1:]]
             stats["chunk_cosine"] = float(np.mean(cosines))
         del chunk_grads
-        if improver is not None:
+        if cfg.get("cv"):
+            from .cv import coefficient
+
+            if cv_c > 0:
+                # The dense term with the network as it was (before this step's fit).
+                dense, more = improver.direction(actor, params, batches, goal)
+                scale = float(np.mean([p["adv_scale"] for p in parts]))
+                factor = cv_c * float(cfg.get("deviation_boost", 1.0)) / max(scale, 1e-9)
+                direction = [d + factor * g for d, g in zip(direction, dense)]
+                stats |= {"cv_" + k: v for k, v in more.items()}
+            else:
+                improver.states = []
+            fitted_stats = improver.fit()
+            stats |= fitted_stats
+            stats["cv_c"] = cv_c
+            cv_c = coefficient(fitted_stats, cfg["cv"])
+        elif improver is not None:
             stats |= improver.fit()
             if step > int(cfg.get("mpo_warmup", 2)):
                 improved, more = improver.direction(actor, params, batches, goal)

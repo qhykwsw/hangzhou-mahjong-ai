@@ -44,5 +44,10 @@
     "head_lr": 0.0003,
     "kl_target": 0.002,
     "anchor": 30.0
-  }
+  },
+  "cv": {
+    "max": 1.0
+  },
+  "mpo_states_per_chunk": 50000,
+  "q_replay_steps": 2
 }
