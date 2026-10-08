@@ -189,7 +189,8 @@ def rows_of(game):
     ]
 
 
-@pytest.mark.parametrize("features", [None, "guided.encoding:oracle", "test_guided_fastgame:reads_events"])
+@pytest.mark.parametrize("features", [None, "guided.encoding:oracle", "test_guided_fastgame:reads_events",
+                                      "guided.encoding:belief_features"])
 def test_fast_game_plays_the_python_game(members, monkeypatch, features):
     by_id = {f"m{i}": m for i, m in enumerate(members)}
     monkeypatch.setattr(artifacts, "build_policy", lambda bundle, cid: by_id[cid])
@@ -209,6 +210,12 @@ def test_fast_game_plays_the_python_game(members, monkeypatch, features):
         assert games[0].predecision_reward == games[1].predecision_reward
         assert rows_of(games[0]) == rows_of(games[1])
         assert any(row.get("deviated") for row in games[1].rows)
+        if features == "guided.encoding:belief_features":
+            # The v2 belief's waits (guided.encoding.opponent_waits) from the C engine's state view, and
+            # only for opponents the oracle scalars call ready.
+            waits = np.stack([row["opp_waits"] for row in games[1].rows])
+            ready = np.stack([row["oracle_scalars"][:3] for row in games[1].rows]) * 9 > 7.5
+            assert waits.any() and not waits[~ready].any()
 
 
 def test_both_engines_extend_rows_for_a_wider_encoding(members, monkeypatch):

@@ -9,6 +9,7 @@ count real events, not pads.
 """
 
 import math
+from typing import NamedTuple
 
 import torch
 from torch import nn
@@ -64,6 +65,28 @@ TILE_FIELDS = (2, 3)
 ORACLE_PLANES, ORACLE_SCALARS = 16, 4
 ORACLE_PREFIX = "encoder.oracle_"
 
+# The v2 belief head's channels (Actor, belief_target_v2). Per tile: each
+# opponent's concealed copies / 4 (v1's three), the wall's copies / 4, and
+# whether each opponent, when ready, wins on drawing the tile. Per hand: each
+# opponent's progress (8 - shanten) / 9 and whether it is ready (shanten <= 0).
+# Opponents are in turn order after the actor.
+BELIEF_TILES = ("opponent1_copies", "opponent2_copies", "opponent3_copies", "wall_copies",
+                "opponent1_waits", "opponent2_waits", "opponent3_waits")
+BELIEF_STATE = ("opponent1_progress", "opponent2_progress", "opponent3_progress",
+                "opponent1_ready", "opponent2_ready", "opponent3_ready")
+# The leading tile channels a v1 head has: v2 computes them by their own matmuls (HistoryEncoder).
+BELIEF_V1_TILES = 3
+
+
+class BeliefV2(NamedTuple):
+    """A v2 belief head's logits, or its targets (belief_target_v2): tiles [n, 7, 34], state [n, 6].
+
+    Channels as BELIEF_TILES and BELIEF_STATE; a sigmoid gives the predicted values.
+    """
+
+    tiles: torch.Tensor
+    state: torch.Tensor
+
 
 class SuitEmbedding(nn.Module):
     """A tile table whose three suits share their ranks: row 9s + r is ranks[r] + suits[s].
@@ -117,6 +140,10 @@ class HistoryEncoder(nn.Module):
     With ``belief_head`` (an Actor option, see Actor) ``belief_head`` reads the
     34 tile tokens after ``belief_layer = layers // 2`` blocks and ``belief_in``
     adds its sigmoid, without gradient, back to them before the next block.
+    ``belief_head="v2"`` widens both to BELIEF_TILES channels and adds
+    ``belief_state_head``, reading the state token there, whose sigmoid
+    ``belief_state_in`` adds back to it (``belief_version`` is 1 or 2, None
+    without a head).
     With ``suit_embedding="shared"`` the tile tokens' table and the events'
     tile tables are SuitEmbeddings instead of free rows per tile.
     With ``oracle_inputs`` (an Actor option, see Actor) the bias-free
@@ -179,18 +206,32 @@ class HistoryEncoder(nn.Module):
             nn.init.xavier_uniform_(block.linear2.weight)
         self.transformer.layers[-1].output_tokens = slice(34, 35) if state_only else 35
         self.norm = nn.LayerNorm(dim)
-        self.belief_layer = None
-        if belief_head:
+        self.belief_layer = self.belief_version = None
+        if type(belief_head) is bool or belief_head is None:
+            version = 1 if belief_head else None
+        elif belief_head == "v2":
+            version = 2
+        else:
+            raise ValueError(f'belief_head must be true, false or "v2", not {belief_head!r}')
+        if version:
             if layers < 2:
                 raise ValueError("a belief head needs at least two layers")
-            self.belief_layer = layers // 2
+            self.belief_layer, self.belief_version = layers // 2, version
+            tiles = len(BELIEF_TILES) if self.belief_version == 2 else BELIEF_V1_TILES
             self.belief_head = nn.Sequential(
-                nn.LayerNorm(dim), nn.Linear(dim, dim), nn.GELU(), nn.Linear(dim, 3)
+                nn.LayerNorm(dim), nn.Linear(dim, dim), nn.GELU(), nn.Linear(dim, tiles)
             )
             # Starts at zero: the blocks after it first see exactly what they saw without it.
-            self.belief_in = nn.Linear(3, dim)
+            self.belief_in = nn.Linear(tiles, dim)
             nn.init.zeros_(self.belief_in.weight)
             nn.init.zeros_(self.belief_in.bias)
+            if self.belief_version == 2:
+                self.belief_state_head = nn.Sequential(
+                    nn.LayerNorm(dim), nn.Linear(dim, dim), nn.GELU(), nn.Linear(dim, len(BELIEF_STATE))
+                )
+                self.belief_state_in = nn.Linear(len(BELIEF_STATE), dim)
+                nn.init.zeros_(self.belief_state_in.weight)
+                nn.init.zeros_(self.belief_state_in.bias)
         self.oracle_inputs = bool(oracle_inputs)
         if oracle_inputs:
             # Training only (ADR-0018). Bias-free, so an all-zero oracle input
@@ -214,13 +255,42 @@ class HistoryEncoder(nn.Module):
         padding = torch.zeros_like(padding, dtype=x.dtype).masked_fill_(padding, float("-inf"))
         for index, block in enumerate(self.transformer.layers):
             if index == self.belief_layer:
-                tiles = x[:, :34]
-                belief = self.belief_head(tiles)
-                # Stop-gradient: the policy reads the belief but never trains the head.
-                injected = self.belief_in(torch.sigmoid(belief).detach())
-                x = torch.cat([tiles + injected, x[:, 34:]], dim=1)
+                if self.belief_version == 2:
+                    x, belief = self._belief_v2(x)
+                else:
+                    tiles = x[:, :34]
+                    belief = self.belief_head(tiles)
+                    # Stop-gradient: the policy reads the belief but never trains the head.
+                    injected = self.belief_in(torch.sigmoid(belief).detach())
+                    x = torch.cat([tiles + injected, x[:, 34:]], dim=1)
+                    belief = belief.transpose(1, 2)
             x = block(x, src_key_padding_mask=padding)
-        return x, belief.transpose(1, 2)
+        return x, belief
+
+    def _belief_v2(self, x):
+        """The tokens at block belief_layer with v2's beliefs added, and those beliefs' logits (BeliefV2).
+
+        The tile head's output layer and ``belief_in`` are one Linear(dim, 7)
+        and one Linear(7, dim), but each computes v1's leading channels (the
+        opponents' copies) by its own matmul on the very operands a v1 head
+        uses, and the other channels by a second one. So a v1 head widened to
+        v2 with zeros in the new rows and columns (guided.expand) reproduces
+        v1's logits bit for bit; a single matmul over all seven would not, as
+        the kernel's summation order may depend on the output width.
+        """
+        head, inject, k = self.belief_head, self.belief_in, BELIEF_V1_TILES
+        tiles, state = x[:, :34], x[:, 34]
+        hidden = head[2](head[1](head[0](tiles)))
+        out = head[3]
+        hands = F.linear(hidden, out.weight[:k], out.bias[:k])
+        rest = F.linear(hidden, out.weight[k:], out.bias[k:])
+        progress = self.belief_state_head(state)
+        # Stop-gradient, as v1: the policy reads the beliefs but never trains the heads.
+        injected = (F.linear(torch.sigmoid(hands).detach(), inject.weight[:, :k].contiguous(), inject.bias)
+                    + F.linear(torch.sigmoid(rest).detach(), inject.weight[:, k:]))
+        state = state + self.belief_state_in(torch.sigmoid(progress).detach())
+        x = torch.cat([tiles + injected, state[:, None], x[:, 35:]], dim=1)
+        return x, BeliefV2(torch.cat([hands, rest], -1).transpose(1, 2), progress)
 
     def forward(self, planes, scalars, events, return_belief=False, oracle=None):
         valid = events[..., 0] != 0
@@ -281,18 +351,18 @@ class HistoryEncoder(nn.Module):
 def actor_options(config):
     """The optional Actor structures ``config`` turns on, as Actor keyword arguments.
 
-    ``"belief_head": true`` adds the opponents' tile belief, ``"suit_embedding":
-    "shared"`` shares the suits' rank embeddings, ``"oracle_inputs": true``
-    adds the training-only oracle inputs (Actor). Options at their defaults are
-    dropped, so an Actor without any keeps its original config, weights and
-    exported files bit for bit.
+    ``"belief_head": true`` adds the opponents' tile belief, ``"belief_head":
+    "v2"`` the wider v2 belief, ``"suit_embedding": "shared"`` shares the
+    suits' rank embeddings, ``"oracle_inputs": true`` adds the training-only
+    oracle inputs (Actor). Options at their defaults are dropped, so an Actor
+    without any keeps its original config, weights and exported files bit for bit.
     """
     options = {}
     belief = config.get("belief_head", False)
-    if type(belief) is not bool:
-        raise ValueError("belief_head must be true or false")
+    if type(belief) is not bool and belief != "v2":
+        raise ValueError('belief_head must be true, false or "v2"')
     if belief:
-        options["belief_head"] = True
+        options["belief_head"] = belief
     suits = config.get("suit_embedding")
     if suits not in (None, "shared"):
         raise ValueError(f"unknown suit_embedding: {suits!r} (only \"shared\")")
@@ -336,7 +406,8 @@ def with_oracle_inputs(actor):
     with torch.random.fork_rng(devices=[]):
         oracle = Actor(actor.dim, actor.layers, actor.heads, planes=encoder.tile_in.in_features,
                        scalars=encoder.state_in.in_features, event_tail=encoder.event_embeddings[4].num_embeddings,
-                       belief_head=encoder.belief_layer is not None, suit_embedding=encoder.suit_embedding,
+                       belief_head={1: True, 2: "v2"}.get(encoder.belief_version, False),
+                       suit_embedding=encoder.suit_embedding,
                        oracle_inputs=True)
     missing, unexpected = oracle.load_state_dict(actor.state_dict(), strict=False)
     if unexpected or any(not k.startswith(ORACLE_PREFIX) for k in missing):
@@ -363,6 +434,33 @@ def belief_target(oracle_planes):
     return oracle_planes[:, :12].float().unflatten(1, (3, 4)).sum(2) / 4
 
 
+def belief_target_v2(oracle_planes, oracle_scalars, opp_waits):
+    """A v2 belief head's training targets from rows' fields, as BeliefV2(tiles [n, 7, 34], state [n, 6]) in [0, 1].
+
+    ``oracle_planes`` [n, 16, 34] and ``oracle_scalars`` [n, 4] as
+    guided.encoding.oracle defines them (a recipe's critic_features keeps that
+    definition), ``opp_waits`` [n, 3, 34] as guided.encoding.opponent_waits;
+    all are hidden state, a training label only (ADR-0009). Tiles: planes
+    4i..4i+3 summed / 4 for the three opponents and the wall (planes 12..15),
+    then opp_waits. State: oracle_scalars[:, :3], each opponent's (8 - shanten)
+    / 9, then whether it is ready (shanten <= 0, a scalar of 8/9 or more). A
+    loss: sum(binary_cross_entropy_with_logits(p.float(), t) for p, t in zip(belief, target)).
+    """
+    counts = oracle_planes[:, :16].float().unflatten(1, (4, 4)).sum(2) / 4
+    progress = oracle_scalars[:, :3].float()
+    ready = (progress * 9 > 7.5).float()
+    return BeliefV2(torch.cat([counts, opp_waits.float()], 1), torch.cat([progress, ready], 1))
+
+
+def belief_parameters(actor):
+    """The parameters of an Actor's belief heads (v2: the tile head and the state head), not their injections."""
+    encoder = actor.encoder
+    heads = [encoder.belief_head] if encoder.belief_version else []
+    if encoder.belief_version == 2:
+        heads.append(encoder.belief_state_head)
+    return [p for head in heads for p in head.parameters()]
+
+
 class Actor(nn.Module):
     """Logits over the 231 actions from legal inputs only.
 
@@ -377,6 +475,20 @@ class Actor(nn.Module):
     logits) for a training loss on hidden state (ADR-0009), and the policy loss
     never reaches the head. The head reads only legal inputs, so inference is
     unchanged: one forward pass, logits only.
+
+    ``belief_head="v2"``: the same place and the same stop-gradient injection,
+    predicting more. The tile head has the 7 channels of BELIEF_TILES (v1's
+    three opponents' copies / 4, the wall's copies / 4, each opponent's waits
+    when ready) and ``encoder.belief_in`` is Linear(7, dim); a second head,
+    ``encoder.belief_state_head``, reads the state token and predicts the 6
+    channels of BELIEF_STATE (each opponent's progress (8 - shanten) / 9 and
+    whether it is ready), whose sigmoid ``encoder.belief_state_in`` (Linear(6,
+    dim), zero at the start) adds back to the state token. ``forward(...,
+    return_belief=True)`` returns (logits, BeliefV2(tiles [batch, 7, 34], state
+    [batch, 6])); belief_target_v2 builds the targets from rows' oracle_planes,
+    oracle_scalars and opp_waits (guided.encoding.opponent_waits), and
+    belief_parameters lists both heads' parameters. expand --belief-head v2
+    widens a v1 head with every logit unchanged.
 
     ``suit_embedding="shared"``: every per-tile embedding, the tile tokens'
     ``encoder.tile_embedding`` and the events' tile and chi tables

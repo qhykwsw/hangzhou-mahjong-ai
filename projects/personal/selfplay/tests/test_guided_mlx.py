@@ -101,6 +101,64 @@ def test_belief_head_matches_reference():
         np.testing.assert_allclose(compiled, expected.numpy(), rtol=0.01, atol=0.005)
 
 
+def test_belief_v2_matches_reference():
+    """The v2 heads and both injections: logits, tile and state belief logits as torch computes them."""
+    from guided.encoding import ENCODING, ENCODING_V3, EVENT_TAILS, INPUTS
+    from guided.networks import actor_of
+
+    torch.manual_seed(598)
+    rng = np.random.default_rng(461)
+    for encoding, layers, options in ((ENCODING, 2, {}), (ENCODING_V3, 3, {}), (ENCODING, 4, {"suit_embedding": "shared"})):
+        actor = actor_of(encoding, 32, layers, 4, belief_head="v2", **options).eval()
+        for layer in (actor.encoder.belief_in, actor.encoder.belief_state_in):  # live injections
+            torch.nn.init.normal_(layer.weight, std=0.5)
+            torch.nn.init.normal_(layer.bias, std=0.1)
+        row = blank(*INPUTS[encoding])
+        events = np.zeros((3, 32, 5), np.int32)
+        for field, size in enumerate([7, 5, 35, 35, EVENT_TAILS[encoding]]):
+            events[:, 8:24, field] = rng.integers(1 if field < 4 else 0, size, size=(3, 16))
+        events[:, :8, 1:] = -999  # padding fields must be ignored
+        args = [rng.normal(size=(3, *row["planes"].shape)).astype(np.float16),
+                rng.normal(size=(3, *row["scalars"].shape)).astype(np.float16), events]
+        with torch.inference_mode():
+            expected, belief = actor(*(torch.from_numpy(a) for a in args), return_belief=True)
+        metal = MetalActor(actor)
+        logits, (tiles, state) = metal.outputs(*(mx.array(a) for a in args))
+        np.testing.assert_allclose(np.asarray(logits), expected.numpy(), rtol=0.01, atol=0.005)
+        np.testing.assert_allclose(np.asarray(tiles), belief.tiles.numpy(), rtol=0.01, atol=0.005)
+        np.testing.assert_allclose(np.asarray(state), belief.state.numpy(), rtol=0.01, atol=0.005)
+        compiled = np.asarray(metal.logits(*(mx.array(a) for a in args)))
+        np.testing.assert_allclose(compiled, expected.numpy(), rtol=0.01, atol=0.005)
+
+
+def test_a_v1_belief_widened_to_v2_decides_bit_for_bit_on_metal_too(tmp_path):
+    """expand --belief-head v2 keeps the Metal backend's logits too: v1's channels go through the same matmuls."""
+    from guided.deployment import load_actor
+    from guided.expand import expand
+    from guided.networks import actor_of
+    from guided.trial import export_actor
+    from guided.encoding import ENCODING, EVENT_TAILS, INPUTS
+
+    torch.manual_seed(599)
+    source = actor_of(ENCODING, 32, 4, 4, belief_head=True, suit_embedding="shared").eval()
+    with torch.no_grad():
+        for p in (source.encoder.belief_in.weight, source.encoder.belief_head[3].weight):
+            torch.nn.init.normal_(p, std=0.5)
+    config = {"dim": 32, "layers": 4, "heads": 4, "lookahead": True, "belief_head": True, "suit_embedding": "shared"}
+    export_actor(source.state_dict(), config, tmp_path / "v1")
+    narrow = MetalActor(load_actor(tmp_path / "v1", "cpu")[0])
+    wide = MetalActor(load_actor(expand(tmp_path / "v1", tmp_path / "models", belief_head="v2"), "cpu")[0])
+    rng = np.random.default_rng(462)
+    for batch in (1, 5):
+        row = blank(*INPUTS[ENCODING])
+        events = np.zeros((batch, 20, 5), np.int32)
+        for field, size in enumerate([7, 5, 35, 35, EVENT_TAILS[ENCODING]]):
+            events[:, 4:, field] = rng.integers(1 if field < 4 else 0, size, size=(batch, 16))
+        args = [mx.array(rng.normal(size=(batch, *row["planes"].shape)).astype(np.float16)),
+                mx.array(rng.normal(size=(batch, *row["scalars"].shape)).astype(np.float16)), mx.array(events)]
+        assert np.array_equal(np.asarray(wide.logits(*args)), np.asarray(narrow.logits(*args)))
+
+
 def test_shared_suit_embeddings_match_reference():
     from guided.encoding import ENCODING_V3, EVENT_TAILS, INPUTS
     from guided.networks import actor_of

@@ -465,3 +465,39 @@ def oracle(state, seat):
                 scalars[i] = (8 - shanten(tuple(sorted(tiles)), opened)) / 9
     scalars[3] = len(state.wall) / 136
     return {"oracle_planes": planes, "oracle_scalars": scalars}
+
+
+def opponent_waits(state, seat):
+    """Each opponent's waits from ``seat``'s side, for training only (ADR-0009): the v2 belief head's label.
+
+    float32 [3, 34], opponents in turn order after ``seat`` (networks.belief_target_v2's opp_waits): 1 where
+    the opponent is ready, its concealed hand having 13 tiles less 3 per meld at shanten 0, and drawing the
+    tile wins, as the SDK finds a waiting hand's winning tiles (mahjong_ai.sdk.shape.analyze): the white
+    tile is wild, a baotou hand wins on every tile, a tile of which the hand already holds all four is not a
+    draw, and under the room's you_cai_bi_kao a hand holding a white wins only on baotou. 0 elsewhere, and
+    for an opponent not ready or holding a drawn tile. Only the plain fields (hands, melds) are read, so a C
+    engine's state view (fastgame.StateView) gives the same labels without a replay.
+    """
+    from mahjong_ai.sdk.shape import analyze, shanten
+
+    waits = np.zeros((3, 34), dtype=np.float32)
+    melds, you_cai = state.melds, None
+    for i in range(3):
+        other = (seat + i + 1) % 4
+        tiles, opened = state.hands[other], len(melds[other])
+        if len(tiles) != 13 - 3 * opened:
+            continue
+        hand = tuple(sorted(tiles))
+        if shanten(hand, opened) != 0:
+            continue
+        if you_cai is None:
+            # A C engine's view keeps its game; reading config off the view would replay the game in Python.
+            game = getattr(state, "_game", None)
+            you_cai = bool((game.config if game is not None else state.config).you_cai_bi_kao)
+        waits[i, analyze(hand, opened, None, 0, 0, you_cai)["winning_tiles"]] = 1
+    return waits
+
+
+def belief_features(state, seat):
+    """A critic_features hook for a v2 belief head: oracle's fields and opponent_waits as ``opp_waits``."""
+    return oracle(state, seat) | {"opp_waits": opponent_waits(state, seat)}
