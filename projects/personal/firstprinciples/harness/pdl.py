@@ -204,7 +204,7 @@ except Exception:
 
 
 def measure(a_id, b_id, *, hands=None, seed=None, host="local", k=None, a_spec=None, b_spec=None, reuse=True,
-            field=None):
+            field=None, rounds=None):
     """V(b) - V(a), points per game on the fixed pool (see the module docstring); appended to pdl-results.jsonl.
 
     A version without a record yet (an attempt being judged, harness.evaluate) passes its spec. A
@@ -212,17 +212,21 @@ def measure(a_id, b_id, *, hands=None, seed=None, host="local", k=None, a_spec=N
     with all of these is returned as it is (reuse): an interrupted judgement resumes without measuring again.
     ``field`` ({"id", "members": {name: spec}, "lineups": [[name] * 3, ...]}) seats other opponents in
     place of the pool's, block b with lineup b % len(lineups); the pool's runtime and game format stay.
+    ``rounds`` plays games of that many hands instead of the pool's (8: the online free play's format).
     """
     import fcntl
 
     hands, k = hands or HANDS, k or K
     pool = E.load_pool()
+    if rounds:
+        pool = dict(pool, config=dict(pool["config"], rounds=int(rounds)))
     rounds = int(pool["config"]["rounds"])
     blocks = max(1, hands // (4 * rounds))
     seed = random.SystemRandom().getrandbits(62) if seed is None else int(seed)
     specs = {"A": a_spec or spec_of(a_id), "B": b_spec or spec_of(b_id)}
     versions = {a_id: E.version({"id": a_id, "spec": specs["A"]}), b_id: E.version({"id": b_id, "spec": specs["B"]})}
-    field_id = field["id"] if field else None
+    field_id = (field["id"] if field else None) if rounds == E.load_pool()["config"]["rounds"] else \
+        f"{field['id'] if field else 'pool'}@{rounds}h"
     if reuse and results_path().exists():
         same = (a_id, b_id, pool["id"], seed, blocks * 4, k, versions, field_id)
         for line in results_path().read_text().splitlines():
@@ -231,7 +235,7 @@ def measure(a_id, b_id, *, hands=None, seed=None, host="local", k=None, a_spec=N
                 return r
     opponents, lineups = (field["members"], field["lineups"]) if field else (E.playing(pool), E.lineups(pool))
     policies = dict(opponents, **{n: E.with_timeouts(s) for n, s in specs.items()})
-    root = E.LOCAL / "pdl" / (f"{a_id}--{b_id}--{seed}--{blocks}x{k}" + (f"--{field_id}" if field else ""))
+    root = E.LOCAL / "pdl" / (f"{a_id}--{b_id}--{seed}--{blocks}x{k}" + (f"--{field_id}" if field_id else ""))
     E.LOCAL.mkdir(parents=True, exist_ok=True)
     started = time.time()
     with (E.LOCAL / f"evaluation-{host}.lock").open("w") as lock:
