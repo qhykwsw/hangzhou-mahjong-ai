@@ -3,7 +3,9 @@
 
 The scoped token comes from a credentials file ``{"token": "..."}``; the runner
 registers and readies, keeps polling so the entrant counts as online when the
-stage freezes, plays every assigned game and exits when the tournament ends.
+stage freezes, plays every assigned game and exits when the tournament ends. A model entrant
+plays through a local inference service loaded before the first table, as in
+free play.
 """
 
 import argparse
@@ -14,6 +16,8 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+
+from run_free_play import model_service
 
 
 def main():
@@ -62,7 +66,12 @@ def main():
     ]
     if args.insecure:
         command.append("--insecure")
-    return subprocess.call(command, env=env)
+    service = model_service(root, ["--policy", args.policy], env)
+    try:
+        return subprocess.call(command, env=env)
+    finally:
+        if service:
+            service.close()
 
 
 if __name__ == "__main__":
