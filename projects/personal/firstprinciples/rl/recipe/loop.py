@@ -488,6 +488,24 @@ def train(ctx):
     # of the states the teacher needs labelled. DAgger takes over after them.
     bc_cfg = dict(collect_cfg, teacher_plays=True)
 
+    # cfg["stage_mix"]: ordinary collections take turns among the listed stage kinds (None: a plain
+    # game), each game placed in a tournament stage (guided.stage). The reward stays the game's
+    # score; the stage only changes what the observation says. With "games": 1 (the default) the
+    # stage is the game itself, with no carried scores: the observation is the platform's
+    # (official client: the stage kind with this game's scores and hand of its rounds), so the
+    # stage kind, the one input of rounds 2-4 the plain games never vary, stops being out of
+    # distribution.
+    mix = cfg.get("stage_mix")
+
+    def staged(play, turn_no, distilling):
+        if not mix or distilling:
+            return play
+        kind = mix["kinds"][turn_no % len(mix["kinds"])]
+        if kind is None:
+            return play
+        return dict(play, stage={"kind": kind, "games": int(mix.get("games", 1)),
+                                 "per_game_sd": float(mix.get("per_game_sd", 70))})
+
     def rollout(distilling, bc=False):
         """One rollout of target_rows decisions, or None when time or hands ran short."""
         nonlocal iteration, turn
@@ -508,7 +526,7 @@ def train(ctx):
             while len(rows) < ordinary and hands() and ctx.time_left() > reserve:
                 iteration += 1
                 got, _, _ = ctx.collect(
-                    actor, play_cfg, samples=min(40000, ordinary),
+                    actor, staged(play_cfg, iteration, distilling), samples=min(40000, ordinary),
                     iteration=iteration,
                     labels=distilling, inference_session=session, hooks=hooks,
                 )

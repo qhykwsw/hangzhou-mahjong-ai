@@ -54,5 +54,13 @@
   "branch_truncate": 4,
   "leaf_fit_rows": 200000,
   "leaf_learning_rate": 0.0001,
-  "leaf_zero_sum": true
+  "leaf_zero_sum": true,
+  "stage_mix": {
+    "kinds": [
+      null,
+      "advancement",
+      "final"
+    ],
+    "games": 1
+  }
 }
