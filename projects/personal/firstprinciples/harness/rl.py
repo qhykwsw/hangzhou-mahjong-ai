@@ -611,8 +611,15 @@ def train(state):
     # The host's inference service (evaluations; training does not use it) keeps the
     # GPU memory its batches grew to: 5 GB on the 4070 after one evaluation, which with
     # the trainer's cap overran the 12 GB card and stalled 257. The next evaluation starts it again.
-    remote.execute(host, "import subprocess\n"
-                   f"subprocess.run(['pkill','-f','guided.model_server .*--port {SERVICE_PORT}'])", timeout=120)
+    # An evaluation still playing on the host (the previous attempt's verdict or its proxy tables)
+    # plays through the service and holds the host's evaluation lock: wait for it, or its seats
+    # hang (10-09: 266's proxy tables stalled 4 hours when 268 began training on the 4090).
+    import fcntl
+
+    with (E.LOCAL / f"evaluation-{host}.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        remote.execute(host, "import subprocess\n"
+                       f"subprocess.run(['pkill','-f','guided.model_server .*--port {SERVICE_PORT}'])", timeout=120)
     opponents, offered, runtime = training_opponents(host)
     prebuild_fastgame(host, setup_["code"], runtime)
     # What this attempt could choose from, as the agent saw it.
