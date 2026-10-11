@@ -1,6 +1,6 @@
 # 项目开发约定
 
-本项目提供杭州麻将引擎、由迭代 Agent 推进的规则线与 RL 线（迭代线），以及平台对战。安装和启动见 [README](README.md)，领域术语见 [CONTEXT.md](CONTEXT.md)。
+本项目提供杭州麻将引擎、由迭代 Agent 推进的规则线与 RL 线（迭代线），以及平台对战。安装和启动见 [README](README.md)，领域术语见 [GLOSSARY.md](GLOSSARY.md)。
 
 ## 沟通
 

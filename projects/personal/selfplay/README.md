@@ -5,7 +5,7 @@ RL 线的训练框架，用 PyTorch 训练：
 - **规则教师指导**（[`guided/`](guided/)）：以冻结的规则版本为教师，先纯模仿，再用真实桌面分做强化学习并保留按师生差距调整的教师辅助损失；Actor 由独立的推理服务出牌。用法见[训练手册](guided/README.md)，决定见 [ADR-0011](../../../docs/adr/0011-rule-guided-policy-learning.md)。
 - **训练方案接口**（[`recipes/API.md`](recipes/API.md)）：RL 线每次尝试修改的训练方案（`recipe` 包）在 `guided/trial.py` 里运行时能用到的上下文与约束。RL 线自己的方案在 `../firstprinciples/rl/recipe/`。
 
-早期的自我对弈 PPO 训练器（`train/`，ONNX 发布）和自动研究里的方案分支已删除，见 [ADR-0019](../../../docs/adr/0019-retire-automated-research.md)。术语（桌面分、阶段总分、教师策略）见 [CONTEXT.md](../../../CONTEXT.md)。
+早期的自我对弈 PPO 训练器（`train/`，ONNX 发布）和自动研究里的方案分支已删除，见 [ADR-0019](../../../docs/adr/0019-retire-automated-research.md)。术语（桌面分、阶段总分、教师策略）见 [GLOSSARY.md](../../../GLOSSARY.md)。
 
 ## 目录
 

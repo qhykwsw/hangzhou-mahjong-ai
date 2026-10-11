@@ -1,6 +1,6 @@
 # 规则教师指导训练（guided）
 
-RL 线的训练框架：以冻结的规则版本为教师，Actor 先纯模仿，再用真实桌面分做 PPO，并按师生差距保留教师辅助损失。设计取舍与实验得出的决定见 [ADR-0011](../../../../docs/adr/0011-rule-guided-policy-learning.md)，术语（教师策略、教师指导强度、评估代）见 [CONTEXT.md](../../../../CONTEXT.md)。
+RL 线的训练框架：以冻结的规则版本为教师，Actor 先纯模仿，再用真实桌面分做 PPO，并按师生差距保留教师辅助损失。设计取舍与实验得出的决定见 [ADR-0011](../../../../docs/adr/0011-rule-guided-policy-learning.md)，术语（教师策略、教师指导强度、评估代）见 [GLOSSARY.md](../../../../GLOSSARY.md)。
 
 本框架不产出 ONNX 发布包：Actor 由推理服务出牌，见[项目 README](../README.md)。
 

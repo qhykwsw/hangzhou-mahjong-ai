@@ -37,7 +37,7 @@ python3 -m venv .venv
 | 修改 RL 训练框架或训练方案接口 | [训练手册](projects/personal/selfplay/guided/README.md) · [方案接口](projects/personal/selfplay/recipes/API.md) |
 | 修改引擎、执行器或策略 SDK | [开发索引](docs/reference/development.md) |
 | 核对规则或平台对战 | [平台规则与接入](docs/reference/platform.md) |
-| 理解领域对象和架构取舍 | [术语表](CONTEXT.md) · [决策记录](docs/adr/) |
+| 理解领域对象和架构取舍 | [术语表](GLOSSARY.md) · [决策记录](docs/adr/) |
 | 查阅官方材料 | [原始资料](docs/sources/README.md) |
 
 运行数据不进入 Git，提交源码不能代替备份。

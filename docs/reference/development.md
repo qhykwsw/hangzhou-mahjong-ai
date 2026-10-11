@@ -70,4 +70,4 @@ ruff format --check src tests scripts
 
 ## 领域与决策
 
-[术语表](../../CONTEXT.md) 定义迭代线、尝试、固定对手池与评测口径。架构取舍见 [ADR](../adr/)，迭代线的现行操作见[项目说明](../../projects/personal/firstprinciples/README.md)。新的通用说明更新现有手册；具体成绩、耗时和核实日期保存在迭代线的记录里。
+[术语表](../../GLOSSARY.md) 定义迭代线、尝试、固定对手池与评测口径。架构取舍见 [ADR](../adr/)，迭代线的现行操作见[项目说明](../../projects/personal/firstprinciples/README.md)。新的通用说明更新现有手册；具体成绩、耗时和核实日期保存在迭代线的记录里。
