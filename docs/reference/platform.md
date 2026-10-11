@@ -41,13 +41,13 @@
 
 海选、半决赛和决赛共享麻将玩法。局数、并发与底分等房间配置在锦标赛级别只有一份（`tournament.config`），各阶段共用；二测四个阶段均为 `Rounds: 16`、`M: 10`，每人每阶段 10 场。非决赛排序为总分、名次分、白板数、稳定 ID；场名次分为 +3、+1、−1、−3，同分平均。决赛按总分，同分加赛并累计。自动匹配房由服务端按默认 M=10、Rounds=8 建房，`POST /api/match` 请求体里的 `Rounds` 只是可承受上限，不能要求 16 局；自建测试房可以自定局数。
 
-本地训练与评估的主口径是完整结算的场均桌面分，与非决赛第一排序键一致，场均名次分只在同分时比较（[ADR-0010](../adr/0010-table-score-as-primary-evaluation-metric.md)）。评估每场局数跟随锦标赛配置，当前为 16 局。研究分支连续迭代，每次面对最近一次共同大乱斗的前三名做分段配对评估，累计晋级后全体现役代表再共同大乱斗，详见[研究手册](strategy-agent.md)。
+本地训练与评估的主口径是完整结算的场均桌面分，与非决赛第一排序键一致，场均名次分只在同分时比较（[ADR-0010](../adr/0010-table-score-as-primary-evaluation-metric.md)）。评估每场局数跟随锦标赛配置，当前为 16 局。迭代线的评估口径见[迭代线说明](../../projects/personal/firstprinciples/README.md)。
 
 ## 冻结策略与外部记录
 
-从研究导出完整候选 ID，使用导出的 `policy.json` 和对应 runtime 运行。外部测试房、自由对战与正式比赛各自建立新的输出目录；自由对战与测试房的赛后牌谱可以作为人工项目的训练数据（[ADR-0015](../adr/0015-platform-replays-as-training-data.md)），自动研究候选不读取平台记录；正式锦标赛没有赛后牌谱。命令入口位于 `platform/` 模块，脚本递归冻结全部模块。
+参赛包由迭代线导出（`harness.line promote <尝试>` 写到 `.local/platform/entrant-<尝试>/`），用其中的 `policy.json` 运行；规则版本带自己的冻结运行时，模型版本经本机推理服务出牌。外部测试房、自由对战与正式比赛各自建立新的输出目录；自由对战与测试房的赛后牌谱可以作为训练数据（[ADR-0015](../adr/0015-platform-replays-as-training-data.md)）；正式锦标赛没有赛后牌谱。命令入口位于 `platform/` 模块，脚本递归冻结全部模块。
 
-源码中的引擎修复不自动更新旧候选、已导出的策略或远端冻结运行时。采用新规则需创建新实验或新发布包，核对其 `ENGINE_VERSION` 与运行时指纹；旧实验及原始对局证据保持不变。
+源码中的引擎修复不自动更新已冻结的对手池成员、已导出的参赛包或远端冻结运行时。采用新规则需冻结新的运行时并导出新的参赛包，核对其 `ENGINE_VERSION` 与运行时指纹；已有记录及原始对局证据保持不变。
 
 ## 对战操作
 
@@ -95,7 +95,7 @@
 .venv/bin/python scripts/audit_free_play_run.py .local/competition/free-01 --insecure
 ```
 
-凭据文件结构、策略参数和导出选项以 [live_workflow.py](../../src/mahjong_ai/platform/live_workflow.py)、[free_play.py](../../src/mahjong_ai/platform/free_play.py) 及相应 CLI `--help` 为准。开放研究候选接入平台前须核对加载/导出兼容性；研究运行完成不代表候选已部署。
+凭据文件结构、策略参数和导出选项以 [live_workflow.py](../../src/mahjong_ai/platform/live_workflow.py)、[free_play.py](../../src/mahjong_ai/platform/free_play.py) 及相应 CLI `--help` 为准。新版本接入平台前须核对参赛包能被冻结的运行时加载；评估完成不代表已经上场。
 
 ## 协议要点
 
@@ -118,6 +118,6 @@
 | 姓名语义 | 正式锦标赛之外的一切姓名字段只下发 AI 昵称，昵称为空给空串（v30）。name 仅作展示，稳定身份一律用 `user_id` |
 | 门户今日榜 | v34 的 `/portal/api/leaderboard` 新增 `last`：仅今日榜且上榜人数大于 32 时为 `{rooms, firsts, score, is_me}`，否则为 `null`；不包含身份。本项目不消费此门户榜单，无需接入，也不改变本地研究排名 |
 
-测试反馈用于框架校准与回归；平台记录不进入研究 MCP。自由对战与测试房的牌谱由人工项目的 `guided.platform_dataset` 入库、还原与冻结，用法见[训练手册](../../projects/personal/selfplay/guided/README.md)。完整阶段身份映射、最高并发和响应窗口仍需专项线上验证，当前能力边界见[开发索引](development.md)。
+测试反馈用于框架校准与回归。自由对战与测试房的牌谱由 `guided.platform_dataset` 入库、还原与冻结，用法见[训练手册](../../projects/personal/selfplay/guided/README.md)。完整阶段身份映射、最高并发和响应窗口仍需专项线上验证，当前能力边界见[开发索引](development.md)。
 
 自定义快照映射必须包含 `god_discarder_seat`。圈中缺少或包含无效豁免座位时拒绝生成动作；旧版无圈快照允许省略该字段，由官方适配器补为 -1。

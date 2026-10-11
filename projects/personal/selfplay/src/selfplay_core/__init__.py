@@ -1,1 +1,1 @@
-"""Inference-side core shared by the trainer and the frozen release."""
+"""Action numbering and observation encoding shared by the trainer and the inference service."""

@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0019
 ---
 
 # 将策略长期历史与实验执行、对手选择和成绩展示解耦

@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0019
 ---
 
 # 用训练方案迭代改进模仿之后的强化学习

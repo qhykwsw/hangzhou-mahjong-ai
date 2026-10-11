@@ -3,7 +3,7 @@
 两条由迭代 Agent 推进的策略改进序列，设计与取舍见 [ADR-0016](../../../docs/adr/0016-maintainer-iteration-lines.md)，术语（迭代线、尝试、迭代 Agent、维护者、固定对手池）见 [CONTEXT.md](../../../CONTEXT.md)。
 
 - **规则线**：`rule/` 是唯一被修改的目录。v0 是最朴素的牌效策略，之后按杭州麻将规则的第一性原理逐次改进，大方向是速度优先、必胜时追求翻倍。规则线也可以从主线的分叉口接着走：`checkout rule <版本>` 把任意评估过的规则版本放回 `rule/`，`start --from <版本>` 沿这条分支自己的版本接着改（见[规则线手册](handbooks/rule.md)）。
-- **RL 线**：沿用训练方案框架（`../selfplay/recipes`、`guided.trial`）。模型规格按主机固定：4070 与 5070 Ti 是小规格 128/4/4（约 0.84M 参数），起点是它对 piao-call-channel 做 10 万局（每场 16 局）的模仿；4090 在 2026-10-04 至 10-05 跑过中规格 256/6/8（约 4.8M 参数，起点是随机初始化的 random-medium-256x6），10-05 起也跑小规格（用户决定 RL 线只留 4090 一条路线）；中规格与此前的大规格 384/8/8（约 14.3M 参数，起点 imitation-piao-1h）版本仍可比较，但不再训练。各种规格共享一个最好版本，续训只在同规格之间。每次尝试的训练局数由迭代 Agent 选（默认 100 万；小规格与中规格最多 500 万，大规格最多 1000 万、其中带教师标签的最多 500 万，大规格靠一段段续训累积训练量），可以从固定起点、当前最好版本、任意一个评估过的 RL 版本出发，或在方案里从随机初始化开始（例如换教师重做模仿），在 4070、4090 或 5070 Ti 上进行。任意两个版本可以用 `harness.evaluate compare <A> <B>` 在开发集上配对比较。
+- **RL 线**：用训练方案框架（`guided.trial`，接口见 `../selfplay/recipes/API.md`）。模型规格按主机固定：4070 与 5070 Ti 是小规格 128/4/4（约 0.84M 参数），起点是它对 piao-call-channel 做 10 万局（每场 16 局）的模仿；4090 在 2026-10-04 至 10-05 跑过中规格 256/6/8（约 4.8M 参数，起点是随机初始化的 random-medium-256x6），10-05 起也跑小规格（用户决定 RL 线只留 4090 一条路线）；中规格与此前的大规格 384/8/8（约 14.3M 参数，起点 imitation-piao-1h）版本仍可比较，但不再训练。各种规格共享一个最好版本，续训只在同规格之间。每次尝试的训练局数由迭代 Agent 选（默认 100 万；小规格与中规格最多 500 万，大规格最多 1000 万、其中带教师标签的最多 500 万，大规格靠一段段续训累积训练量），可以从固定起点、当前最好版本、任意一个评估过的 RL 版本出发，或在方案里从随机初始化开始（例如换教师重做模仿），在 4070、4090 或 5070 Ti 上进行。任意两个版本可以用 `harness.evaluate compare <A> <B>` 在开发集上配对比较。
 - **规模训练**（维护者）：大规格从随机初始化开始，按开跑前固定的方案与计划（`scale/recipe`）模仿 500 万局、RL 1 亿局，分 12 段，每段是 RL 线的一次尝试，照常评估与确认。训练对手是第三代训练对手（fp-rule-068 派生的 7 种风格，`harness.rl training-rules` 登记），评估仍对固定对手池。`harness.scale begin` 冻结方案并开跑第一段，之后的段在上一段记录后自动开跑；进行期间它的主机只给它用。`harness.scale status` 看各段进度。2026-10-03 用户决定提前结束（PG 段到平台，见 ADR-0016），4090 交回 RL 线做大规格难例蒸馏 fp-rule-127。
 
 ## 评估
@@ -46,8 +46,8 @@ RL 线最初的最好版本就是模仿起点本身，三台主机从一开始�
 ```bash
 cd projects/personal/firstprinciples
 ../../../.venv/bin/python -m harness.evaluate runtime                                       # 把 src/mahjong_ai 冻结为运行时
-../../../.venv/bin/python -m harness.evaluate pool [--model <weights-sha> --name <模型名>] [--rules <研究候选 ID 或代码包目录，逗号分隔>] [--runtime <目录>] [--replace]  # 冻结对手池
-../../../.venv/bin/python -m harness.evaluate reference <研究候选 ID | 池内模型名> [--weights <sha>] [--host local|4070|4090|5070ti]  # 参照线
+../../../.venv/bin/python -m harness.evaluate pool [--model <weights-sha> --name <模型名>] [--rules <代码包目录，逗号分隔；默认沿用现役对手池>] [--runtime <目录>] [--replace]  # 冻结对手池
+../../../.venv/bin/python -m harness.evaluate reference <池内成员 | 名字 --weights <sha>> [--host local|4070|4090|5070ti]  # 参照线
 ../../../.venv/bin/python -m harness.starts make --kinds kong-window,kept-fourth,fish-window --count <N> --name <集名> [--workers 8]  # RL 线的残局集（.local/rl/starts/）
 ../../../.venv/bin/python -m harness.rl export <远端 checkpoint> --name <模型名> --host <主机>  # 导出别处训练的模型（如对手池成员）
 ../../../.venv/bin/python -m harness.rl setup <主机上的 checkpoint | 权重 sha> --name <起点名> --host 4070|4090|5070ti  # RL 起点（每台主机一次）
@@ -81,4 +81,4 @@ cd projects/personal/firstprinciples
 
 ## 运行数据
 
-都在本项目 `.local/`：`pool.json`（现役对手池）、`pools/<池 id>.json`（每个对手池的存档，换池后网页按它画各代的参照线）、`seal.json`、`attempts.jsonl`（每次尝试一条记录）、`rebase/<池 id>-unrecorded/`（只供网页展示、不记入记录的换池重算）、`running/`（在途尝试的状态）、`reported.json`（已汇报给用户的记录，按「编号@完成时间」登记）、`hosts.json`（主机开关）、`notes/<线>.md`（迭代笔记）、冻结的尝试快照与任务目录。研究网页的「迭代线」标签页只读展示。
+都在本项目 `.local/`：`pool.json`（现役对手池）、`pools/<池 id>.json`（每个对手池的存档，换池后网页按它画各代的参照线）、`seal.json`、`attempts.jsonl`（每次尝试一条记录）、`rebase/<池 id>-unrecorded/`（只供网页展示、不记入记录的换池重算）、`running/`（在途尝试的状态）、`reported.json`（已汇报给用户的记录，按「编号@完成时间」登记）、`hosts.json`（主机开关）、`notes/<线>.md`（迭代笔记）、冻结的尝试快照与任务目录。网页（`mahjong start`）只读展示。

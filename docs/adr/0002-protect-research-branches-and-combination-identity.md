@@ -1,5 +1,5 @@
 ---
-status: partially superseded by ADR-0006
+status: superseded by ADR-0019
 ---
 
 # 保护持续研究分支及其策略组合身份

@@ -1,31 +1,12 @@
 import time
 import pytest
-from mahjong_ai.execution.agent import transient_failure
 from mahjong_ai.execution.candidate_runtime import (
     ActionUnavailable,
     RemotePolicy,
     tree_hash,
-    train_package,
 )
 from mahjong_ai.domain.engine import HandState
 from mahjong_ai.domain.types import RoundConfig
-from mahjong_ai.strategies.seeds import default_opponents
-
-
-def test_transient_failure_only_matches_gateway_errors():
-    rate_limited = (
-        '{"type": "thread.started", "thread_id": "x"}\n'
-        '{"type": "error", "message": "exceeded retry limit, last status: 429'
-        ' Too Many Requests"}\n'
-    )
-    assert transient_failure(rate_limited)
-    assert transient_failure(
-        '{"type": "error", "message": "stream error: 503 Service Unavailable"}'
-    )
-    assert not transient_failure(
-        '{"type": "item.completed", "item": {"type": "mcp_tool_call", "error": "429"}}'
-    )
-    assert not transient_failure('{"type": "error", "message": "invalid api key"}')
 
 
 def test_timeout_keeps_worker_and_discards_late_reply(tmp_path):
@@ -69,28 +50,6 @@ def test_platform_fallback_discards_rightmost_in_insertion_order():
             if a.action == "discard" and a.tile == tile
         )
     assert hand.timeout_action() == expected
-
-
-def test_generic_training_can_compute_artifact_without_rl_games(tmp_path):
-    package = tmp_path / "source"
-    package.mkdir()
-    (package / "strategy.py").write_text("""def train(ctx):
- (ctx.output/'lookup.txt').write_text('computed lookup')
- ctx.checkpoint({'ready':True})
- return {'lookups':1}
-""")
-    model = tmp_path / "out/model"
-    result = train_package(
-        package,
-        model,
-        RoundConfig(rounds=1),
-        default_opponents(),
-        2,
-        3,
-        time.monotonic() + 10,
-    )
-    assert result["episodes"] == []
-    assert (model / "lookup.txt").read_text() == "computed lookup"
 
 
 def test_paired_receipt_diagnostics_only_expose_focal_error_messages(tmp_path):

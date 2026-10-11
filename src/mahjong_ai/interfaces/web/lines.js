@@ -320,7 +320,7 @@
   let pick = null; // the pool shown: the current one unless the viewer picked another
   const picked = () => [...data.attempts, ...(data.older || [])].filter((a) => a.pool === pick);
   window.addEventListener("resize", () => {
-    if (data && !$("linesView").hidden) {
+    if (data) {
       $("linesChart").innerHTML = chart(picked());
       $("proxyChart").innerHTML = proxyChart(data.proxy);
       $("onlineChart").innerHTML = onlineChart(data.online);
@@ -375,19 +375,6 @@
     draw();
   });
 
-  function select(lines) {
-    $("tabResearch").setAttribute("aria-selected", String(!lines));
-    $("tabLines").setAttribute("aria-selected", String(lines));
-    $("researchView").hidden = lines;
-    $("linesView").hidden = !lines;
-    try { localStorage.setItem("tab", lines ? "lines" : "research"); } catch (_) {}
-    if (lines) refresh();
-  }
-
-  $("tabResearch").addEventListener("click", () => select(false));
-  $("tabLines").addEventListener("click", () => select(true));
-  let saved = "research";
-  try { saved = localStorage.getItem("tab") || "research"; } catch (_) {}
-  select(saved === "lines");
-  setInterval(() => { if (!$("linesView").hidden) refresh(); }, 60000);
+  refresh();
+  setInterval(refresh, 60000);
 })();

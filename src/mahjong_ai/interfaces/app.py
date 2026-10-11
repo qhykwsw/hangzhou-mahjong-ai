@@ -1,43 +1,27 @@
-"""Local dashboard and one host-managed service per project."""
+"""Read-only web page of the maintainer's iteration lines (ADR-0016): attempts, proxy tables and free play."""
 
 import argparse
 import asyncio
-from contextlib import asynccontextmanager
 import hashlib
 import ipaddress
 import json
 import os
 from pathlib import Path
 import re
-import socket
 import shutil
+import socket
 import subprocess
 import sys
 import threading
 import time
-import traceback
-import urllib.error
 import urllib.request
 
 from starlette.applications import Starlette
 from starlette.responses import FileResponse, JSONResponse
 from starlette.routing import Route
 from starlette.staticfiles import StaticFiles
-from mahjong_ai.research.service import Research
-from mahjong_ai.execution.controller import Controller
 from mahjong_ai.persistence.artifacts import atomic_json, exclusive_lock, read_json
 from mahjong_ai.interfaces.service_host import open_url, start_service, stop_service
-from mahjong_ai.project import ProjectDescriptor
-from mahjong_ai.recipes.service import RecipeIteration
-from mahjong_ai.recipes.store import PROJECT as RECIPE_PROJECT
-
-
-def recipe_iteration(project):
-    """Recipe iteration shares this service when the workspace has its project."""
-    workspace = ProjectDescriptor.load(project).workspace
-    if (workspace / RECIPE_PROJECT / "recipes/iteration.toml").exists():
-        return RecipeIteration(workspace)
-    return None
 
 
 ONLINE_MIN_ROOMS = 10  # a room's total varies by ~180 points: fewer rooms say little about a version (user 10-07: from 20 to 10)
@@ -157,62 +141,8 @@ def free_play_versions(competition):
             "omitted": sorted(omitted, key=lambda r: -r["rooms"])}
 
 
-def application(project, tailscale_url=None):
-    arena = Research(project)
-    recipes = recipe_iteration(project)
-
-    @asynccontextmanager
-    async def lifespan(app):
-        controller = Controller(arena, recipes)
-        if recipes is not None:
-            await asyncio.to_thread(recipes.recover)
-        stopped = asyncio.Event()
-        watched = {"stamp": None}
-
-        def apply_configuration():
-            """research.toml is the only control surface for branches (ADR-0014)."""
-            files = [arena.project / "research.toml", arena.project / ".local/machine.toml"]
-            stamp = tuple(f.stat().st_mtime_ns if f.exists() else 0 for f in files)
-            if stamp != watched["stamp"]:
-                watched["stamp"] = stamp
-                arena.apply()
-
-        async def loop():
-            while not stopped.is_set():
-                try:
-                    await asyncio.to_thread(apply_configuration)
-                except Exception:
-                    traceback.print_exc()
-                try:
-                    await asyncio.to_thread(controller.tick)
-                except Exception:
-                    traceback.print_exc()
-                    for s in arena.states():
-                        if s["status"] == "running":
-                            arena.control(
-                                s["id"], "pause", reason="执行循环异常，已自动暂停"
-                            )
-                if recipes is not None:
-                    try:
-                        await asyncio.to_thread(recipes.tick)
-                    except Exception:
-                        traceback.print_exc()
-                        try:
-                            await asyncio.to_thread(recipes.control, "pause")
-                        except Exception:
-                            traceback.print_exc()
-                # Jobs run for minutes; each pass rewrites a large state.
-                await asyncio.sleep(2.0)
-
-        worker = asyncio.create_task(loop())
-        try:
-            yield
-        finally:
-            stopped.set()
-            await worker
-            await asyncio.to_thread(controller.close)
-            if recipes is not None:
-                await asyncio.to_thread(recipes.close)
+def application(workspace, tailscale_url=None):
+    workspace = Path(workspace).resolve()
 
     # 本地控制台不缓存页面与静态资源：改了前端刷新就能看到，不会被浏览器的
     # 启发式缓存挡住（StaticFiles 默认不发 Cache-Control）。
@@ -223,8 +153,8 @@ def application(project, tailscale_url=None):
             Path(__file__).parent / "web/index.html", headers=NO_STORE
         )
 
-    lines_root = ProjectDescriptor.load(project).workspace / "projects/personal/firstprinciples/.local"
-    competition = ProjectDescriptor.load(project).workspace / ".local/competition"
+    lines_root = workspace / "projects/personal/firstprinciples/.local"
+    competition = workspace / ".local/competition"
 
     def iteration_lines():
         """Read-only view of the maintainer's iteration lines (ADR-0016), for every pool.
@@ -339,142 +269,17 @@ def application(project, tailscale_url=None):
     async def health(request):
         return JSONResponse(
             {
-                "project": str(arena.project),
+                "workspace": str(workspace),
                 "pid": os.getpid(),
                 "tailscale_url": tailscale_url,
             }
         )
 
-    # The workbench polls every 2 seconds, and a snapshot costs seconds to
-    # build (the whole research state is one JSON document). Polls share one
-    # summary: once one exists, a poll returns it at once and, if it is older
-    # than a few seconds, starts one background rebuild (stale while
-    # revalidating). Only the first poll, or one after a mutation, waits.
-    polling = {"key": None, "task": None, "at": 0.0, "value": None}
-
-    def rebuild(experiment):
-        task = polling["task"]
-        if task is None or task.done() or polling.get("task_key") != experiment:
-            task = asyncio.ensure_future(
-                asyncio.to_thread(arena.snapshot, experiment, None, 0, True)
-            )
-
-            def landed(done):
-                if not done.cancelled() and done.exception() is None:
-                    polling.update(key=experiment, at=time.monotonic(), value=done.result())
-
-            task.add_done_callback(landed)
-            polling.update(task=task, task_key=experiment)
-        return task
-
-    async def summary(experiment):
-        fresh = polling["key"] == experiment and polling["at"] > 0
-        if fresh:
-            if time.monotonic() - polling["at"] > 3:
-                rebuild(experiment)
-            return polling["value"]
-        return await rebuild(experiment)
-
-    def slim(snapshot):
-        """A mutation's full snapshot, reduced to the polling summary's fields."""
-        current = {b.get("representative") for b in snapshot["branches"]}
-        long = ("last_result", "hypothesis", "checks", "preflight")
-        return snapshot | {
-            "iterations": [],
-            "research_conclusions": [],
-            "candidates": [
-                {
-                    k: v
-                    for k, v in c.items()
-                    if k not in long or (k != "last_result" and c["id"] in current)
-                }
-                for c in snapshot["candidates"]
-            ],
-        }
-
-    async def state(request):
-        experiment = request.query_params.get("experiment")
-        branch = request.query_params.get("branch")
-        try:
-            if branch:
-                value = await asyncio.to_thread(arena.snapshot, experiment, branch)
-            elif request.query_params.get("summary") == "1":
-                value = await summary(experiment)
-            else:
-                value = await asyncio.to_thread(arena.snapshot, experiment)
-        except ValueError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
-        return JSONResponse(value)
-
-    async def activity(request):
-        try:
-            return JSONResponse(
-                await asyncio.to_thread(
-                    arena.activity, request.query_params.get("experiment")
-                )
-            )
-        except (KeyError, ValueError) as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
-
-    async def mutate(request):
-        origin = request.headers.get("origin")
-        if origin and origin != str(request.base_url).rstrip("/"):
-            return JSONResponse(
-                {"error": "local same-origin request required"}, status_code=403
-            )
-        try:
-            value = await request.json()
-            if request.url.path == "/api/experiments":
-                identity = await asyncio.to_thread(
-                    arena.create,
-                    None,
-                    None,
-                    value.get("opponents"),
-                    value.get("candidate_runtime_path"),
-                )
-                result = await asyncio.to_thread(arena.control, identity, "resume")
-            else:
-                result = await asyncio.to_thread(
-                    arena.control,
-                    value["experiment"],
-                    value["action"],
-                    value.get("rounds", 0),
-                    value.get("options") or {},
-                )
-            polling["at"] = 0.0  # the next poll must see this change
-            return JSONResponse(slim(result))
-        except (ValueError, KeyError, TypeError) as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
-
-    async def recipe_state(request):
-        if recipes is None:
-            return JSONResponse({"enabled": False})
-        return JSONResponse(
-            {"enabled": True} | await asyncio.to_thread(recipes.snapshot)
-        )
-
-    async def recipe_trial(request):
-        try:
-            return JSONResponse(
-                await asyncio.to_thread(
-                    recipes.trial_detail, request.query_params.get("id", "")
-                )
-            )
-        except (AttributeError, ValueError) as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
-
     app = Starlette(
-        lifespan=lifespan,
         routes=[
             Route("/", home),
-            Route("/api/recipes/state", recipe_state),
-            Route("/api/recipes/trial", recipe_trial),
             Route("/api/health", health),
             Route("/api/lines", lines),
-            Route("/api/state", state),
-            Route("/api/activity", activity),
-            Route("/api/experiments", mutate, methods=["POST"]),
-            Route("/api/control", mutate, methods=["POST"]),
         ],
     )
     class Assets(StaticFiles):
@@ -487,22 +292,22 @@ def application(project, tailscale_url=None):
     return app
 
 
-def service_paths(project):
-    root = Path(project).resolve() / ".local/service"
+def service_paths(workspace):
+    root = Path(workspace).resolve() / ".local/web"
     root.mkdir(parents=True, exist_ok=True)
     root.chmod(0o700)
     label = (
         "com.mahjong."
-        + hashlib.sha256(str(Path(project).resolve()).encode()).hexdigest()[:16]
+        + hashlib.sha256(str(Path(workspace).resolve()).encode()).hexdigest()[:16]
     )
     return root, label
 
 
-def health_at(url, project):
+def health_at(url, workspace):
     try:
         with urllib.request.urlopen(url + "/api/health", timeout=1) as response:
             state = json.load(response)
-        return state if state["project"] == str(Path(project).resolve()) else None
+        return state if state["workspace"] == str(Path(workspace).resolve()) else None
     except (OSError, ValueError, KeyError):
         return None
 
@@ -547,13 +352,13 @@ def listener_sockets(port, remote_ip=None):
         raise
 
 
-def start(project, open_browser=True):
-    root, label = service_paths(project)
+def start(workspace, open_browser=True):
+    root, label = service_paths(workspace)
     with exclusive_lock(root / "start.lock", blocking=True):
         record = root / "service.json"
         if record.exists():
             url = read_json(record)["url"]
-            if health_at(url, project):
+            if health_at(url, workspace):
                 if open_browser:
                     open_url(url)
                 return url
@@ -566,53 +371,24 @@ def start(project, open_browser=True):
         for sock in probes:
             sock.close()
         url = f"http://127.0.0.1:{port}"
-        env = {
-            key: os.environ[key]
-            for key in (
-                "HOME",
-                "PATH",
-                "CODEX_HOME",
-                "SSL_CERT_FILE",
-                "SSL_CERT_DIR",
-                "HTTP_PROXY",
-                "HTTPS_PROXY",
-                "ALL_PROXY",
-                "NO_PROXY",
-                "http_proxy",
-                "https_proxy",
-                "all_proxy",
-                "no_proxy",
-            )
-            if key in os.environ
-        }
+        env = {key: os.environ[key] for key in ("HOME", "PATH") if key in os.environ}
         env["PYTHONPATH"] = str(Path(__file__).parents[2])
-        # Custom providers sometimes use an environment-backed credential.
-        import tomllib
-
-        config_path = (
-            Path(env.get("CODEX_HOME", str(Path.home() / ".codex"))) / "config.toml"
-        )
-        config = tomllib.loads(config_path.read_text()) if config_path.exists() else {}
-        for provider in config.get("model_providers", {}).values():
-            key = provider.get("env_key")
-            if key and key in os.environ:
-                env[key] = os.environ[key]
         argv = [
             sys.executable,
             "-B",
             "-m",
             "mahjong_ai.interfaces.app",
-            "--project",
-            str(Path(project).resolve()),
+            "--workspace",
+            str(Path(workspace).resolve()),
             "serve",
             "--port",
             str(port),
             *(["--tailscale-ip", remote_ip] if remote_ip else []),
         ]
-        start_service(root, label, project, argv, env)
+        start_service(root, label, workspace, argv, env)
         atomic_json(record, {"url": url, "label": label})
         for _ in range(100):
-            if health_at(url, project):
+            if health_at(url, workspace):
                 break
             time.sleep(0.1)
         else:
@@ -625,31 +401,19 @@ def start(project, open_browser=True):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="本地麻将研究控制台")
-    default_project = Path.cwd()
-    migrated_agent = default_project / "projects/agent-research"
-    if (migrated_agent / "project.toml").exists() and (
-        migrated_agent / "research.toml"
-    ).exists():
-        default_project = migrated_agent
-    parser.add_argument("--project", default=str(default_project))
+    parser = argparse.ArgumentParser(description="迭代线只读网页")
+    parser.add_argument("--workspace", default=str(Path.cwd()))
     sub = parser.add_subparsers(dest="command", required=True)
     p = sub.add_parser("start")
     p.add_argument("--no-open", action="store_true")
     sub.add_parser("status")
     sub.add_parser("stop")
-    # The workbench is read-only; experiments are operated from here.
-    p = sub.add_parser("control", help="pause, resume, stop or close the experiment")
-    p.add_argument("action", choices=["pause", "resume", "pause_after", "stop_now",
-                                      "clear_stop", "close"])
-    p = sub.add_parser("create", help="start a new experiment from research.toml")
-    p.add_argument("--opponents", nargs="*", default=None)
-    p.add_argument("--candidate-runtime", default=None)
     p = sub.add_parser("serve")
     p.add_argument("--port", type=int, required=True)
     p.add_argument("--tailscale-ip", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
-    root, label = service_paths(args.project)
+    root, label = service_paths(args.workspace)
+    record = root / "service.json"
     if args.command == "serve":
         import uvicorn
 
@@ -660,7 +424,7 @@ def main(argv=None):
             try:
                 server = uvicorn.Server(
                     uvicorn.Config(
-                        application(args.project, remote_url), log_level="warning"
+                        application(args.workspace, remote_url), log_level="warning"
                     )
                 )
                 server.run(sockets=sockets)
@@ -671,47 +435,19 @@ def main(argv=None):
         through_ssh = bool(
             os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_TTY")
         )
-        url = start(args.project, not args.no_open and not through_ssh)
+        url = start(args.workspace, not args.no_open and not through_ssh)
         print(url)
-        running = health_at(url, args.project) or {}
+        running = health_at(url, args.workspace) or {}
         if running.get("tailscale_url"):
             print("Tailscale: " + running["tailscale_url"])
-    elif args.command in ("control", "create"):
-        record = root / "service.json"
-        value = read_json(record) if record.exists() else {}
-        if not value or not health_at(value["url"], args.project):
-            raise SystemExit("服务未运行，先执行 start")
-        if args.command == "create":
-            path, body = "/api/experiments", {
-                "opponents": args.opponents,
-                "candidate_runtime_path": args.candidate_runtime,
-            }
-        else:
-            with urllib.request.urlopen(value["url"] + "/api/state?summary=1", timeout=60) as r:
-                experiment = (json.load(r).get("experiment") or {}).get("id")
-            path, body = "/api/control", {"experiment": experiment, "action": args.action}
-        request = urllib.request.Request(
-            value["url"] + path, json.dumps(body).encode(),
-            {"Content-Type": "application/json"},
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=600) as r:
-                state = json.load(r)
-        except urllib.error.HTTPError as exc:
-            raise SystemExit(json.load(exc).get("error", str(exc)))
-        current = state.get("experiment") or {}
-        print(json.dumps({k: current.get(k) for k in ("id", "status", "phase", "pause_reason")},
-                         ensure_ascii=False))
     elif args.command == "stop":
-        record = root / "service.json"
         value = read_json(record) if record.exists() else {}
-        previous = health_at(value["url"], args.project) if value else None
+        previous = health_at(value["url"], args.workspace) if value else None
         stopped = stop_service(root, label, previous)
         print("服务已停止" if stopped else "服务未运行")
     else:
-        record = root / "service.json"
         value = read_json(record) if record.exists() else {}
-        running = health_at(value["url"], args.project) if value else None
+        running = health_at(value["url"], args.workspace) if value else None
         print(
             json.dumps(
                 {

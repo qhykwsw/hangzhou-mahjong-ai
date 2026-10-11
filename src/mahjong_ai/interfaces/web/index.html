@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>杭州麻将 · 策略研究</title>
+    <title>杭州麻将 · 迭代线</title>
     <link rel="stylesheet" href="/assets/style.css" />
   </head>
   <body>
@@ -11,17 +11,13 @@
       <div class="brand">
         <span class="tile" aria-hidden="true">發</span>
         <div>
-          <h1>杭州麻将策略研究</h1>
-          <p>各分支连续迭代，共同大乱斗定期重排</p>
+          <h1>杭州麻将迭代线</h1>
+          <p>规则线与 RL 线各自迭代，对固定对手池评测</p>
         </div>
       </div>
       <span class="readonly-note">只读 · 调整请通过对话</span>
     </header>
-    <nav class="tabs" role="tablist">
-      <button role="tab" id="tabResearch" aria-selected="true">研究框架</button>
-      <button role="tab" id="tabLines" aria-selected="false">迭代线</button>
-    </nav>
-    <section id="linesView" class="lines-view" hidden>
+    <section id="linesView" class="lines-view">
       <div class="sectionhead">
         <h2>迭代线 <span id="linesPool" class="count"></span> <select id="linesPoolPick" class="lines-pool" aria-label="对手池" hidden></select></h2>
         <span class="muted">每个点是一次尝试；纵轴是对固定对手池的场均桌面分；远低于最好版本的尝试画在底边（▼），悬停看分数</span>
@@ -54,77 +50,6 @@
         </table>
       </div>
     </section>
-    <main id="researchView">
-      <div id="notice" role="status" hidden></div>
-      <div class="statusbar">
-        <div>
-          <strong id="phase">准备实验</strong>
-          <div id="summary"></div>
-        </div>
-      </div>
-      <div id="hosts" class="hosts" aria-label="主机状态"></div>
-      <p id="roundNote" class="muted"></p>
-      <section id="rankingPanel" class="ranking-panel">
-        <div class="sectionhead">
-          <h2 id="rankLabel">等待首次共同大乱斗</h2>
-          <select id="rankingHistory" aria-label="选择排名记录">
-            <option value="">最新排名</option>
-          </select>
-        </div>
-        <div class="tablewrap">
-          <table>
-            <thead>
-              <tr>
-                <th>名次</th>
-                <th>变化</th>
-                <th>策略分支</th>
-                <th>研究模型</th>
-                <th>参赛版本</th>
-                <th>场均桌面分 / 名次读数</th>
-                <th>标准误差（估计）</th>
-                <th>场数 / 局数</th>
-              </tr>
-            </thead>
-            <tbody id="ranking"></tbody>
-          </table>
-        </div>
-        <details>
-          <summary>排名口径与实验记录</summary>
-          <p class="muted">
-            排名属于实际参赛版本；分支的新版本要在下一次大乱斗里重新评测。主口径是完整结算的场均桌面分，与线上非决赛第一排序键（总分）一致；同分时按场均名次分排序，名次分为 +3 / +1 / −1 / −3、同分取平均。名次效用（4−名次）与逐局读数只作对照，不参与排序。标准误差按四场轮换组聚类估计，反映本次均值的波动，不是名次的置信区间。
-          </p>
-          <div id="experimentHistory"></div>
-        </details>
-      </section>
-      <section class="branch-panel">
-        <div class="sectionhead">
-          <h2>研究分支 <span id="branchCount" class="count"></span></h2>
-          <span class="muted">迭代中的分支持续产生候选；仅参赛的分支冻结现役代表，照常参加大乱斗</span>
-        </div>
-        <p class="muted" id="poolSummary"></p>
-        <div id="branchList" class="branch-grid"></div>
-      </section>
-      <details>
-        <summary>已归档分支 <span id="archivedCount" class="count"></span></summary>
-        <div id="archived" class="branch-grid"></div>
-      </details>
-      <dialog id="recipeDialog">
-        <div class="sectionhead">
-          <h2 id="recipeDialogTitle"></h2>
-          <button id="closeRecipeDialog">关闭</button>
-        </div>
-        <div id="recipeDialogContent"></div>
-      </dialog>
-      <dialog id="detailDialog">
-        <div class="sectionhead">
-          <h2 id="detailTitle"></h2>
-          <button id="closeDetail">关闭</button>
-        </div>
-        <div id="detailContent"></div>
-      </dialog>
-    </main>
-    <script src="/assets/app.js"></script>
-    <script src="/assets/recipes.js"></script>
     <script src="/assets/lines.js"></script>
   </body>
 </html>

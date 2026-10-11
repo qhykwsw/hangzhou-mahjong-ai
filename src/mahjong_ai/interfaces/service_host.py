@@ -1,4 +1,4 @@
-"""Host-specific service lifecycle without changing research state."""
+"""Host-specific lifecycle of the web page service (launchd or systemd)."""
 
 import os
 from pathlib import Path
@@ -30,7 +30,7 @@ def start_service(root, label, project, argv, env):
     elif sys.platform == "linux":
         _start_systemd(root, label, project, argv, env)
     else:
-        raise RuntimeError("研究后台支持 macOS 和 Linux/WSL2")
+        raise RuntimeError("网页服务支持 macOS 和 Linux/WSL2")
 
 
 def _start_launchd(root, label, project, argv, env):
@@ -138,7 +138,7 @@ def stop_service(root, label, previous=None):
             raise RuntimeError("systemd 用户服务停止失败：" + stopped.stderr.strip())
         return True
     if sys.platform != "darwin":
-        raise RuntimeError("研究后台支持 macOS 和 Linux/WSL2")
+        raise RuntimeError("网页服务支持 macOS 和 Linux/WSL2")
     domain = f"gui/{os.getuid()}/{label}"
     stopped = subprocess.run(["launchctl", "bootout", domain], capture_output=True)
     if stopped.returncode:
@@ -157,4 +157,4 @@ def stop_service(root, label, previous=None):
         if present.returncode != 0 and "mahjong_ai.interfaces.app" not in alive:
             return True
         time.sleep(0.1)
-    raise RuntimeError("研究后台尚未停止，请检查服务日志")
+    raise RuntimeError("网页服务尚未停止，请检查服务日志")

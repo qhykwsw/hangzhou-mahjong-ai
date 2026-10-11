@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0019
 ---
 
 # 迭代规范以倾向表达，不给改动幅度和停滞设口径

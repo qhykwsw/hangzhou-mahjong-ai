@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: partially superseded by ADR-0019
 ---
 
 # 人工自我对弈项目使用独立训练器、非对称价值网络与 ONNX 推理

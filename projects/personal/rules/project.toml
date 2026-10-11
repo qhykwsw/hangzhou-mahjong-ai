@@ -1,7 +1,0 @@
-[project]
-id = "personal-rules"
-family = "rules"
-entrypoint = "src/strategy.py"
-workspace = "../.."
-
-dependencies = []

@@ -48,14 +48,14 @@ def test_ssh_start_prints_both_urls_without_opening_browser(
     monkeypatch.setattr(
         app,
         "start",
-        lambda project, open_browser: (
+        lambda workspace, open_browser: (
             calls.append(open_browser) or "http://127.0.0.1:8765"
         ),
     )
     monkeypatch.setattr(
         app, "health_at", lambda *args: {"tailscale_url": "http://100.64.0.1:8765"}
     )
-    app.main(["--project", str(tmp_path), "start"])
+    app.main(["--workspace", str(tmp_path), "start"])
     assert calls == [False]
     output = capsys.readouterr().out
     assert "http://127.0.0.1:8765" in output and "http://100.64.0.1:8765" in output

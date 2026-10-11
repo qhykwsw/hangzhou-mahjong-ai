@@ -15,7 +15,7 @@ block by block with a reference version (by default its line's best).
   python -m harness.stage run <name> --weights <model id> --against <version> --kind ... --host ...
   python -m harness.stage list
 
-``--weights`` plays a model of the research model store by its id under
+``--weights`` plays a model of the model store by its id under
 ``name`` without an evaluation record, e.g. a version with the stage re-rank
 switched on (``python -m guided.outcome variant <its artifact> <model store>``
 prints the id), paired with ``--against`` (e.g. the same version without it).
@@ -91,7 +91,7 @@ def seat_runtime(pool):
     old, new = Path(pool["runtime_path"]) / "mahjong_ai", E.REPO / "src" / "mahjong_ai"
     if all((old / f).read_bytes() == (new / f).read_bytes() for f in SEAT_FILES):
         return pool["runtime_path"]
-    store = E.RESEARCH / ".local/research/runtimes"
+    store = E.RUNTIMES
     store.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=store, prefix=".seat-") as tmp:
         # _fast.c is the pool's, so its compiled accelerator comes along.

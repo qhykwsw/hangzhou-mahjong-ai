@@ -1,5 +1,5 @@
 ---
-status: partially superseded by ADR-0006, ADR-0010
+status: superseded by ADR-0019
 ---
 
 # 周期内冻结参照并配对评估，周期末同步结算

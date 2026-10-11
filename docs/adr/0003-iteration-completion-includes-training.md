@@ -1,5 +1,5 @@
 ---
-status: partially superseded by ADR-0006
+status: superseded by ADR-0019
 ---
 
 # 以完成迭代工作衡量进度，包含候选所需训练

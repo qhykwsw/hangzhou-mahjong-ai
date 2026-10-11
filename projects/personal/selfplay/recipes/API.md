@@ -1,16 +1,16 @@
 # 训练方案接口
 
-训练方案迭代改进的对象是一个名为 `recipe` 的 Python 包，它是自动研究里 RL 方案分支的候选（[ADR-0013](../../../../docs/adr/0013-unified-research-branches-and-common-brawl.md)，早期设计见 [ADR-0012](../../../../docs/adr/0012-recipe-iteration-for-rl-training.md)）。框架 `guided/trial.py` 在远端导入它，调用 `recipe.train(ctx)`，在时限内拿回训练后的 Actor，交给研究框架评估。[`baseline/recipe`](baseline/recipe) 是初始方案：多步小步策略梯度，每步用约 60 万个同策略决策算一次全量梯度，按 KL 0.03 定步长。设计理由写在 `loop.py` 和 `targets.py` 的文档字符串里，测量依据见 ADR-0012 的“基线方案与训练时长”。
+RL 线每次尝试修改的对象是一个名为 `recipe` 的 Python 包（RL 线的现行方案在 [`../../firstprinciples/rl/recipe`](../../firstprinciples/rl/recipe)；最早的设计见 [ADR-0012](../../../../docs/adr/0012-recipe-iteration-for-rl-training.md)）。框架 `guided/trial.py` 在远端导入它，调用 `recipe.train(ctx)`，拿回训练后的 Actor，交给迭代线评估。
 
 ## 固定不变
 
 - Actor 的网络结构和观察编码。`ctx.actor` 从本方案线的固定起点加载；返回的权重必须能严格载入同一结构，否则本次尝试记为崩溃。起点可以带可选结构（起点 `meta.json` 的 `config`，如信念头、花色共享嵌入，见 [guided README](../guided/README.md) 的「Actor 的可选结构」），`ctx.new_actor()` 与导出沿用它；带信念头（`belief_head`）时 `actor(..., return_belief=True)` 另返回三家对手手牌的 3×34 logits，方案可用行里的 `oracle_planes` 经 `guided.networks.belief_target` 监督；`"belief_head": "v2"` 时另返回的是 `BeliefV2(tiles [n, 7, 34], state [n, 6])`，目标用 `guided.networks.belief_target_v2(oracle_planes, oracle_scalars, opp_waits)`，`opp_waits` 由 `critic_features` 调用 `guided.encoding.opponent_waits(state, seat)` 加进行里（或直接用钩子 `guided.encoding:belief_features`）。起点带 oracle 输入（`oracle_inputs`）时见「Oracle 输入」；它只在训练里存在，导出时剥离，所以返回的权重带不带这部分参数都能导出。起点带结果分布头（`outcome_head`）时，`actor(..., return_outcome=True)` 另返回逐动作的本手结果分布 logits [n, 231, B]（同时要信念时排在信念之后；`return_outcome="detached"` 不回传到主干），训练见「结果分布头」。
 - 游戏环境、规则和奖励：每局结束时，学习座位得到该局桌面分（除以底分）。
-- 教师：默认是冻结规则包里的规则冠军（`ctx.teacher`），方案可以用 `cfg["teacher"]` 换成 `ctx.teachers` 里的任一规则，或 `ctx.catalog` 里的模型。训练对手由方案通过 `cfg["opponents"]` 选择，默认是本次迭代冻结的评估对手（最近一次共同大乱斗前三名，可能包含 RL 模型）；harness 可以在 `ctx.catalog` 里另外提供冻结版本供方案选作对手或教师；没有评估对手时用规则包里的规则代表。
+- 教师：默认是冻结规则包里的教师规则（`ctx.teacher`），方案可以用 `cfg["teacher"]` 换成 `ctx.teachers` 里的任一规则，或 `ctx.catalog` 里的模型。训练对手由方案通过 `cfg["opponents"]` 选择，默认是任务给的对手；harness 可以在 `ctx.catalog` 里另外提供冻结版本供方案选作对手或教师；没有给对手时用规则包里的规则代表。
 - 时间预算：从 `train` 被调用开始计时，到 `ctx.deadline` 截止；超过宽限期，进程被强制结束。只按局数限额的 harness（例如迭代线）把截止时刻设得很远，只用来防卡死。
 - 局数预算（可选，方案线配置 `hand_budget`）：学习座位累计打过的训练局数（每整场 16 局）。用完后 `ctx.collect` 报错；接近用完时，`samples` 会被压到剩余局数按已见每局行数折算的行数；在途的整场照常打完，所以最后一次采集可能略超，超出部分如实记入训练回执。自检运行不设局数预算。
 - 资源上限：显存按方案线配置的比例封顶，超出时在进程内抛出 CUDA out of memory，不会溢出到共享内存；训练进程组（含对局进程）的常驻内存超过上限时整组被强制结束。两种情况都记为训练失败并消耗额度，上限见 `ctx.resources`，训练回执里有实际峰值。
-- 评估和晋级：由研究框架做分段配对评估。训练后的 Actor 和现役 Actor 面对同一组评估对手，在同样的牌墙和座位上对局，每边 4096 → 8192 → 16384 场，累计计数；前两段 99% 区间下界 > 0 提前晋级、上界 < 0 提前淘汰，最后一段 95% 区间下界 > 0 才晋级。晋级的模型参加下一次共同大乱斗。
+- 评估和判定：由迭代线对固定对手池做，口径见[迭代线说明](../../firstprinciples/README.md)。
 
 ## `train(ctx)`
 

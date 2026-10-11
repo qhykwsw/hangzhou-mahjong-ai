@@ -1,17 +1,17 @@
 # 规则教师指导训练（guided）
 
-`projects/personal/selfplay/` 的第二条训练路线：以规则研究的冻结冠军为教师，Actor 先纯模仿，再用真实桌面分做 PPO，并按师生差距保留教师辅助损失。设计取舍与实验得出的决定见 [ADR-0011](../../../../docs/adr/0011-rule-guided-policy-learning.md)，术语（教师策略、规则冠军、教师指导强度、评估代）见 [CONTEXT.md](../../../../CONTEXT.md)。
+RL 线的训练框架：以冻结的规则版本为教师，Actor 先纯模仿，再用真实桌面分做 PPO，并按师生差距保留教师辅助损失。设计取舍与实验得出的决定见 [ADR-0011](../../../../docs/adr/0011-rule-guided-policy-learning.md)，术语（教师策略、教师指导强度、评估代）见 [CONTEXT.md](../../../../CONTEXT.md)。
 
-本路线不读取、不迁移 `train/` 的检查点，也不产出平台 ONNX 发布包；旧路线见[项目 README](../README.md)。
+本框架不产出 ONNX 发布包：Actor 由推理服务出牌，见[项目 README](../README.md)。
 
-模仿阶段由 `imitate.py` 完成；之后的强化学习是自动研究里的 RL 方案分支：研究模型修改训练方案（`../recipes/`），本目录的 `trial.py` 从固定起点按时限训练，训练出的模型交回研究框架，做分段配对评估并参加共同大乱斗。决定见 [ADR-0013](../../../../docs/adr/0013-unified-research-branches-and-common-brawl.md)，方案接口见 [recipes/API.md](../recipes/API.md)。
+模仿阶段由 `imitate.py` 完成；之后的强化学习由 RL 线推进：迭代 Agent 每次修改训练方案，本目录的 `trial.py` 从出发版本按训练量预算训练，训练出的模型交回迭代线评估，见[迭代线说明](../../firstprinciples/README.md)；方案接口见 [recipes/API.md](../recipes/API.md)。
 
 ## 机器分工
 
 | 角色 | 主机 | 用途 |
 | --- | --- | --- |
-| Mac | 本机 | 控制面：冻结源码与教师、写运行计划、启动远端任务、汇总报告；研究评估中的模型座位用 MLX／MPS 推理，不训练 |
-| 4090 | `gpu-4090-wsl` | 第一性原理 RL 线的大规格（384/8/8）尝试位；此前也做模仿阶段、RL 方案分支的训练与评估、规模试验与共同大乱斗（大乱斗派到这里时，本机训练进程被暂停，结束后恢复） |
+| Mac | 本机 | 控制面：冻结源码与教师、写运行计划、启动远端任务、汇总报告；评估中的模型座位用 MLX／MPS 推理，不训练 |
+| 4090 | `gpu-4090-wsl` | 第一性原理 RL 线的大规格（384/8/8）尝试位；此前也做模仿阶段与规模试验 |
 | 4070 | `gpu-4070-wsl` | 用户的办公机，显卡同时负责桌面显示；正式内网比赛在这里推理。第一性原理 RL 线的小规格（128/4/4）尝试位（训练与评估都在本机），对局进程与显存留出余量给桌面（[ADR-0016](../../../../docs/adr/0016-maintainer-iteration-lines.md)）。不跑显存压力探针 |
 | 5070 Ti | `gpu-5070ti-wsl` | 第一性原理 RL 线的大规格（384/8/8）尝试位（训练与评估都在本机）；用户借用的机器，开放时段由维护者用 `harness.line hosts` 设定；为桌面保留 CPU、显存和内存余量 |
 
@@ -50,7 +50,7 @@
 | `expand` | 把导出的 Actor 扩成更宽的观察编码：新的平面和标量输入列置零，事件末字段的嵌入表每行取原第 0 行，其余参数照抄，决策逐位不变，产物按权重 SHA-256 写进模型库；`--belief-head` 另加信念头（`--belief-head v2` 加 v2 信念或把 v1 头扩成 v2）、`--share-suits` 改成花色共享嵌入、`--oracle-inputs` 做带零初始化 oracle 输入的训练起点、`--outcome-head` 加零初始化的逐动作本手结果分布头（见下文 Actor 可选结构，`--share-suits` 会稍微改变决策） |
 | `resources` / `tune_evaluation` | 按 CPU 亲和性、cgroup 配额与可用显存给出初始并发，再在固定赛程上实测校准 |
 | `brawl` / `brawl_pipeline` | 5、8、10 或 11 个冻结策略的均衡大乱斗；流水线按校准、混合对局冒烟、计分比赛顺序执行，遇错停止 |
-| `trial` / `recipe_jobs` | 训练方案迭代：远端框架在固定时限和显存、内存上限内调用 `recipe.train(ctx)`，对手取研究冻结的评估对手（规则版本按各自运行时隔离运行）；训练出的 Actor 拉回 Mac 交给研究框架评估。Mac 侧任务负责部署、上传方案、脱离运行与轮询，主机不可达时无限期等待，主机重启时记为主机故障、从头重跑 |
+| `trial` / `recipe_jobs` | 训练方案迭代：远端框架在固定时限和显存、内存上限内调用 `recipe.train(ctx)`，对手由方案从任务给的对手里选（规则版本按各自运行时隔离运行）；训练出的 Actor 拉回 Mac 交给迭代线评估。Mac 侧任务负责部署、上传方案、脱离运行与轮询，主机不可达时无限期等待，主机重启时记为主机故障、从头重跑 |
 | `platform_replays` / `platform_dataset` | 平台牌谱转成模仿数据（[ADR-0015](../../../../docs/adr/0015-platform-replays-as-training-data.md)）：每手按牌谱的起手牌与摸牌顺序在本地引擎里重放，每个多选决策点取决策方的合法观察，标签是该玩家在平台上的实际动作；摸牌、合法性、每手结算与总分任一处与平台不一致，这一场整场丢弃。`scan` 增量入库并刷新外部玩家实力表 `players.json`，`freeze` 按文件哈希冻结训练清单，`rows` 在训练时现场还原并编码，默认去掉平台代打的超时和我方座位 |
 | `collection` | 采集父进程：CPU worker 打整场，父进程跑所有网络。CUDA 上整个决策（前向、掩码、采样或 argmax、选中动作的对数概率）按模型和补齐形状捕获 CUDA Graph 原地重放（`inference.ActorGraphs`），线性层以 fp16 autocast 计算，输入直接写入固定内存缓冲，答案在同一条流上拷回固定内存后才读（各图共用一个内存池，别的图重放会覆盖设备上的输出）。父进程保持两轮在途：一轮发到设备后先收下一轮请求（`gather_seconds` 内到达的一起攒成更大的批），再读上一轮的答案回复；内置 Critic 或纯模仿时仍走完整批同步执行。教师是冻结模型时（方案用 `cfg["teacher"]` 选 `ctx.catalog` 里的模型），父进程在学生出牌前对同一批学习行跑教师 Actor（有 Graph 时用它自己的一组），取合法动作的 argmax 随答案发回 worker 写进 `teacher`；worker 不跑规则教师，对局仍可走 C 引擎。每次采集把各阶段耗时与批大小写入运行目录的 `collection.jsonl` |
 | `model_server` / `mlx_actor` / `mlx_runner` | 每台主机一个批量模型服务，按权重 SHA-256 加载 Actor。CUDA 用 Graph，macOS 26+ 的 Apple Silicon 安装 `.[model]` 后自动用 MLX 0.32；较早系统或未安装受支持的 MLX 时用 MPS；可用 `--device mps` 显式选择 Torch 后端。线性层 fp16，embedding、残差和归一化 fp32；冻结权重只转换一次，学习 Actor 保持 fp32 参数。事件循环保留两批在途，Apple 后端按历史长度分组减少补齐，CUDA 轮询完成事件，Apple 等待线程通过管道唤醒。服务每分钟记录累计请求、批次与耗时。模型目录的 `meta.json` 带 `"sampling": {"temperature": T}` 时，该权重按温度采样出牌（CUDA 图内的 Gumbel-max；MLX 后端不支持），用于要保留随机性的对手，例如平台代理对手；采样版本另存一份权重，按自己的 SHA-256 寻址。带 `"outcome_rerank"` 的模型在半决赛、决赛的行上按阶段重排近似同分的动作（两种后端都支持，见下文结果分布头） |
@@ -117,7 +117,7 @@ PYTHONPATH=../../../src:src:. ../../../.venv/bin/python -m guided.platform_datas
 - 联合训练中的指导强度 `w = clip((d + u) / D, 0, 1)`，`d` 为教师减学生的配对场均桌面分差，`u` 为 95% 区间半宽；首次评估前 `w = 1`。`--reference` 给定的固定 Actor 与学生、教师在同一批牌墙上评估，结果里的 `reference_minus_student` 衡量相对起点的进步；续跑沿用记录的参照。
 - 奖励是每局本人收支除以底分，整场之和等于桌面分，不做塑形和裁剪。Critic 读取三家手牌与牌墙构成，只在训练进程内使用，不随 Actor 发布。
 - 评估面板在一个实验内固定：同组牌墙四座轮换，按完整四座组计算配对均值差与区间。区间跨零只表示没分出高下，不等于持平或已到学习上限；多组比较未做多重校正。
-- 大乱斗每组内各策略的出场与座位次数一致：5 方覆盖全部 5 种四人阵容，8 方覆盖全部 70 种，10 方覆盖全部 210 种，11 方按循环移位的 30 个轨道排程。自动研究的共同大乱斗由研究框架执行；本模块的大乱斗用于研究框架之外的临时比赛，赛程、身份、回执和报告放仓库根 `.local/competition/runs/`。
+- 大乱斗每组内各策略的出场与座位次数一致：5 方覆盖全部 5 种四人阵容，8 方覆盖全部 70 种，10 方覆盖全部 210 种，11 方按循环移位的 30 个轨道排程。本模块的大乱斗用于临时比赛，赛程、身份、回执和报告放仓库根 `.local/competition/runs/`。
 - 观察编码有名字，导出的 Actor 在 `meta.json` 的 `encoding` 里记着自己的编码。`guided-current-hand-v2` 在 v1 的平面后追加 16 个鸣牌、杠前瞻平面（`encoding.call_planes`）：碰、吃、明杠、暗杠或补杠之后的手牌，取 v1 逐张出牌平面同样的向听、进张、胡牌张数和番值；不合法的动作为 0。新平面只由 v1 行算出，所以 worker 的 Python 与 C 编码、模型服务收到的二进制请求都用同一个 `encoding.augment` 扩成 v2，match worker 照旧只发 v1 行。v2 行的前 57 个平面就是 v1 行，每个 Actor 只读自己那部分前缀；训练时 trial 取在座模型里最宽的编码交给 worker（`cfg["encoding"]`）。
 - `guided-current-hand-v3` 在 v2 后再追加 38 个平面、35 个标量，并给事件的末字段（v1、v2 恒为 0）赋值，同样只由 v1 行算出（`encoding.v3_inputs`，重活在 `native.c` 的 `v3_shape`、`v3_events`，经 `_fast.load_native` 在本机编译）。
   - 平面：逐张出牌的平胡与七对分开的向听、进张、胡牌张数；打后是否爆头听、几张摸牌能变成爆头听；单人多步前瞻（k = 1、2、3、5 与剩余自家摸牌数内听牌、爆头听、自摸的概率和自摸时的期望番，向听 1 的打法前三名逐张走一遍，其余按均值近似）；离四白差几张；被吃、被碰的风险；杠后补牌自摸率、杠后链数与再杠概率；四家衰减河。
@@ -132,6 +132,6 @@ PYTHONPATH=../../../src:src:. ../../../.venv/bin/python -m guided.platform_datas
   - `"oracle_inputs": true`（只用于训练，[ADR-0018](../../../../docs/adr/0018-oracle-guided-policy-training.md)）：`forward(planes, scalars, events, oracle=(planes [n,16,34], scalars [n,4]))` 在输入端把隐藏状态加进来：`encoder.oracle_tile_in`（无偏置 16→dim）加到每个牌 token，`encoder.oracle_state_in`（无偏置 4→dim）加到状态 token，两者初始为零。`oracle=None` 跳过这一路，与剥离后的 Actor 逐位相同；全零输入也逐位相同（无偏置）。所有导出（`trial.export_actor`，含快照与最终产物）都剥离选项和参数，写出前核对剥离后的 logits 与不给 oracle、给全零 oracle 时逐位一致；`deployment.load_actor` 与 `model_server` 拒绝 `meta.json` 或权重里带 oracle 通道的模型，MLX 后端也拒绝，只有 trial 的训练起点（`load_actor(..., oracle=True)`）能载入。`expand --oracle-inputs` 把现有 Actor 做成这样的训练起点，logits 逐位不变；`networks.with_oracle_inputs(actor)` 对内存里的 Actor 做同样的事。
   - `"outcome_head": {"bins": [...]}`（或 `true` 取默认分箱，[`outcome.py`](outcome.py)）：逐动作预测学习座位本手剩余部分的得分变化（基础分为单位）落在哪个分箱。`networks.OutcomeHead` 与出牌、鸣牌、状态三个策略头同样布局：每个牌 token 经隐层给该牌的出牌与四种鸣牌，状态 token 经隐层给 65 个状态动作，每个动作 B 个分箱，按规范动作顺序输出 [n, 231, B]。它只读编码器的最终 token、不回注主干，所以策略 logits 与不带它时逐位相同；输出层初始为零（各动作均匀分布），隐层取自己的固定种子，不动调用方的随机流。`forward(..., return_outcome=True)` 另返回它的 logits（同时要信念时排在信念之后），`return_outcome="detached"` 在停梯度的 token 上计算，训练不影响主干。分箱值即可能的得分：杭州麻将一局的得分只有 0（流局）、−F 或 −8F（付分）、+10F（闲家胡）、+24F（庄家胡），F 为 2 的幂；默认分箱 `DEFAULT_BINS` 是 −512 到 +768 的全部这类取值（共 24 个），得分归入最近的分箱值（中点归上，超出两端归两端），`outcome.bin_index` 把得分换成类别，`outcome.outcome_loss(outcome_logits, actions, scores)` 是所给动作的交叉熵。`expand --outcome-head [BINS]` 给已有 Actor 加上它，logits 逐位不变（v1、v2 信念、花色共享、oracle 输入都可以同时存在）。
   - 阶段重排（导出目录 `meta.json` 顶层的 `"outcome_rerank": {...}`，需要结果分布头；`true` 取默认值 `top_k` 3、`mass` 0.9、`margin` 1.0、`min_gain` 0、`per_hand_sd` 17.5）：只在半决赛、决赛的观察上生效。行里的 `stage_state`（晋级名额、含本手的剩余手数、从本人起按座次的四家阶段总分，`stage_value.stage_state`，不是任何编码的输入；`encode` 写在阶段内的行上，C 引擎的行由 `stage.rewrite` 写同样的值）和标量里的庄家，按本手的结算情形（本人胡、流局、付分时谁胡的几种可能，各自零和）与 `stage_value.advance` 的剩余手数模型，算出本手结束在每个分箱时晋级的概率 u；动作的价值是其预测分布对 u 的期望。候选只限策略自己的近似同分：概率最高的 `top_k` 个合法动作里，排在它之前的累计概率仍小于 `mass`、对数概率与最大者相差不超过 `margin` 的那些；只有某个候选比策略的 argmax 高出 `min_gain` 以上才换。没有阶段（自由对战、海选、开发集）或模型没有开关时，决策与原策略逐位相同。开关不改权重：`python -m guided.outcome variant <Actor 目录> <模型库>` 把同一份权重连同开关复制到 `<模型库>/<id>/`（id 由权重哈希和开关算出），原目录照旧不重排，两者可以配对比较。`deployment.load_actor` 校验开关并在元数据里给出规范化的值；`model_server`（CUDA Graph、MPS、CPU、MLX）与 `deployment` 的 HTTP 服务都执行它；match worker 只对 `/inputs` 回答 `"stage": true` 的模型在请求末尾附上 `stage_state`（`selfplay_core.wire`），其余请求逐字节不变。
-- `guided.deployment` 是独立 GPU 服务：`POST /act` 接收 `{"observation_payload": ...}` 完整公开观察并返回合法动作，`GET /health` 报告状态。它不是 ONNX 发布包，不改变平台 CPU/ONNX 发布契约，导出与测速也不会自动报名比赛。部署验收以 4070 实机的 10 桌并发为准，计时覆盖 HTTP、排队、编码、推理和回传。
+- `guided.deployment` 是独立 GPU 服务：`POST /act` 接收 `{"observation_payload": ...}` 完整公开观察并返回合法动作，`GET /health` 报告状态。导出与测速不会自动报名比赛。部署验收以 4070 实机的 10 桌并发为准，计时覆盖 HTTP、排队、编码、推理和回传。
 
 运行状态、完整配置和回执放本项目 `.local/`；各次实验的结论与待办汇总在本机 `.local/reports/guided-status.md`，具体成绩不写入本手册。

@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0019
 ---
 
 # 规则与强化学习统一为研究分支，共同大乱斗取代研究轮次

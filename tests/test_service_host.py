@@ -79,11 +79,8 @@ def test_real_service_start_restart_stop(tmp_path, monkeypatch):
         if ready.returncode:
             pytest.skip("systemd user manager is not available")
     monkeypatch.setattr(app, "tailscale_ip", lambda: None)
-    tmp_path = tmp_path / "project with spaces $HOME %n 中文"
+    tmp_path = tmp_path / "workspace with spaces $HOME %n 中文"
     tmp_path.mkdir()
-    (tmp_path / "project.toml").write_text(
-        '[project]\nid="service-test"\nfamily="agent"\n'
-    )
     root, label = app.service_paths(tmp_path)
     try:
         url = app.start(tmp_path, open_browser=False)

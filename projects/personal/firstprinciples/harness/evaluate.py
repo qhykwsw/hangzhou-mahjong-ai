@@ -31,7 +31,7 @@ settings (EVAL_WORKERS, EVAL_TABLES), not part of the pool's identity.
 Maintainer commands (from projects/personal/firstprinciples); iteration agents use harness.line:
   python -m harness.evaluate runtime                                    # freeze src/mahjong_ai as a runtime
   python -m harness.evaluate upgrade-runtime                            # the pool's runtime plus src/mahjong_ai/_fast.c's new functions
-  python -m harness.evaluate pool [--model <weights-sha> --name <name>] [--rules <ids or package dirs>] [--runtime <dir>] [--replace]
+  python -m harness.evaluate pool [--model <weights-sha> --name <name>] [--rules <package dirs>] [--runtime <dir>] [--replace]
   python -m harness.evaluate drain on "<why>" | off                    # stop new attempts while the pool is replaced
   python -m harness.evaluate rebase <attempt> ... [--host <host>]       # replay earlier versions on the new pool
   python -m harness.evaluate rebase-finish rule|rl                      # record them; the highest is the line's best
@@ -39,7 +39,7 @@ Maintainer commands (from projects/personal/firstprinciples); iteration agents u
   python -m harness.evaluate extend rule|rl [--host <host>]             # play a line's best on development blocks it has not played (the set grew)
   python -m harness.evaluate rejudge <attempt> [--host <host>] [--seed S]  # an earlier attempt under the current rules (S: its PDL on record)
   python -m harness.evaluate seal                                       # after any change to the conditions
-  python -m harness.evaluate reference <research candidate | model name> [--host local|4070|4090|5070ti]
+  python -m harness.evaluate reference <pool member | name --weights <sha>> [--host local|4070|4090|5070ti]
   python -m harness.evaluate implement <pool member> <package dir>      # an equivalent, faster implementation
 """
 import argparse
@@ -63,7 +63,6 @@ sys.path.insert(0, str(REPO / "src"))
 from mahjong_ai.execution.candidate_runtime import tree_hash  # noqa: E402
 from mahjong_ai.execution.remote import Dispatcher, RemoteHost  # noqa: E402
 from mahjong_ai.persistence.artifacts import atomic_json, read_json  # noqa: E402
-from mahjong_ai.research.service import Research  # noqa: E402
 
 class Refused(Exception):
     """The harness will not do this; the message says why and who can change it."""
@@ -88,8 +87,11 @@ def override(name, default, cast=int):
 
 
 
-RESEARCH = REPO / "projects/agent-research"
-MODELS = RESEARCH / ".local/research/models"
+# The model and runtime stores. They stay where the retired automated research
+# kept them: pool, proxy and attempt records name runtimes by these paths.
+STORE = REPO / "projects/agent-research/.local/research"
+MODELS = STORE / "models"
+RUNTIMES = STORE / "runtimes"
 # Each line evaluates where it already is: rules on this machine, RL on the GPU
 # host that trained it (no transfer); an attempt names its host explicitly.
 EVAL_HOST = {"rule": "local", "reference": "local", "rl": "4070"}
@@ -113,22 +115,10 @@ CONFIRM_Z = 1.2816  # one-sided 90%
 # its standard error is about a third of the confirmation set's.
 CLOSE = 0.5
 TIMEOUTS = {"discard": 2.0, "response": 0.6}  # platform limits minus network and concurrency margin
-RULE_OPPONENTS = [
-    "heuristic-efficiency--01--piao-call-channel",
-    "heuristic-efficiency--01--material-dose-double",
-    "heuristic-fan--01--chi-quota-all-v1",
-    "heuristic-fan--01--kong-reserve-white8-rep2",
-    "heuristic-adaptive--01--far_chi_flat3_rep",
-    "heuristic-unrestricted--01--baotou-tenpai-price-009-rep2",
-]
 
 
 def log(message):
     print(time.strftime("%H:%M:%S ") + message, flush=True)
-
-
-def research_state():
-    return Research(RESEARCH).read()
 
 
 def with_timeouts(spec):
@@ -137,11 +127,11 @@ def with_timeouts(spec):
 
 # -- pool ----------------------------------------------------------------------
 def freeze_runtime():
-    """Copy src/mahjong_ai into the research runtime store under its fingerprint."""
+    """Copy src/mahjong_ai into the runtime store under its fingerprint."""
     import subprocess
     import tempfile
 
-    store = RESEARCH / ".local/research/runtimes"
+    store = RUNTIMES
     store.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=store, prefix=".freezing-") as tmp:
         shutil.copytree(REPO / "src" / "mahjong_ai", Path(tmp) / "mahjong_ai",
@@ -221,7 +211,7 @@ def upgrade_runtime():
     if outside:
         raise Refused("src/mahjong_ai/_fast.c 改动了现役运行时里竞速部分以外的原有代码（不只是新增），不能原池升级；"
                       f"改动的原行：{outside[:5]}。这种情况要换新的对手池。")
-    store = RESEARCH / ".local/research/runtimes"
+    store = RUNTIMES
     with tempfile.TemporaryDirectory(dir=store, prefix=".upgrading-") as tmp:
         shutil.copytree(old / "mahjong_ai", Path(tmp) / "mahjong_ai",
                         ignore=shutil.ignore_patterns("__pycache__", "_fast.cpython-*", "_fast.*.so", "_fast.*.pyd"))
@@ -274,13 +264,11 @@ def upgrade_runtime():
     return pool
 
 
-def member_spec(entry, s, runtime):
-    """A rule member: a research candidate by id, or a package directory frozen under .local/pool-members."""
-    if entry in s["candidates"]:
-        return entry, dict(s["candidates"][entry]["spec"], runtime_path=runtime)
+def member_spec(entry, runtime):
+    """A rule member: a package directory, frozen under .local/pool-members."""
     package = Path(entry)
     if not (package / "strategy.py").is_file():
-        raise SystemExit(f"{entry} is neither a research candidate nor a package directory")
+        raise SystemExit(f"{entry} is not a package directory")
     name = package.name
     target = LOCAL / "pool-members" / name / f"package-{tree_hash(package)[:16]}"
     if not target.exists():
@@ -299,23 +287,29 @@ def freeze_pool(model_weights, model_name, runtime=None, replace=False, rules=No
     kept from the old pool keeps its registered equivalent implementation.
     """
     path = LOCAL / "pool.json"
-    s = research_state()
     old = read_json(path) if path.exists() else {}
-    # A new pool keeps the current one's runtime unless told otherwise: the
-    # research experiment's may be older than what the pool was built on.
-    runtime = runtime or old.get("runtime_path") or s["candidate_runtime_path"]
+    if not old and not (runtime and rules):
+        raise SystemExit("the first pool needs --runtime and --rules")
+    # A new pool keeps the current one's runtime, members, game and resources unless told otherwise.
+    runtime = runtime or old["runtime_path"]
     members = {}
-    for entry in rules or RULE_OPPONENTS:
-        cid, spec = member_spec(entry, s, runtime)
-        members[cid] = with_timeouts(spec)
+    if rules:
+        for entry in rules:
+            cid, spec = member_spec(entry, runtime)
+            members[cid] = with_timeouts(spec)
+    else:
+        members = {cid: dict(spec, runtime_path=runtime) for cid, spec in old["members"].items()
+                   if spec.get("family") != "model"}
     if model_weights:  # the pool may be rules only
         if not (MODELS / model_weights).is_dir():
             raise SystemExit(f"model weights {model_weights} are not under {MODELS}")
         members[model_name] = with_timeouts(
             {"family": "model", "version": model_name, "parameters": {"weights": model_weights}}
         )
-    pool = {"members": members, "runtime_path": runtime, "config": s["config"]["game"],
-            "resources": s["config"]["resources"], "timeouts": TIMEOUTS}
+    pool = {"members": members, "runtime_path": runtime,
+            "config": old.get("config") or {"rounds": 16, "games_per_round": 1, "stage": "qualifier", "base_score": 1},
+            "resources": old.get("resources") or {"memory_mb": 4096, "threads": 1, "device": "cpu"},
+            "timeouts": TIMEOUTS}
     pool["id"] = hashlib.sha256(json.dumps(pool, sort_keys=True).encode()).hexdigest()[:16]
     pool["dev_seed"] = int(pool["id"], 16)
     if not replace and old and old["id"] != pool["id"] and attempts(old["id"]):
@@ -894,7 +888,7 @@ def history(line):
 
 
 def freeze_model(attempt_id, actor_dir):
-    """Register an exported Actor under the research model store by its weights hash."""
+    """Register an exported Actor under the model store by its weights hash."""
     actor = Path(actor_dir)
     weights = hashlib.sha256((actor / "actor.pt").read_bytes()).hexdigest()
     target = MODELS / weights
@@ -978,7 +972,7 @@ _services = {}
 
 
 def _play_local(pool, attempt_id, spec, blocks, seed, label):
-    """Run the jobs as local processes, the way the research executor does."""
+    """Run the jobs as local processes."""
     import subprocess
 
     from mahjong_ai.execution.model_seat import ENCODER_ENV, served_weights
@@ -1365,13 +1359,13 @@ def report(record):
 def main():
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("runtime", help="freeze src/mahjong_ai into the research runtime store")
+    sub.add_parser("runtime", help="freeze src/mahjong_ai into the runtime store")
     p = sub.add_parser("pool")
-    p.add_argument("--model", help="weights SHA-256 under the research model store (omit for a pool of rules only)")
+    p.add_argument("--model", help="weights SHA-256 under the model store (omit for a pool of rules only)")
     p.add_argument("--name", default="pool-model")
-    p.add_argument("--runtime", help="frozen runtime directory (default: the current pool's, else the research experiment's)")
+    p.add_argument("--runtime", help="frozen runtime directory (default: the current pool's)")
     p.add_argument("--replace", action="store_true", help="start a new record even though the current pool has attempts")
-    p.add_argument("--rules", help="comma-separated rule members: research candidate ids or package directories")
+    p.add_argument("--rules", help="comma-separated rule members: package directories (default: the current pool's)")
     dr = sub.add_parser("drain", help="hold new attempts back while the pool is replaced (maintainer)")
     dr.add_argument("state", choices=("on", "off"))
     dr.add_argument("why", nargs="?", default="维护者正在更换固定对手池")
@@ -1381,7 +1375,7 @@ def main():
     rb.add_argument("--host", default="local", choices=tuple(EVAL_WORKERS))
     sub.add_parser("rebase-finish", help="record a line's replayed versions; the highest is its best").add_argument(
         "line", choices=("rule", "rl"))
-    ref = sub.add_parser("reference", help="score a research candidate or a pool model as a reference line")
+    ref = sub.add_parser("reference", help="score a pool member or an exported model as a reference line")
     ref.add_argument("candidate")
     ref.add_argument("--host", default="local", choices=tuple(EVAL_WORKERS))
     ref.add_argument("--weights", help="score an exported model by its weights hash under this name")
@@ -1482,8 +1476,7 @@ def main():
         spec = {k: v for k, v in playing(pool)[args.candidate].items()
                 if k not in ("action_seconds", "response_seconds")}
     else:
-        s = research_state()
-        spec = dict(s["candidates"][args.candidate]["spec"], runtime_path=s["candidate_runtime_path"])
+        raise SystemExit(f"{args.candidate} is not a pool member; name a model with --weights")
     try:
         record = evaluate("reference", spec, args.candidate, f"ref-{args.candidate}", host=args.host)
     except Refused as exc:

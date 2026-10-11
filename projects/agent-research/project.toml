@@ -1,5 +1,0 @@
-[project]
-id = "agent-research"
-family = "agent-research"
-entrypoint = "research.toml"
-workspace = "../.."

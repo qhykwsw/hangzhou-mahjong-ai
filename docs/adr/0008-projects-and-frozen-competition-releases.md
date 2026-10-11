@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0019
 ---
 
 # 以策略项目和冻结发布版本承载多种开发方式

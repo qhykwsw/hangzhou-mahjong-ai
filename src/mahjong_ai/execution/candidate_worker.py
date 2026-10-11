@@ -98,36 +98,6 @@ def main():
             raise ValueError("unknown policy operation")
         return {"ok": True}
 
-    class TrainingContext:
-        objective = "four-player-settlement-rank-v1"
-
-        def __init__(self, request):
-            self.episodes = request["episodes"]
-            self.config = request["config"]
-            self.output = output
-            self.initial = package / "model"
-            self.completed_episodes = request.get("completed_episodes", 0)
-            self.checkpoint_metadata = request.get("checkpoint")
-
-        def checkpoint(self, metadata=None):
-            send({"request": "checkpoint", "metadata": metadata})
-            reply = read()
-            if not reply.get("ok"):
-                raise RuntimeError("checkpoint not committed")
-
-        def play_many(self, policy, games):
-            if type(games) is not int or games < 1:
-                raise ValueError("positive batch size required")
-            return [self.play(policy) for _ in range(games)]
-
-        def play(self, policy):
-            send({"request": "play"})
-            while True:
-                request = read()
-                if "result" in request and "op" not in request:
-                    return RoundResult(**request["result"]), request["seat"]
-                send(dispatch(policy, request))
-
     try:
         module_spec = importlib.util.spec_from_file_location(
             "candidate", package / "strategy.py"
@@ -146,16 +116,6 @@ def main():
                     raise TypeError(
                         "build must return reset, act and finish_round methods"
                     )
-                if request.get("combination"):
-                    from mahjong_ai.strategies.catalog import validate_capability
-
-                    validate_capability(
-                        module,
-                        policy,
-                        request["combination"],
-                        package,
-                        request.get("definition"),
-                    )
                 # Existing candidates are expected to make reset() a complete
                 # game boundary. A candidate may opt out when it deliberately
                 # keeps process-global state that reset cannot clear.
@@ -165,11 +125,6 @@ def main():
                         "reuse_process": bool(getattr(module, "PROCESS_REUSE", True)),
                     }
                 )
-            elif request["op"] == "describe":
-                send({"train": callable(getattr(module, "train", None))})
-            elif request["op"] == "train":
-                metrics = module.train(TrainingContext(request))
-                send({"done": True, "metrics": metrics or {}})
             else:
                 send(dispatch(policy, request))
     except EOFError:

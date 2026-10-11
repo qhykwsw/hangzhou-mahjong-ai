@@ -1,47 +1,43 @@
-# 杭州麻将策略研究
+# 杭州麻将策略迭代
 
-项目同时支持自动研究和人工维护的策略项目。自动研究的分支由 Codex 编写候选并经过完整配对评估；人工项目独立训练和发布具体版本。共享比赛可以让两类冻结版本在相同条件下对战。
+项目包含杭州麻将引擎、两条由迭代 Agent 推进的策略线（规则线与 RL 线，合称迭代线）和官方平台的对战客户端。迭代线面对固定对手池评测，每次尝试改一处，统计上确认更强才成为新的最好版本；RL 线在 GPU 主机上用规则教师指导的训练框架训练。
 
-## 启动
+## 安装
 
-支持 macOS 和启用 systemd 的 Linux/WSL2，需要 Python 3.12+、已登录的 Codex CLI。
+支持 macOS（Apple Silicon）和 Linux/WSL2，需要 Python 3.12+。
 
-- macOS 使用系统自带的 launchd 和 sandbox-exec；LightGBM 的 OpenMP 库可通过 `brew install libomp` 安装。
-- Ubuntu/WSL2 安装运行依赖：`sudo apt-get install bubblewrap libseccomp2 libgomp1 build-essential`。`systemctl --user show-environment` 应能正常执行；WSL 的 systemd 设置见[研究手册](docs/reference/strategy-agent.md)。
+- macOS 先执行 `brew install libomp`；候选沙箱使用系统自带的 sandbox-exec。
+- Ubuntu/WSL2 安装运行依赖：`sudo apt-get install bubblewrap libseccomp2 libgomp1 build-essential`。
 - 不复制其他机器的虚拟环境或编译产物；在当前机器安装依赖并构建 C 加速器。
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install -e '.[dev]'
-.venv/bin/mahjong start
+.venv/bin/python -m pip install -e '.[dev]'               # 模型推理另加 '.[model]'
+.venv/bin/python setup.py build_ext --inplace            # 可选：C 加速，失败时自动回退纯 Python
+.venv/bin/mahjong-ai play --rounds 8 --check-invariants  # 自检：本地打一场
 ```
 
 如果系统的 `python3` 低于 3.12，可用 `uv venv --python 3.12 --seed .venv` 创建环境，再执行上述安装命令。
 
-启动打开研究控制台，不自动运行实验。仓库只保存源码和配置，不附带历史实验、训练模型或发布版本。当前配置使用 DeepSeek，开始研究前需在 `CODEX_HOME`（默认 `~/.codex`）配置 `netease-deepseek-flash.config.toml`；仅启动控制台不需要这个配置。
-
-研究分支分为规则代码的策略分支和训练方案的方案分支，各自连续迭代：每次迭代面对最近一次共同大乱斗的前三名做分段配对评估，累计若干次晋级后，全体现役代表再进行共同大乱斗。分支阵容与状态以 [research.toml](projects/agent-research/research.toml) 为准，改动后自动应用；网页只读，实验用 `mahjong create` / `mahjong control` 操作。完整说明见[研究手册](docs/reference/strategy-agent.md)。
+## 网页
 
 ```bash
+.venv/bin/mahjong start    # 启动只读网页：迭代线、代理桌与线上自由对战
 .venv/bin/mahjong status
 .venv/bin/mahjong stop
-.venv/bin/mahjong-ai play --rounds 8 --check-invariants
 ```
 
-服务独立于启动终端运行；WSL 实例本身必须保持运行，`wsl --shutdown`、Windows 重启或实例退出都会停止服务。重新启动服务后，未完成的实验须用 `mahjong control resume` 继续；已结束的实验保留结果，不自动追加研究。当前自动研究项目位于 `projects/agent-research/`，`mahjong start` 会在仓库根目录自动选择它；也可以显式传入 `--project projects/agent-research`。SSH 启动输出本机与已连接的 Tailscale 地址，不打开远端电脑浏览器；WSL 优先用 `wslview` 打开 Windows 默认浏览器，没有浏览器时仍输出访问地址。
+网页由 macOS 用户域 launchd 或 Linux/WSL2 的 systemd 用户服务托管，独立于启动终端，优先使用端口 8765。Tailscale 已连接时同时监听回环与 Tailscale 地址；SSH 会话里启动只输出地址，不打开浏览器。
 
 ## 入口
 
 | 需要做什么 | 文档 |
 | --- | --- |
-| 配置、运行、暂停和理解排名 | [研究手册](docs/reference/strategy-agent.md) |
-| 理解 Agent 会话、累计结论与详情读取 | [迭代交接与查询](docs/reference/strategy-agent.md#会话累计结论与按需读取) |
-| 修改框架或策略 SDK | [开发索引](docs/reference/development.md) |
-| 核对规则、导出或平台对战 | [平台规则与接入](docs/reference/platform.md) |
-| 训练、评估与发布自我对弈策略 | [自我对弈项目](projects/personal/selfplay/README.md) |
-| 推进或维护规则线与 RL 线（迭代线） | [第一性原理迭代线](projects/personal/firstprinciples/README.md) |
-| 让 ChatGPT 只读查询代码、文档与 Git 历史 | [只读 MCP 接入](docs/reference/project-mcp.md) |
+| 推进或维护规则线与 RL 线 | [第一性原理迭代线](projects/personal/firstprinciples/README.md) |
+| 修改 RL 训练框架或训练方案接口 | [训练手册](projects/personal/selfplay/guided/README.md) · [方案接口](projects/personal/selfplay/recipes/API.md) |
+| 修改引擎、执行器或策略 SDK | [开发索引](docs/reference/development.md) |
+| 核对规则或平台对战 | [平台规则与接入](docs/reference/platform.md) |
 | 理解领域对象和架构取舍 | [术语表](CONTEXT.md) · [决策记录](docs/adr/) |
 | 查阅官方材料 | [原始资料](docs/sources/README.md) |
 
-自动研究的数据与备份边界见[研究手册](docs/reference/strategy-agent.md#目录备份与导出)；人工项目与跨项目比赛见[策略项目](docs/reference/projects.md)。运行数据不进入 Git，提交源码不能代替备份。
+运行数据不进入 Git，提交源码不能代替备份。

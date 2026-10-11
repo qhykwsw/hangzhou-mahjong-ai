@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0019
 ---
 
 # Mac 总控容忍远程主机掉线，分支随时加入，网页只读

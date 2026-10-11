@@ -9,7 +9,18 @@ import time
 import pytest
 
 from mahjong_ai.execution.candidate_runtime import sandbox_command
-from mahjong_ai.execution.dependencies import clean_env, command
+
+
+def clean_env(temp):
+    """A sandboxed child's whole environment: the repository's sources and a private home."""
+    return {
+        "PATH": "/usr/bin:/bin",
+        "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "HOME": str(temp),
+        "TMPDIR": str(temp),
+        "OMP_NUM_THREADS": "1",
+    }
 
 
 def run_sandbox(source, readable, writable, **options):
@@ -82,51 +93,6 @@ print(json.dumps(result))
     assert (output / "artifact").read_text() == "model"
 
 
-def test_trusted_dependency_command_can_use_network_and_subprocesses(tmp_path):
-    with socket.socket() as server:
-        server.bind(("127.0.0.1", 0))
-        server.listen()
-        result = run_sandbox(
-            f"import socket, subprocess, sys; socket.create_connection({server.getsockname()!r}, timeout=2).close(); subprocess.run([sys.executable, '-c', ''], check=True)",
-            [],
-            [tmp_path],
-            network=True,
-            no_fork=False,
-        )
-    assert result.returncode == 0, result.stderr
-
-
-def test_command_enforces_memory_inside_sandbox(tmp_path):
-    result = command(
-        [
-            sys.executable,
-            "-c",
-            "import time; data=bytearray(96*1024**2); time.sleep(10)",
-        ],
-        tmp_path,
-        [],
-        [tmp_path],
-        tmp_path / "logs",
-        15,
-        memory_bytes=64 * 1024**2,
-    )
-    assert result["reason"] == "memory_limit", result
-    assert result["peak_memory_bytes"] > 64 * 1024**2
-
-
-def test_command_reports_fast_process_peak_memory(tmp_path):
-    result = command(
-        [sys.executable, "-c", "data=bytearray(32*1024**2)"],
-        tmp_path,
-        [],
-        [tmp_path],
-        tmp_path / "logs",
-        10,
-    )
-    assert result["status"] == "completed", result
-    assert result["peak_memory_bytes"] >= 32 * 1024**2
-
-
 def test_missing_sandbox_fails_closed(monkeypatch):
     from mahjong_ai.execution import candidate_runtime
 
@@ -140,10 +106,9 @@ def test_sandbox_dies_with_host_process(tmp_path):
     source = f"""
 import subprocess, sys, time
 from mahjong_ai.execution.candidate_runtime import sandbox_command, sandbox_popen
-from mahjong_ai.execution.dependencies import clean_env
 child = sandbox_popen(
     sandbox_command([sys.executable, '-c', 'import time; print("ready", flush=True); time.sleep(60)'], [], [{str(tmp_path)!r}]),
-    stdout=subprocess.PIPE, text=True, env=clean_env({str(tmp_path)!r}),
+    stdout=subprocess.PIPE, text=True, env={clean_env(tmp_path)!r},
 )
 assert child.stdout.readline() == 'ready\\n'
 print(child.pid, flush=True)

@@ -120,10 +120,10 @@ def test_a_switching_seat_plays_the_pools_runtime_with_the_repositorys_seat(tmp_
     monkeypatch.syspath_prepend(str(ROOT / "projects/personal/firstprinciples"))
     E = importlib.import_module("harness.evaluate")
     stage = importlib.import_module("harness.stage")
-    store = tmp_path / "research"
-    monkeypatch.setattr(E, "RESEARCH", store)
+    store = tmp_path / "runtimes"
+    monkeypatch.setattr(E, "RUNTIMES", store)
     src = ROOT / "src" / "mahjong_ai"
-    runtime = store / "old"
+    runtime = tmp_path / "old"
     shutil.copytree(src, runtime / "mahjong_ai", ignore=shutil.ignore_patterns("__pycache__"))
     pool = {"runtime_path": str(runtime)}
     assert stage.seat_runtime(pool) == str(runtime)  # the seat is already the repository's
@@ -131,7 +131,7 @@ def test_a_switching_seat_plays_the_pools_runtime_with_the_repositorys_seat(tmp_
     seat.write_text(seat.read_text() + "\n# the pool's older seat\n")
     (runtime / "mahjong_ai" / "domain" / "marker.py").write_text("# the pool's own\n")
     new = Path(stage.seat_runtime(pool))
-    assert new.parent == store / ".local/research/runtimes" and new != runtime
+    assert new.parent == store and new != runtime
     for f in stage.SEAT_FILES:
         assert (new / "mahjong_ai" / f).read_bytes() == (src / f).read_bytes()
     assert (new / "mahjong_ai" / "domain" / "marker.py").read_text() == "# the pool's own\n"

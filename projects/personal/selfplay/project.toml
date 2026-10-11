@@ -1,8 +1,0 @@
-[project]
-id = "personal-selfplay"
-family = "selfplay"
-entrypoint = "src/strategy.py"
-workspace = "../.."
-dependencies = ["onnxruntime==1.30.0"]
-algorithm = "selfplay-ppo"
-description = "Independent self-play PPO policy; PyTorch trainer, ONNX Runtime release"

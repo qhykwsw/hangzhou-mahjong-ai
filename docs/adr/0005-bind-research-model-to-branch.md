@@ -1,5 +1,5 @@
 ---
-status: partially superseded by ADR-0006
+status: superseded by ADR-0019
 ---
 
 # 研究模型绑定分支，显式记录后期切换
