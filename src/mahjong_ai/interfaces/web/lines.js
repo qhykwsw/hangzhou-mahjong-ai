@@ -152,8 +152,29 @@
       const info = proxy.panels?.[id];
       const head = `${info?.name || id}${id === proxy.active ? "（当前）" : ""}`
         + (info?.proxies ? `：${info.proxies} 个代理` : "") + (info?.check ? `；${info.check}` : "");
-      return `<div class="proxypanel"><div class="muted">${esc(head)}</div>${panelChart(proxy, all.filter((r) => r.panel === id))}</div>`;
+      const results = all.filter((r) => r.panel === id);
+      return `<div class="proxypanel"><div class="muted">${esc(head)}</div>${panelChart(proxy, results)}${ratesTable(results)}</div>`;
     }).join("");
+  }
+
+  // Beside the chart, when the results carry them (the final evaluation, 10-09): each version's score per
+  // game, its paired difference with the reference, and the share of games it ends in the top two and first
+  // (a tie shares the places it spans), each ± one standard error.
+  function ratesTable(results) {
+    const latest = new Map();
+    for (const r of results) if (!latest.has(r.version) || (r.at || 0) >= (latest.get(r.version).at || 0)) latest.set(r.version, r);
+    const rows = [...latest.values()].filter((r) => r.rates).sort((a, b) => b.score - a.score);
+    if (!rows.length) return "";
+    const pct = (m) => (m ? `${(m[0] * 100).toFixed(1)}% ± ${(m[1] * 100).toFixed(1)}` : "—");
+    const pp = (m) => (m ? `${signed(m[0] * 100, 1)} ± ${(m[1] * 100).toFixed(1)}` : "—");
+    const body = rows.map((r) => `<tr><td>${esc(r.version.replace(/^fp-/, ""))}${r.against ? "" : "（参照）"}</td>`
+      + `<td class="number">${signed(r.score)} ± ${r.se.toFixed(2)}</td>`
+      + `<td class="number">${r.against ? `${signed(r.against.diff)} ± ${r.against.se.toFixed(2)}` : "—"}</td>`
+      + `<td class="number">${pct(r.rates.top2)}</td><td class="number">${pp(r.rates.top2_diff)}</td>`
+      + `<td class="number">${pct(r.rates.first)}</td><td class="number">${pp(r.rates.first_diff)}</td>`
+      + `<td class="number">${r.games}</td></tr>`).join("");
+    return `<div class="tablewrap ratestable"><table><thead><tr><th>版本</th><th>每场得分</th><th>对参照</th>`
+      + `<th>前二率</th><th>前二率差（百分点）</th><th>首名率</th><th>首名率差（百分点）</th><th>场数</th></tr></thead><tbody>${body}</tbody></table></div>`;
   }
 
   function panelChart(proxy, results) {

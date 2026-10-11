@@ -1030,6 +1030,14 @@ select:disabled {
 .proxypanel + .proxypanel {
   margin-top: 14px;
 }
+.ratestable {
+  margin-top: 6px;
+}
+.ratestable th,
+.ratestable td {
+  padding: 4px 8px;
+  font-size: 12px;
+}
 .proxypanel > .muted {
   font-size: 12px;
   margin: 4px 0 2px;
