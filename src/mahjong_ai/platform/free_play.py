@@ -29,11 +29,14 @@ from mahjong_ai.persistence.artifacts import (
 
 
 def request_match(client, attempts=8):
-    """POST /api/match, retrying 409 MATCH_BUSY as the guide requires.
+    """POST /api/match, retrying 409 MATCH_BUSY and lost replies.
 
     MATCH_BUSY also means a seat may already be placed without confirmation;
     calling again returns that room idempotently, so a retry never opens a
-    second room (guide, 2026-09-23).
+    second room (guide, 2026-09-23). A lost reply is retried the same way: the
+    seat may be placed (10-10, a busy platform answered after the client's
+    timeout and the room started without us), and a repeated call while
+    waiting or seated returns the original room.
     """
     for attempt in range(attempts):
         try:
@@ -42,6 +45,10 @@ def request_match(client, attempts=8):
             if exc.status != 409 or exc.code != "MATCH_BUSY" or attempt == attempts - 1:
                 raise
             time.sleep(min(30, 3 * (attempt + 1)))
+        except ConnectionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(6)  # the endpoint allows 10 calls a minute per user
 
 
 def run_match(

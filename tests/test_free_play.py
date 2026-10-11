@@ -77,7 +77,11 @@ def test_single_match_freezes_and_collects_finals_without_ready_or_rematch(tmp_p
     assert read_json(root / "policy.json")["family"] == "rule"
 
 
-def test_lost_match_response_never_rejoins_blindly(tmp_path):
+def test_lost_match_response_never_rejoins_blindly(tmp_path, monkeypatch):
+    import mahjong_ai.platform.free_play as free_play
+
+    monkeypatch.setattr(free_play.time, "sleep", lambda _: None)
+
     class Lost(Client):
         def request(self, method, path, body=None):
             if method == "POST":
@@ -91,7 +95,8 @@ def test_lost_match_response_never_rejoins_blindly(tmp_path):
         run_match(cred, PolicySpec(), root, "https://example.invalid", client=client)
     with pytest.raises(RuntimeError, match="unknown"):
         run_match(cred, PolicySpec(), root, "https://example.invalid", client=client)
-    assert sum(method == "POST" for method, _ in client.calls) == 1
+    # Lost replies are retried within the call (idempotent while seated); once they run out, never again.
+    assert sum(method == "POST" for method, _ in client.calls) == 8
 
 
 def test_resume_existing_room_and_reject_changed_policy(tmp_path):
@@ -168,6 +173,8 @@ def test_match_busy_is_retried_and_other_rejections_are_not(monkeypatch):
 
     busy = Busy([ApiError(409, "MATCH_BUSY"), ApiError(409, "MATCH_BUSY")])
     assert request_match(busy) == {"room_id": "room"} and busy.calls == 3
+    lost = Busy([ConnectionError("platform connection failed; action outcome may be unknown")])
+    assert request_match(lost) == {"room_id": "room"} and lost.calls == 2
     limit = Busy([ApiError(409, "MATCH_LIMIT_REACHED")])
     with pytest.raises(ApiError):
         request_match(limit)
