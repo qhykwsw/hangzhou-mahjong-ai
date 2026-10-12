@@ -1,0 +1,25 @@
+{
+  "code": "/home/user/code/leihuo_majiang/.local/guided-code/2eba0a1908b9e989c84c78c8106be354aa728b0f2570e680d656ed6691c3c37e",
+  "source_id": "2eba0a1908b9e989c84c78c8106be354aa728b0f2570e680d656ed6691c3c37e",
+  "meta": {
+    "format": "guided-actor-v1",
+    "encoding": "guided-current-hand-v1",
+    "config": {
+      "dim": 128,
+      "layers": 4,
+      "heads": 4,
+      "lookahead": true,
+      "suit_embedding": "shared"
+    },
+    "weights_sha256": "879964c3b3e05ee371501bbea9978dd83914c021da01fff14087b4e3c90f8916",
+    "source_checkpoint_sha256": "855ad737ef326faf61136d12b25972d0304ca7cd6e606c44faa186454a7f0439",
+    "backend": "pytorch",
+    "actions": 231
+  },
+  "checkpoint": null,
+  "name": "rl-196-suit",
+  "weights": "879964c3b3e05ee371501bbea9978dd83914c021da01fff14087b4e3c90f8916",
+  "start_actor": "/home/user/code/leihuo_majiang/.local/firstprinciples/rl/start/actor",
+  "host": "5070ti",
+  "size": "small"
+}

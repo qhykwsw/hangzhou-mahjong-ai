@@ -1,0 +1,178 @@
+{
+  "members": {
+    "fp68-classic": {
+      "family": "code",
+      "version": "fp68-classic",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/Users/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/pool-members/fp68-classic/package-1734c34f5fe7ced1",
+      "package_hash": "1734c34f5fe7ced17c8fa835c4317e600f9d3f04058997f9f8f0e1a3fbcc7ae5",
+      "python_path": "/Users/user/code/leihuo_majiang/.venv/bin/python",
+      "runtime_path": "/Users/user/code/leihuo_majiang/projects/agent-research/.local/research/runtimes/e4efef433b2f00e4695213f3b811742e07a72315425d6c0aee71e02753e1650a",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6
+    },
+    "fp68-flat": {
+      "family": "code",
+      "version": "fp68-flat",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/Users/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/pool-members/fp68-flat/package-f1af107a7d726c01",
+      "package_hash": "f1af107a7d726c015fbac2284842244946518143d288a0ce7fcf35c4b82f96f4",
+      "python_path": "/Users/user/code/leihuo_majiang/.venv/bin/python",
+      "runtime_path": "/Users/user/code/leihuo_majiang/projects/agent-research/.local/research/runtimes/e4efef433b2f00e4695213f3b811742e07a72315425d6c0aee71e02753e1650a",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6
+    },
+    "fp68-kong-eager": {
+      "family": "code",
+      "version": "fp68-kong-eager",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/Users/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/pool-members/fp68-kong-eager/package-5e945a8736953836",
+      "package_hash": "5e945a87369538369672d7892707e74b7d0b34da7953e5ed1d1dea73e3edede7",
+      "python_path": "/Users/user/code/leihuo_majiang/.venv/bin/python",
+      "runtime_path": "/Users/user/code/leihuo_majiang/projects/agent-research/.local/research/runtimes/e4efef433b2f00e4695213f3b811742e07a72315425d6c0aee71e02753e1650a",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6
+    },
+    "fp68-peng-speed": {
+      "family": "code",
+      "version": "fp68-peng-speed",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/Users/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/pool-members/fp68-peng-speed/package-3838c27b8db2d7d6",
+      "package_hash": "3838c27b8db2d7d659dfa6e79e309f021216e03110f23996d208b14f283a0e5b",
+      "python_path": "/Users/user/code/leihuo_majiang/.venv/bin/python",
+      "runtime_path": "/Users/user/code/leihuo_majiang/projects/agent-research/.local/research/runtimes/e4efef433b2f00e4695213f3b811742e07a72315425d6c0aee71e02753e1650a",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6
+    },
+    "fp68-chi-speed": {
+      "family": "code",
+      "version": "fp68-chi-speed",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/Users/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/pool-members/fp68-chi-speed/package-0caad6fd8cf698b0",
+      "package_hash": "0caad6fd8cf698b0af6563073115795bd526bed82cf5f2ab30e19c8fd93dc620",
+      "python_path": "/Users/user/code/leihuo_majiang/.venv/bin/python",
+      "runtime_path": "/Users/user/code/leihuo_majiang/projects/agent-research/.local/research/runtimes/e4efef433b2f00e4695213f3b811742e07a72315425d6c0aee71e02753e1650a",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6
+    },
+    "fp68-closed-early": {
+      "family": "code",
+      "version": "fp68-closed-early",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/Users/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/pool-members/fp68-closed-early/package-8429d40c5eb57518",
+      "package_hash": "8429d40c5eb57518af5378477301d28dbf838e05454daf401eb5028b8fab1f5c",
+      "python_path": "/Users/user/code/leihuo_majiang/.venv/bin/python",
+      "runtime_path": "/Users/user/code/leihuo_majiang/projects/agent-research/.local/research/runtimes/e4efef433b2f00e4695213f3b811742e07a72315425d6c0aee71e02753e1650a",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6
+    },
+    "fp68-patient-big": {
+      "family": "code",
+      "version": "fp68-patient-big",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/Users/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/pool-members/fp68-patient-big/package-1a88359fc2ae4b4d",
+      "package_hash": "1a88359fc2ae4b4d00f54d36f0b3f5336874cc8addceca8274c92e44e8cadacd",
+      "python_path": "/Users/user/code/leihuo_majiang/.venv/bin/python",
+      "runtime_path": "/Users/user/code/leihuo_majiang/projects/agent-research/.local/research/runtimes/e4efef433b2f00e4695213f3b811742e07a72315425d6c0aee71e02753e1650a",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6
+    }
+  },
+  "runtime_path": "/Users/user/code/leihuo_majiang/projects/agent-research/.local/research/runtimes/e4efef433b2f00e4695213f3b811742e07a72315425d6c0aee71e02753e1650a",
+  "config": {
+    "rounds": 16,
+    "games_per_round": 1,
+    "stage": "qualifier",
+    "base_score": 1
+  },
+  "resources": {
+    "memory_mb": 4096,
+    "threads": 1,
+    "device": "cpu"
+  },
+  "timeouts": {
+    "discard": 2.0,
+    "response": 0.6
+  },
+  "id": "c9e98aa5df7b4d5e",
+  "dev_seed": 14549312516220734814,
+  "implementations": {
+    "fp68-classic": {
+      "package_path": "/Users/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/pool-implementations/fp68-classic/package-1f73fa27d3c2d2c0",
+      "package_hash": "1f73fa27d3c2d2c0a44375e939555780b151ae8471891701d388acaf6d806975",
+      "seed": 2994003034974845986,
+      "hands": 16384,
+      "decisions": 179648,
+      "time_ratio": 0.511236491690604,
+      "at": 1790761334.911628
+    },
+    "fp68-flat": {
+      "package_path": "/Users/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/pool-implementations/fp68-flat/package-f6df0c05a2f29d22",
+      "package_hash": "f6df0c05a2f29d225a9f2b55874e3e2e1cfd604477f026bc9ad72442525607b9",
+      "seed": 2843781518001210773,
+      "hands": 16384,
+      "decisions": 177789,
+      "time_ratio": 0.5078220805032104,
+      "at": 1790761385.1849742
+    },
+    "fp68-kong-eager": {
+      "package_path": "/Users/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/pool-implementations/fp68-kong-eager/package-bf2aa611be7ce741",
+      "package_hash": "bf2aa611be7ce741d31590a924a90360204f695f42dc39cf68c3f5b3eef526cf",
+      "seed": 979343810983379585,
+      "hands": 16384,
+      "decisions": 179956,
+      "time_ratio": 0.48414197821867977,
+      "at": 1790761442.418957
+    },
+    "fp68-peng-speed": {
+      "package_path": "/Users/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/pool-implementations/fp68-peng-speed/package-8970aecc9dfc18d7",
+      "package_hash": "8970aecc9dfc18d7c7cda9d8c8d86a22816721443133995e0b472e1bdb01fed5",
+      "seed": 3743936878403676831,
+      "hands": 16384,
+      "decisions": 179690,
+      "time_ratio": 0.49599408303614995,
+      "at": 1790761501.5099578
+    },
+    "fp68-chi-speed": {
+      "package_path": "/Users/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/pool-implementations/fp68-chi-speed/package-dd864df09aa74a2b",
+      "package_hash": "dd864df09aa74a2bedb5b811eac84f4048d81e04b0c9bcbe562df11d88d5f2f2",
+      "seed": 1842290545888406132,
+      "hands": 16384,
+      "decisions": 179031,
+      "time_ratio": 0.48874942282448314,
+      "at": 1790761557.096102
+    },
+    "fp68-closed-early": {
+      "package_path": "/Users/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/pool-implementations/fp68-closed-early/package-1ec8e25c9b56ec72",
+      "package_hash": "1ec8e25c9b56ec724806e9370f4c064dc400d5202d62fba1e1032fa7ead0ebcf",
+      "seed": 1258543330272990503,
+      "hands": 16384,
+      "decisions": 180253,
+      "time_ratio": 0.48858892087297123,
+      "at": 1790761609.984961
+    },
+    "fp68-patient-big": {
+      "package_path": "/Users/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/pool-implementations/fp68-patient-big/package-7cbec61a611489d4",
+      "package_hash": "7cbec61a611489d4f93a21150add9688d9d434b9c05e1b9838a15683e568f76b",
+      "seed": 29365554865186526,
+      "hands": 16384,
+      "decisions": 179105,
+      "time_ratio": 0.4877493762787784,
+      "at": 1790761658.88113
+    }
+  }
+}

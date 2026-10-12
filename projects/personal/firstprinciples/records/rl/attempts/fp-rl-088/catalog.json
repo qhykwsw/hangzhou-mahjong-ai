@@ -1,0 +1,1028 @@
+[
+  {
+    "id": "fp-style-race-classic",
+    "source": "固定对手池",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": true,
+      "teacher": false
+    },
+    "score": 1.31,
+    "se": 0.33,
+    "decision_ms": {
+      "mean_ms": 0.2813003223787756,
+      "max_ms": 4.4064579997211695,
+      "decisions": 346
+    },
+    "description": null
+  },
+  {
+    "id": "fp-style-kong-eager",
+    "source": "固定对手池",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": true,
+      "teacher": false
+    },
+    "score": 1.35,
+    "se": 0.32,
+    "decision_ms": {
+      "mean_ms": 0.38879994091086006,
+      "max_ms": 7.7223749831318855,
+      "decisions": 356
+    },
+    "description": null
+  },
+  {
+    "id": "fp-style-peng-speed",
+    "source": "固定对手池",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": true,
+      "teacher": false
+    },
+    "score": 1.67,
+    "se": 0.32,
+    "decision_ms": {
+      "mean_ms": 0.36263425049623504,
+      "max_ms": 4.845541901886463,
+      "decisions": 337
+    },
+    "description": null
+  },
+  {
+    "id": "fp-style-flat-race",
+    "source": "固定对手池",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": true,
+      "teacher": false
+    },
+    "score": 0.42,
+    "se": 0.34,
+    "decision_ms": {
+      "mean_ms": 0.1455252495361492,
+      "max_ms": 21.359208039939404,
+      "decisions": 304
+    },
+    "description": null
+  },
+  {
+    "id": "fp-style-patient-big",
+    "source": "固定对手池",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": true,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": {
+      "mean_ms": 0.08030538815798577,
+      "max_ms": 0.8306668605655432,
+      "decisions": 379
+    },
+    "description": null
+  },
+  {
+    "id": "fp-style-chi-speed",
+    "source": "固定对手池",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": true,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": {
+      "mean_ms": 0.0543679771387679,
+      "max_ms": 0.6706248968839645,
+      "decisions": 351
+    },
+    "description": null
+  },
+  {
+    "id": "fp-style-closed-early",
+    "source": "固定对手池",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": true,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": {
+      "mean_ms": 0.08576470805483372,
+      "max_ms": 1.2319579254835844,
+      "decisions": 357
+    },
+    "description": null
+  },
+  {
+    "id": "fp-rl-start-ff6d052a",
+    "source": "RL 线",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": -5.27,
+    "se": 0.43,
+    "decision_ms": null,
+    "description": "起点：imitation-piao-small-100k（模仿，未经 RL 训练）"
+  },
+  {
+    "id": "fp-rl-000",
+    "source": "RL 线",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": -3.35,
+    "se": 0.43,
+    "decision_ms": null,
+    "description": "基线方案原样训练（未改动）"
+  },
+  {
+    "id": "fp-rl-008",
+    "source": "RL 线",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": -3.13,
+    "se": 0.44,
+    "decision_ms": null,
+    "description": "分段：前 5 批只做 DAgger 蒸馏（Adam 1e-4，带教师标签），之后只做基线的 PG KL 0.03 小步"
+  },
+  {
+    "id": "fp-rl-010",
+    "source": "RL 线",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": -2.47,
+    "se": 0.43,
+    "decision_ms": null,
+    "description": "DAgger 蒸馏替换 PG，每批数据做 4 遍 Adam 1e-4（尝试 9 是 2 遍）"
+  },
+  {
+    "id": "fp-rl-025",
+    "source": "RL 线",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": -2.17,
+    "se": 0.43,
+    "decision_ms": null,
+    "description": "PG 尾段（后 7 批）每步 KL 从 0.03 降到 0.01，蒸馏阶段不变"
+  },
+  {
+    "id": "fp-rl-014",
+    "source": "RL 线",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": -1.75,
+    "se": 0.44,
+    "decision_ms": null,
+    "description": "4 遍蒸馏只做前 10 批（一致率约 98.7%），后 7 批改做基线 PG（KL 0.03）"
+  },
+  {
+    "id": "fp-rl-024",
+    "source": "RL 线",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": -0.53,
+    "se": 0.4,
+    "decision_ms": null,
+    "description": "蒸馏教师从 piao-call-channel（+0.97）换成规则线的 fp-rule-009（+4.36），其余同最好版本（每步末释放显存缓存防碎片）"
+  },
+  {
+    "id": "fp-rl-035",
+    "source": "RL 线",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 0.32,
+    "se": 0.38,
+    "decision_ms": null,
+    "description": "蒸馏教师从 fp-rule-009（+4.36）换成规则线最新的最好版本 fp-rule-017（+5.21），其余同最好版本（学习率 2e-4）"
+  },
+  {
+    "id": "fp-rl-030",
+    "source": "RL 线",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 0.4,
+    "se": 0.38,
+    "decision_ms": null,
+    "description": "fp-rule-009 教师下蒸馏学习率从 1e-4 提到 2e-4（4 遍/批不变）"
+  },
+  {
+    "id": "fp-rl-051",
+    "source": "RL 线",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 1.74,
+    "se": 0.4,
+    "decision_ms": null,
+    "description": "两处叠加：教师换 fp-rule-025（+5.75）+ 第 2～4 遍花色排列增强（同尝试 43）；尝试 50 单独测 025"
+  },
+  {
+    "id": "fp-rl-059",
+    "source": "RL 线",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 2.74,
+    "se": 0.42,
+    "decision_ms": null,
+    "description": "从最好版本 051 接着训练 300 万局，全部用于 PG（不再蒸馏）：每步累积 3 个 60 万行 rollout 的梯度再走一步 KL 0.03"
+  },
+  {
+    "id": "fp-rule-009",
+    "source": "规则线",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 0.64,
+    "se": 0.34,
+    "decision_ms": {
+      "mean_ms": 5.039649558530674,
+      "max_ms": 83.86483392678201,
+      "decisions": 363
+    },
+    "description": "竞速只算到牌墙剩 20 张：听牌与 1 向听的几何级数截断到我剩余的摸牌次数 ceil((牌墙−20)/4)，下一层递归少一次"
+  },
+  {
+    "id": "fp-rule-022",
+    "source": "规则线",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 1.31,
+    "se": 0.33,
+    "decision_ms": {
+      "mean_ms": 5.109186055787403,
+      "max_ms": 115.95324997324497,
+      "decisions": 346
+    },
+    "description": "听牌竞速的对手危险率随牌墙上升：Q = clip(0.35 − 0.018×剩余摸牌, 0.10, 0.30)，只作用于听牌（1 向听递归与远手牌不变）"
+  },
+  {
+    "id": "fp-rule-015",
+    "source": "规则线",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 1.38,
+    "se": 0.34,
+    "decision_ms": {
+      "mean_ms": 4.798322727249281,
+      "max_ms": 82.41545804776251,
+      "decisions": 370
+    },
+    "description": "爆头听牌时的吃碰按财飘估值：吃碰后打白仍爆头即按动作链+1、飘+1 计价（规则：吃前爆头、吃后弃白仍爆头可计财飘）"
+  },
+  {
+    "id": "fp-rule-017",
+    "source": "规则线",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 1.41,
+    "se": 0.34,
+    "decision_ms": {
+      "mean_ms": 3.3362924423370814,
+      "max_ms": 58.40558290947229,
+      "decisions": 370
+    },
+    "description": "SAVED 0.4→0.467 单独重测（尝试 16 的快照误带了另一处改动）：按对手平均胡牌番 1.4 与庄闲赔付推导「我胡即免付」的番当量"
+  },
+  {
+    "id": "fp-rule-033",
+    "source": "规则线",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 1.89,
+    "se": 0.31,
+    "decision_ms": {
+      "mean_ms": 1.1826668093582677,
+      "max_ms": 28.6132498877123,
+      "decisions": 356
+    },
+    "description": "与 fp-rule-025 决策完全一致的等价实现：等价提速：爆头听牌直接用 C 数和张与番；用 baotou_outs 位权重找出能换打成爆头的摸牌，只枚举这些；白板分支与换张模块的内循环改在计数数组上调 C；analyze 结果缓存去重"
+  },
+  {
+    "id": "fp-rule-037",
+    "source": "规则线",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 1.94,
+    "se": 0.31,
+    "decision_ms": {
+      "mean_ms": 0.8588832848197833,
+      "max_ms": 17.832582932896912,
+      "decisions": 356
+    },
+    "description": "与 fp-rule-033 决策完全一致的等价实现：等价提速：缓存上限降到几千条、缓存值改为元组（analyze 结果、可换打成爆头的摸牌），1 向听递归先用 C 向听预筛、爆头番表按手牌缓存"
+  },
+  {
+    "id": "fp-rule-044",
+    "source": "规则线",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 2.66,
+    "se": 0.36,
+    "decision_ms": {
+      "mean_ms": 2.7402012023778086,
+      "max_ms": 62.17912491410971,
+      "decisions": 339
+    },
+    "description": "期权合成：1 向听出牌时目标听牌计换张选项（同 040，只对接近最优的出牌补算）＋听牌补全：无白听牌摸白可换打成爆头、暗刻摸第四张可杠补摸（同 043）；顺手修 repeat() 除零与「过」找不到出牌者时报错"
+  },
+  {
+    "id": "fp-rule-045",
+    "source": "规则线",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 2.66,
+    "se": 0.36,
+    "decision_ms": {
+      "mean_ms": 1.22548832906998,
+      "max_ms": 24.821042083203793,
+      "decisions": 339
+    },
+    "description": "与 fp-rule-044 决策完全一致的等价实现：等价提速：换张内循环用垫字牌的 C 进张分析先筛出可能留下听牌的摸牌与打法，命中的听牌直接用 C 取和张数与番值；爆头手的番值、examined 改为一次 C analyze_counts（已胡形仍走 SDK 参考路径）；计数改用 C"
+  },
+  {
+    "id": "fp-rule-046",
+    "source": "规则线",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 3.16,
+    "se": 0.37,
+    "decision_ms": {
+      "mean_ms": 2.762526403535652,
+      "max_ms": 53.929541958495975,
+      "decisions": 339
+    },
+    "description": "可胡窗口读对手快慢：决定放弃这把胡、继续等更大的胡时，继续的估值改用由三家副露数与最近三张弃牌中的中张数查表得出的每圈胡牌概率（按新池实测拟合），替代通用危险率；其余决策不变"
+  },
+  {
+    "id": "fp-rule-047",
+    "source": "规则线",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 3.16,
+    "se": 0.37,
+    "decision_ms": {
+      "mean_ms": 0.26735915887584377,
+      "max_ms": 19.155583111569285,
+      "decisions": 339
+    },
+    "description": "与 fp-rule-046 决策完全一致的等价实现：等价提速：估值改由运行时的 C 竞速估值计算（race_waiting / race_reshaped，档案开听牌补全与零步保护，带一向听换张选项与对手快慢倍数），删掉 Python 版估值与缓存"
+  },
+  {
+    "id": "fp-rule-050",
+    "source": "规则线",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 3.52,
+    "se": 0.37,
+    "decision_ms": {
+      "mean_ms": 0.27758306503445335,
+      "max_ms": 18.88254191726446,
+      "decisions": 349
+    },
+    "description": "可胡窗口「继续」的价值合成：对手快慢改用逻辑回归（同 049：加财飘、距上次吃碰、字牌幺九、弃牌数、庄家）＋继续所到的多白爆头计财飘期权（每张摸牌取「立即胡」与「打白财飘、番翻倍后再等」的较大值，只看一层）"
+  },
+  {
+    "id": "fp-rule-056",
+    "source": "规则线",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 4.23,
+    "se": 0.43,
+    "decision_ms": {
+      "mean_ms": 0.30074489768594503,
+      "max_ms": 19.790624966844916,
+      "decisions": 344
+    },
+    "description": "形状修正取 0.6 倍步长：出牌估值（可胡窗口除外）加 0.009×对子 + 0.0114×相邻两张 + 0.0078×进张/10 − 0.045×向听（054 的回归系数 ×0.6）"
+  },
+  {
+    "id": "fp-rl-067",
+    "source": "RL 线",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 2.83,
+    "se": 0.42,
+    "decision_ms": null,
+    "description": "playout 反事实优势（同尝试 66）+ 退火 KL 0.015（同尝试 64）：从 059 续训 300 万局，每步 3 个 rollout"
+  },
+  {
+    "id": "fp-rule-057",
+    "source": "规则线",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 4.3,
+    "se": 0.43,
+    "decision_ms": {
+      "mean_ms": 0.3146360464341624,
+      "max_ms": 19.20287497341633,
+      "decisions": 355
+    },
+    "description": "形状修正一致化：吃碰与「过」也按各自留下的手牌计 056 的形状修正；相邻两张里两面加 0.0105、边张（12、89）减 0.0055"
+  },
+  {
+    "id": "fp-rl-073",
+    "source": "RL 线",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 3.0,
+    "se": 0.42,
+    "decision_ms": null,
+    "description": "从尝试 71（056 蒸馏后的学生，+3.02）出发做 PG：067 方案原样（playout 反事实优势 + KL 0.015，每步 3 个 rollout），300 万局"
+  },
+  {
+    "id": "fp-rule-061",
+    "source": "规则线",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 4.64,
+    "se": 0.44,
+    "decision_ms": {
+      "mean_ms": 0.7321474629947368,
+      "max_ms": 39.10979093052447,
+      "decisions": 425
+    },
+    "description": "未听牌的手计吃碰期权：出牌留牌、「过」、吃碰后留牌都加上以后吃碰带来的改进（对子可碰、两张邻牌可吃上家），每圈按对手池实测的喂牌率计，吃碰后最好留牌价值高于不吃碰才算，乘权重 0.5；枚举写在 rule/native.c"
+  },
+  {
+    "id": "fp-rl-078",
+    "source": "RL 线",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 4.66,
+    "se": 0.41,
+    "decision_ms": null,
+    "description": "退火：从尝试 76（050 学生 + 900 万局 PG，开发集 +4.95）出发续训 300 万局，playout 反事实优势，每步 KL 从 0.015 减半到 0.0075"
+  },
+  {
+    "id": "fp-rule-062",
+    "source": "规则线",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 5.21,
+    "se": 0.44,
+    "decision_ms": {
+      "mean_ms": 0.7848570028676998,
+      "max_ms": 39.50150008313358,
+      "decisions": 433
+    },
+    "description": "估值一致化：吃碰期权的两边（吃碰后留牌、不吃碰）都计形状修正（C 里同样的 shape_bonus），权重 0.5→0.7；杠后留牌也按出牌的方式计形状修正与吃碰期权（061 里杠分支两样都没有）"
+  },
+  {
+    "id": "proxy-p01",
+    "source": "平台代理",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": null,
+    "description": "平台代理：模仿 32强守门员（线上每手 +0.33，近 3 天同桌占比 3.9%，代理对其动作的一致率 90%）"
+  },
+  {
+    "id": "proxy-p02",
+    "source": "平台代理",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": null,
+    "description": "平台代理：模仿 怜-Toki- (PPO v4)（线上每手 -0.29，近 3 天同桌占比 3.4%，代理对其动作的一致率 84%）"
+  },
+  {
+    "id": "proxy-p03",
+    "source": "平台代理",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": null,
+    "description": "平台代理：模仿 白泽-8559（线上每手 +0.82，近 3 天同桌占比 3.0%，代理对其动作的一致率 88%）"
+  },
+  {
+    "id": "proxy-p04",
+    "source": "平台代理",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": null,
+    "description": "平台代理：模仿 腾蛇-0638（线上每手 +0.27，近 3 天同桌占比 3.0%，代理对其动作的一致率 85%）"
+  },
+  {
+    "id": "proxy-p05",
+    "source": "平台代理",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": null,
+    "description": "平台代理：模仿 强子（线上每手 -0.51，近 3 天同桌占比 2.8%，代理对其动作的一致率 84%）"
+  },
+  {
+    "id": "proxy-p06",
+    "source": "平台代理",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": null,
+    "description": "平台代理：模仿 吃五角教主（线上每手 -0.23，近 3 天同桌占比 2.6%，代理对其动作的一致率 89%）"
+  },
+  {
+    "id": "proxy-p07",
+    "source": "平台代理",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": null,
+    "description": "平台代理：模仿 啾咪啾咪（线上每手 +0.31，近 3 天同桌占比 2.5%，代理对其动作的一致率 91%）"
+  },
+  {
+    "id": "proxy-p08",
+    "source": "平台代理",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": null,
+    "description": "平台代理：模仿 凤凰-2626（线上每手 -0.08，近 3 天同桌占比 2.5%，代理对其动作的一致率 86%）"
+  },
+  {
+    "id": "proxy-p09",
+    "source": "平台代理",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": null,
+    "description": "平台代理：模仿 晴总总，该请桂语山房了（线上每手 -0.12，近 3 天同桌占比 2.3%，代理对其动作的一致率 93%）"
+  },
+  {
+    "id": "proxy-p10",
+    "source": "平台代理",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": null,
+    "description": "平台代理：模仿 貔貅-0278（线上每手 -0.75，近 3 天同桌占比 2.2%，代理对其动作的一致率 89%）"
+  },
+  {
+    "id": "proxy-p11",
+    "source": "平台代理",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": null,
+    "description": "平台代理：模仿 走马（线上每手 -0.19，近 3 天同桌占比 2.1%，代理对其动作的一致率 93%）"
+  },
+  {
+    "id": "proxy-p12",
+    "source": "平台代理",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": null,
+    "description": "平台代理：模仿 我胡汉三又回来了（线上每手 +0.09，近 3 天同桌占比 2.1%，代理对其动作的一致率 92%）"
+  },
+  {
+    "id": "proxy-p13",
+    "source": "平台代理",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": null,
+    "description": "平台代理：模仿 歪比巴卜肉蛋葱鸡（线上每手 +0.56，近 3 天同桌占比 2.1%，代理对其动作的一致率 82%）"
+  },
+  {
+    "id": "proxy-p14",
+    "source": "平台代理",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": null,
+    "description": "平台代理：模仿 Astra-0（线上每手 +0.89，近 3 天同桌占比 2.1%，代理对其动作的一致率 82%）"
+  },
+  {
+    "id": "proxy-p15",
+    "source": "平台代理",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": null,
+    "description": "平台代理：模仿 明日之后天下第一（线上每手 -1.63，近 3 天同桌占比 2.1%，代理对其动作的一致率 94%）"
+  },
+  {
+    "id": "proxy-p16",
+    "source": "平台代理",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": null,
+    "description": "平台代理：模仿 双白平胡（线上每手 +0.67，近 3 天同桌占比 2.0%，代理对其动作的一致率 90%）"
+  },
+  {
+    "id": "proxy-p17",
+    "source": "平台代理",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": null,
+    "description": "平台代理：模仿 吃白饭的蓝色大肥鱼（线上每手 +0.26，近 3 天同桌占比 2.0%，代理对其动作的一致率 92%）"
+  },
+  {
+    "id": "proxy-p18",
+    "source": "平台代理",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": null,
+    "description": "平台代理：模仿 最强的战绩铭刻于滨江（线上每手 +0.36，近 3 天同桌占比 1.7%，代理对其动作的一致率 88%）"
+  },
+  {
+    "id": "proxy-p19",
+    "source": "平台代理",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": null,
+    "description": "平台代理：模仿 Nomad（线上每手 +0.15，近 3 天同桌占比 1.7%，代理对其动作的一致率 91%）"
+  },
+  {
+    "id": "proxy-p20",
+    "source": "平台代理",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": null,
+    "description": "平台代理：模仿 鲲鹏一6383（线上每手 +0.18，近 3 天同桌占比 1.7%，代理对其动作的一致率 78%）"
+  },
+  {
+    "id": "proxy-p21",
+    "source": "平台代理",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": null,
+    "description": "平台代理：模仿 glm-flash（线上每手 +0.37，近 3 天同桌占比 1.7%，代理对其动作的一致率 95%）"
+  },
+  {
+    "id": "proxy-p22",
+    "source": "平台代理",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": null,
+    "description": "平台代理：模仿 ⭐꧁༺🀆🀆🀆🀆༻꧂⭐（线上每手 -0.25，近 3 天同桌占比 1.6%，代理对其动作的一致率 88%）"
+  },
+  {
+    "id": "proxy-p23",
+    "source": "平台代理",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": null,
+    "description": "平台代理：模仿 菜菜子（线上每手 -0.12，近 3 天同桌占比 1.6%，代理对其动作的一致率 88%）"
+  },
+  {
+    "id": "proxy-p24",
+    "source": "平台代理",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": null,
+    "description": "平台代理：模仿 麻将科学（线上每手 -1.24，近 3 天同桌占比 1.6%，代理对其动作的一致率 92%）"
+  },
+  {
+    "id": "proxy-p25",
+    "source": "平台代理",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": null,
+    "description": "平台代理：模仿 朱雀-9527（线上每手 -0.45，近 3 天同桌占比 1.6%，代理对其动作的一致率 90%）"
+  },
+  {
+    "id": "proxy-p26",
+    "source": "平台代理",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": null,
+    "description": "平台代理：模仿 鲲鹏-7543（线上每手 -1.21，近 3 天同桌占比 1.5%，代理对其动作的一致率 78%）"
+  },
+  {
+    "id": "proxy-p27",
+    "source": "平台代理",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": null,
+    "description": "平台代理：模仿 玄武-2346（线上每手 +0.72，近 3 天同桌占比 1.5%，代理对其动作的一致率 87%）"
+  },
+  {
+    "id": "proxy-p28",
+    "source": "平台代理",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": null,
+    "description": "平台代理：模仿 Deepseek胡（线上每手 -0.60，近 3 天同桌占比 1.5%，代理对其动作的一致率 92%）"
+  },
+  {
+    "id": "proxy-p29",
+    "source": "平台代理",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": null,
+    "description": "平台代理：模仿 爆头研究所（线上每手 +0.38，近 3 天同桌占比 1.5%，代理对其动作的一致率 87%）"
+  },
+  {
+    "id": "proxy-p30",
+    "source": "平台代理",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": null,
+    "description": "平台代理：模仿 铳一色14（线上每手 +0.63，近 3 天同桌占比 1.5%，代理对其动作的一致率 93%）"
+  },
+  {
+    "id": "proxy-tail",
+    "source": "平台代理",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": null,
+    "description": "平台代理：模仿 长尾（线上每手 -0.43，近 3 天同桌占比 36.8%，代理对其动作的一致率 82%）"
+  }
+]

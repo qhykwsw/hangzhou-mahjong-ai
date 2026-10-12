@@ -1,0 +1,27 @@
+{
+  "status": {
+    "state": "complete",
+    "started": 1790987855.025912,
+    "deadline": 1791160655.025912,
+    "smoke": false,
+    "limits": {
+      "gpu_limit_bytes": 11111409254,
+      "ram_limit_bytes": 30307597516,
+      "cpu_capacity": 16
+    },
+    "finished": 1791001885.7210722,
+    "training_seconds": 14030.695160388947,
+    "overrun_seconds": 0.0,
+    "hands": 4002016,
+    "labeled_hands": 0,
+    "weights_sha256": "3289bcb30a292518cd237bd73082ab91501bcf078f61d573e6881ab1bd6b56ae",
+    "gpu_peak_allocated_bytes": 4557515776,
+    "gpu_peak_reserved_bytes": 7220494336,
+    "ram_peak_bytes": 16082354176,
+    "processes_peak": 14
+  },
+  "ok": true,
+  "actor": "/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-150/actor",
+  "local_actor": null,
+  "snapshots": []
+}

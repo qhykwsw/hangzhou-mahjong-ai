@@ -1,0 +1,366 @@
+[
+  {
+    "id": "heuristic-efficiency--01--piao-call-channel",
+    "source": "固定对手池",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": true,
+      "teacher": true
+    },
+    "score": 0.97,
+    "se": 0.34,
+    "decision_ms": {
+      "mean_ms": 1.007309480276793,
+      "max_ms": 6.464665988460183,
+      "decisions": 384
+    },
+    "description": null
+  },
+  {
+    "id": "heuristic-efficiency--01--material-dose-double",
+    "source": "固定对手池",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": true,
+      "teacher": false
+    },
+    "score": 1.61,
+    "se": 0.35,
+    "decision_ms": {
+      "mean_ms": 1.0048653523769382,
+      "max_ms": 9.721500100567937,
+      "decisions": 438
+    },
+    "description": null
+  },
+  {
+    "id": "heuristic-fan--01--chi-quota-all-v1",
+    "source": "固定对手池",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": true,
+      "teacher": false
+    },
+    "score": 1.8,
+    "se": 0.35,
+    "decision_ms": {
+      "mean_ms": 0.09365629827735956,
+      "max_ms": 1.6384590417146683,
+      "decisions": 338
+    },
+    "description": null
+  },
+  {
+    "id": "heuristic-fan--01--kong-reserve-white8-rep2",
+    "source": "固定对手池",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": true,
+      "teacher": false
+    },
+    "score": -0.24,
+    "se": 0.34,
+    "decision_ms": {
+      "mean_ms": 0.0546284174249017,
+      "max_ms": 0.6782918935641646,
+      "decisions": 338
+    },
+    "description": null
+  },
+  {
+    "id": "heuristic-adaptive--01--far_chi_flat3_rep",
+    "source": "固定对手池",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": true,
+      "teacher": false
+    },
+    "score": -0.29,
+    "se": 0.36,
+    "decision_ms": {
+      "mean_ms": 0.14169820443702497,
+      "max_ms": 0.741334049962461,
+      "decisions": 341
+    },
+    "description": null
+  },
+  {
+    "id": "heuristic-unrestricted--01--baotou-tenpai-price-009-rep2",
+    "source": "固定对手池",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": true,
+      "teacher": false
+    },
+    "score": -1.54,
+    "se": 0.38,
+    "decision_ms": {
+      "mean_ms": 0.1982933117733071,
+      "max_ms": 0.7565000560134649,
+      "decisions": 403
+    },
+    "description": null
+  },
+  {
+    "id": "imitation-piao-1h",
+    "source": "固定对手池",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": true,
+      "teacher": false
+    },
+    "score": -1.25,
+    "se": 0.35,
+    "decision_ms": null,
+    "description": null
+  },
+  {
+    "id": "fp-rl-start-0aa23713",
+    "source": "RL 线",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": -2.09,
+    "se": 0.37,
+    "decision_ms": null,
+    "description": "起点：imitation-piao-small-100k（模仿，未经 RL 训练）"
+  },
+  {
+    "id": "fp-rule-000",
+    "source": "规则线",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": -12.52,
+    "se": 0.31,
+    "decision_ms": {
+      "mean_ms": 0.030979331953589012,
+      "max_ms": 0.13100006617605686,
+      "decisions": 324
+    },
+    "description": "v0 原样：只看向听与进张的朴素牌效"
+  },
+  {
+    "id": "fp-rule-001",
+    "source": "规则线",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": -11.91,
+    "se": 0.31,
+    "decision_ms": {
+      "mean_ms": 0.021381829333503122,
+      "max_ms": 0.15120895113795996,
+      "decisions": 324
+    },
+    "description": "爆头必胜时翻倍：可胡时先找仍保持爆头的杠，其次财飘打白，都没有才自摸"
+  },
+  {
+    "id": "fp-rl-000",
+    "source": "RL 线",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": -0.25,
+    "se": 0.39,
+    "decision_ms": null,
+    "description": "基线方案原样训练（未改动）"
+  },
+  {
+    "id": "fp-rule-002",
+    "source": "规则线",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": -0.47,
+    "se": 0.38,
+    "decision_ms": {
+      "mean_ms": 0.9834620788269368,
+      "max_ms": 21.937959012575448,
+      "decisions": 347
+    },
+    "description": "估值换成自摸竞速的期望番：听牌按 Σ进张×(番+0.4) 与对手一圈胡牌率 0.15 折算，1 向听按每张进张后的最好听牌加权，胡牌与继续用同一标尺比较"
+  },
+  {
+    "id": "fp-rule-004",
+    "source": "规则线",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 0.04,
+    "se": 0.38,
+    "decision_ms": {
+      "mean_ms": 0.6079068028311694,
+      "max_ms": 4.019667045213282,
+      "decisions": 347
+    },
+    "description": "应答窗口的「过」乘以轮到我之前各家都没自摸的概率：出牌者与我之间有 m 家先摸，按每家 1-(0.85)^(1/3) 折算"
+  },
+  {
+    "id": "fp-rl-008",
+    "source": "RL 线",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 0.47,
+    "se": 0.39,
+    "decision_ms": null,
+    "description": "分段：前 5 批只做 DAgger 蒸馏（Adam 1e-4，带教师标签），之后只做基线的 PG KL 0.03 小步"
+  },
+  {
+    "id": "fp-rule-006",
+    "source": "规则线",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 1.52,
+    "se": 0.42,
+    "decision_ms": {
+      "mean_ms": 0.9619356139170888,
+      "max_ms": 35.257749957963824,
+      "decisions": 380
+    },
+    "description": "组合：尝试 5 的平分打破（留牌与余牌连接数）+ 远手牌每多一向听的折扣 0.6→0.45"
+  },
+  {
+    "id": "fp-rl-010",
+    "source": "RL 线",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 0.84,
+    "se": 0.36,
+    "decision_ms": null,
+    "description": "DAgger 蒸馏替换 PG，每批数据做 4 遍 Adam 1e-4（尝试 9 是 2 遍）"
+  },
+  {
+    "id": "fp-rule-007",
+    "source": "规则线",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 3.99,
+    "se": 0.45,
+    "decision_ms": {
+      "mean_ms": 5.8172466665025,
+      "max_ms": 148.01250002346933,
+      "decisions": 356
+    },
+    "description": "含白板而未爆头的听牌，逐张摸牌取「立即自摸」与「换打成爆头听牌」的较大值估值（非和张的升级也计入）"
+  },
+  {
+    "id": "fp-rl-014",
+    "source": "RL 线",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 1.19,
+    "se": 0.36,
+    "decision_ms": null,
+    "description": "4 遍蒸馏只做前 10 批（一致率约 98.7%），后 7 批改做基线 PG（KL 0.03）"
+  },
+  {
+    "id": "fp-rule-009",
+    "source": "规则线",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 4.36,
+    "se": 0.44,
+    "decision_ms": {
+      "mean_ms": 5.039649558530674,
+      "max_ms": 83.86483392678201,
+      "decisions": 363
+    },
+    "description": "竞速只算到牌墙剩 20 张：听牌与 1 向听的几何级数截断到我剩余的摸牌次数 ceil((牌墙−20)/4)，下一层递归少一次"
+  },
+  {
+    "id": "fp-rl-025",
+    "source": "RL 线",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 1.78,
+    "se": 0.37,
+    "decision_ms": null,
+    "description": "PG 尾段（后 7 批）每步 KL 从 0.03 降到 0.01，蒸馏阶段不变"
+  },
+  {
+    "id": "fp-rl-024",
+    "source": "RL 线",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 3.6,
+    "se": 0.43,
+    "decision_ms": null,
+    "description": "蒸馏教师从 piao-call-channel（+0.97）换成规则线的 fp-rule-009（+4.36），其余同最好版本（每步末释放显存缓存防碎片）"
+  },
+  {
+    "id": "fp-rule-015",
+    "source": "规则线",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 5.1,
+    "se": 0.45,
+    "decision_ms": {
+      "mean_ms": 4.798322727249281,
+      "max_ms": 82.41545804776251,
+      "decisions": 370
+    },
+    "description": "爆头听牌时的吃碰按财飘估值：吃碰后打白仍爆头即按动作链+1、飘+1 计价（规则：吃前爆头、吃后弃白仍爆头可计财飘）"
+  }
+]

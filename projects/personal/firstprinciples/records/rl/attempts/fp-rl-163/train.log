@@ -1,0 +1,20 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/user/code/leihuo_majiang/.local/guided-code/23b997cf956d1095488e14d481940a97c0469185ab0dd3e9855c050ee0013bcf/projects/personal/selfplay/guided/trial.py", line 706, in <module>
+    main()
+  File "/home/user/code/leihuo_majiang/.local/guided-code/23b997cf956d1095488e14d481940a97c0469185ab0dd3e9855c050ee0013bcf/projects/personal/selfplay/guided/trial.py", line 696, in main
+    train(root, smoke=args.command == "smoke")
+  File "/home/user/code/leihuo_majiang/.local/guided-code/23b997cf956d1095488e14d481940a97c0469185ab0dd3e9855c050ee0013bcf/projects/personal/selfplay/guided/trial.py", line 425, in train
+    result = recipe.train(ctx)
+             ^^^^^^^^^^^^^^^^^
+  File "/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-163/recipe/__init__.py", line 14, in train
+    return run(ctx)
+           ^^^^^^^^
+  File "/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-163/recipe/loop.py", line 261, in train
+    openings = [ctx.starts(name) for name in cfg.get("starts", [])]
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-163/recipe/loop.py", line 261, in <listcomp>
+    openings = [ctx.starts(name) for name in cfg.get("starts", [])]
+                ^^^^^^^^^^
+AttributeError: 'Context' object has no attribute 'starts'

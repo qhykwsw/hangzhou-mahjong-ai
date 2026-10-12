@@ -1,0 +1,4 @@
+/home/user/code/leihuo_majiang/.local/guided-deps/numpy-2.1.2/numpy/lib/_function_base_impl.py:2999: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/home/user/code/leihuo_majiang/.local/guided-deps/numpy-2.1.2/numpy/lib/_function_base_impl.py:3000: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[None, :]

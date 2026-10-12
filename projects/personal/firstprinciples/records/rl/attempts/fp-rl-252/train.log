@@ -1,0 +1,22 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/user/code/leihuo_majiang/.local/guided-code/2eba0a1908b9e989c84c78c8106be354aa728b0f2570e680d656ed6691c3c37e/projects/personal/selfplay/guided/trial.py", line 834, in <module>
+    main()
+  File "/home/user/code/leihuo_majiang/.local/guided-code/2eba0a1908b9e989c84c78c8106be354aa728b0f2570e680d656ed6691c3c37e/projects/personal/selfplay/guided/trial.py", line 824, in main
+    train(root, smoke=args.command == "smoke")
+  File "/home/user/code/leihuo_majiang/.local/guided-code/2eba0a1908b9e989c84c78c8106be354aa728b0f2570e680d656ed6691c3c37e/projects/personal/selfplay/guided/trial.py", line 552, in train
+    ctx = Context(plan, root, deadline, smoke, limits)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/code/leihuo_majiang/.local/guided-code/2eba0a1908b9e989c84c78c8106be354aa728b0f2570e680d656ed6691c3c37e/projects/personal/selfplay/guided/trial.py", line 193, in __init__
+    actor, meta = load_actor(v["path"], "cuda")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/code/leihuo_majiang/.local/guided-code/2eba0a1908b9e989c84c78c8106be354aa728b0f2570e680d656ed6691c3c37e/projects/personal/selfplay/guided/deployment.py", line 77, in load_actor
+    config = _actor_config(metadata["config"])
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/code/leihuo_majiang/.local/guided-code/2eba0a1908b9e989c84c78c8106be354aa728b0f2570e680d656ed6691c3c37e/projects/personal/selfplay/guided/deployment.py", line 45, in _actor_config
+    return result | actor_options(config)
+                    ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/code/leihuo_majiang/.local/guided-code/2eba0a1908b9e989c84c78c8106be354aa728b0f2570e680d656ed6691c3c37e/projects/personal/selfplay/guided/networks.py", line 293, in actor_options
+    raise ValueError("belief_head must be true or false")
+ValueError: belief_head must be true or false

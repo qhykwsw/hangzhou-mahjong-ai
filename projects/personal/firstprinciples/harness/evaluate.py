@@ -99,7 +99,7 @@ EVAL_HOST = {"rule": "local", "reference": "local", "rl": "4070"}
 # per process. The pool's seats are all rules that cost milliseconds, so a
 # process is CPU-bound and a second table only makes seats wait on the
 # interpreter lock (timeouts doubled in calibration); one process per core
-# the host can spare for its desktop. The 4070 is someone's everyday desktop:
+# the host can spare for its desktop. The 4070 is also a desktop in daily use:
 # 24 of its 28 threads left it unusable during evaluations (2026-09-29).
 EVAL_WORKERS = {"local": 12, "4070": 16, "4090": 14, "5070ti": 12}
 EVAL_TABLES = {"local": 1, "4070": 1, "4090": 1, "5070ti": 1}

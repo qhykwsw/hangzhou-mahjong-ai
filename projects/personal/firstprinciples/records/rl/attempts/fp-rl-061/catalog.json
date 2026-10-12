@@ -1,0 +1,372 @@
+[
+  {
+    "id": "fp-style-race-classic",
+    "source": "固定对手池",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": true,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": {
+      "mean_ms": 1.6410838014505416,
+      "max_ms": 26.956915971823037,
+      "decisions": 346
+    },
+    "description": null
+  },
+  {
+    "id": "fp-style-kong-eager",
+    "source": "固定对手池",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": true,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": {
+      "mean_ms": 2.4177890664667645,
+      "max_ms": 44.015333987772465,
+      "decisions": 356
+    },
+    "description": null
+  },
+  {
+    "id": "fp-style-peng-speed",
+    "source": "固定对手池",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": true,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": {
+      "mean_ms": 2.420182410318084,
+      "max_ms": 51.6370419645682,
+      "decisions": 337
+    },
+    "description": null
+  },
+  {
+    "id": "fp-style-flat-race",
+    "source": "固定对手池",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": true,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": {
+      "mean_ms": 1.341225982622219,
+      "max_ms": 49.499333021230996,
+      "decisions": 304
+    },
+    "description": null
+  },
+  {
+    "id": "fp-style-patient-big",
+    "source": "固定对手池",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": true,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": {
+      "mean_ms": 2.6281681080719843,
+      "max_ms": 60.47137500718236,
+      "decisions": 379
+    },
+    "description": null
+  },
+  {
+    "id": "fp-style-chi-speed",
+    "source": "固定对手池",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": true,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": {
+      "mean_ms": 2.099748704505506,
+      "max_ms": 61.10087491106242,
+      "decisions": 351
+    },
+    "description": null
+  },
+  {
+    "id": "fp-style-closed-early",
+    "source": "固定对手池",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": true,
+      "teacher": false
+    },
+    "score": null,
+    "se": null,
+    "decision_ms": {
+      "mean_ms": 2.913627316992657,
+      "max_ms": 86.38837502803653,
+      "decisions": 357
+    },
+    "description": null
+  },
+  {
+    "id": "fp-rl-start-ff6d052a",
+    "source": "RL 线",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": -5.27,
+    "se": 0.43,
+    "decision_ms": null,
+    "description": "起点：imitation-piao-small-100k（模仿，未经 RL 训练）"
+  },
+  {
+    "id": "fp-rl-000",
+    "source": "RL 线",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": -3.35,
+    "se": 0.43,
+    "decision_ms": null,
+    "description": "基线方案原样训练（未改动）"
+  },
+  {
+    "id": "fp-rl-008",
+    "source": "RL 线",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": -3.13,
+    "se": 0.44,
+    "decision_ms": null,
+    "description": "分段：前 5 批只做 DAgger 蒸馏（Adam 1e-4，带教师标签），之后只做基线的 PG KL 0.03 小步"
+  },
+  {
+    "id": "fp-rl-010",
+    "source": "RL 线",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": -2.47,
+    "se": 0.43,
+    "decision_ms": null,
+    "description": "DAgger 蒸馏替换 PG，每批数据做 4 遍 Adam 1e-4（尝试 9 是 2 遍）"
+  },
+  {
+    "id": "fp-rl-025",
+    "source": "RL 线",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": -2.17,
+    "se": 0.43,
+    "decision_ms": null,
+    "description": "PG 尾段（后 7 批）每步 KL 从 0.03 降到 0.01，蒸馏阶段不变"
+  },
+  {
+    "id": "fp-rl-014",
+    "source": "RL 线",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": -1.75,
+    "se": 0.44,
+    "decision_ms": null,
+    "description": "4 遍蒸馏只做前 10 批（一致率约 98.7%），后 7 批改做基线 PG（KL 0.03）"
+  },
+  {
+    "id": "fp-rl-024",
+    "source": "RL 线",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": -0.53,
+    "se": 0.4,
+    "decision_ms": null,
+    "description": "蒸馏教师从 piao-call-channel（+0.97）换成规则线的 fp-rule-009（+4.36），其余同最好版本（每步末释放显存缓存防碎片）"
+  },
+  {
+    "id": "fp-rl-035",
+    "source": "RL 线",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 0.32,
+    "se": 0.38,
+    "decision_ms": null,
+    "description": "蒸馏教师从 fp-rule-009（+4.36）换成规则线最新的最好版本 fp-rule-017（+5.21），其余同最好版本（学习率 2e-4）"
+  },
+  {
+    "id": "fp-rl-030",
+    "source": "RL 线",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 0.4,
+    "se": 0.38,
+    "decision_ms": null,
+    "description": "fp-rule-009 教师下蒸馏学习率从 1e-4 提到 2e-4（4 遍/批不变）"
+  },
+  {
+    "id": "fp-rl-051",
+    "source": "RL 线",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 1.74,
+    "se": 0.4,
+    "decision_ms": null,
+    "description": "两处叠加：教师换 fp-rule-025（+5.75）+ 第 2～4 遍花色排列增强（同尝试 43）；尝试 50 单独测 025"
+  },
+  {
+    "id": "fp-rl-059",
+    "source": "RL 线",
+    "kind": "模型",
+    "teacher": false,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 2.74,
+    "se": 0.42,
+    "decision_ms": null,
+    "description": "从最好版本 051 接着训练 300 万局，全部用于 PG（不再蒸馏）：每步累积 3 个 60 万行 rollout 的梯度再走一步 KL 0.03"
+  },
+  {
+    "id": "fp-rule-009",
+    "source": "规则线",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 0.64,
+    "se": 0.34,
+    "decision_ms": {
+      "mean_ms": 5.039649558530674,
+      "max_ms": 83.86483392678201,
+      "decisions": 363
+    },
+    "description": "竞速只算到牌墙剩 20 张：听牌与 1 向听的几何级数截断到我剩余的摸牌次数 ceil((牌墙−20)/4)，下一层递归少一次"
+  },
+  {
+    "id": "fp-rule-022",
+    "source": "规则线",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 1.31,
+    "se": 0.33,
+    "decision_ms": {
+      "mean_ms": 5.109186055787403,
+      "max_ms": 115.95324997324497,
+      "decisions": 346
+    },
+    "description": "听牌竞速的对手危险率随牌墙上升：Q = clip(0.35 − 0.018×剩余摸牌, 0.10, 0.30)，只作用于听牌（1 向听递归与远手牌不变）"
+  },
+  {
+    "id": "fp-rule-015",
+    "source": "规则线",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 1.38,
+    "se": 0.34,
+    "decision_ms": {
+      "mean_ms": 4.798322727249281,
+      "max_ms": 82.41545804776251,
+      "decisions": 370
+    },
+    "description": "爆头听牌时的吃碰按财飘估值：吃碰后打白仍爆头即按动作链+1、飘+1 计价（规则：吃前爆头、吃后弃白仍爆头可计财飘）"
+  },
+  {
+    "id": "fp-rule-017",
+    "source": "规则线",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 1.41,
+    "se": 0.34,
+    "decision_ms": {
+      "mean_ms": 3.3362924423370814,
+      "max_ms": 58.40558290947229,
+      "decisions": 370
+    },
+    "description": "SAVED 0.4→0.467 单独重测（尝试 16 的快照误带了另一处改动）：按对手平均胡牌番 1.4 与庄闲赔付推导「我胡即免付」的番当量"
+  },
+  {
+    "id": "fp-rule-033",
+    "source": "规则线",
+    "kind": "规则",
+    "teacher": true,
+    "default": {
+      "opponent": false,
+      "teacher": false
+    },
+    "score": 1.89,
+    "se": 0.31,
+    "decision_ms": {
+      "mean_ms": 1.1826668093582677,
+      "max_ms": 28.6132498877123,
+      "decisions": 356
+    },
+    "description": "与 fp-rule-025 决策完全一致的等价实现：等价提速：爆头听牌直接用 C 数和张与番；用 baotou_outs 位权重找出能换打成爆头的摸牌，只枚举这些；白板分支与换张模块的内循环改在计数数组上调 C；analyze 结果缓存去重"
+  }
+]

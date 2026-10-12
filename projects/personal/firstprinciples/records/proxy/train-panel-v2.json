@@ -1,0 +1,135 @@
+{
+ "built": "2026-10-05",
+ "check": "10-05 用 11317 局牌谱训练（276 万个决策），验证集动作一致率 84%（各代理 80–98%）；与线上成绩的校准待测",
+ "games": 11317,
+ "proxy_run": "/Users/user/code/leihuo_majiang/.local/online-calibration-20261005/out",
+ "proxy_config": {
+  "dim": 128,
+  "layers": 4,
+  "heads": 4
+ },
+ "name": "v2 训练一半（奇数号 15 个，可训练调参）",
+ "members": {
+  "p01": {
+   "weights": "fccbc69bf9246bd06170ea4febff96ce9015168f7db303b3010b8bd32913148c",
+   "display": "铳一色14",
+   "users": [
+    "u_dedc838474c6"
+   ],
+   "share": 0.03400490352840849
+  },
+  "p03": {
+   "weights": "12763e9422967a9bc064b1a79d73cf6689161cd696ac59114d2026924afeca03",
+   "display": "玄武-2346",
+   "users": [
+    "u_380da525337c"
+   ],
+   "share": 0.025583626479053406
+  },
+  "p05": {
+   "weights": "bdc28fe81954cfcbc5dafafebe1c4784c8fc56bf72f7222c0370ebdfb373871f",
+   "display": "Astra-0",
+   "users": [
+    "u_a24596248186"
+   ],
+   "share": 0.02441104359876346
+  },
+  "p07": {
+   "weights": "5751ba15c72cec994a0774c4eb4cf193d50654b926e400e1af4e68e083ec326e",
+   "display": "晴总总，该请桂语山房了",
+   "users": [
+    "u_2c0b3562603c"
+   ],
+   "share": 0.02238567316917173
+  },
+  "p09": {
+   "weights": "46d6f8abb1f2988e9ec3300368009b31402caf4324bd8876ab2050380a4df7e3",
+   "display": "爆头研究所",
+   "users": [
+    "u_bc0677c79158"
+   ],
+   "share": 0.021319688732544504
+  },
+  "p11": {
+   "weights": "dd96deededf602da969cea46abce15e52932be844918a5a5857687e2722a8c83",
+   "display": "今晚打老虎",
+   "users": [
+    "u_fa36b33933d9"
+   ],
+   "share": 0.021213090288881783
+  },
+  "p13": {
+   "weights": "1626081c75aba78f30b3fefe96ebed3f31df867be4622c0b9777396bcfe66c57",
+   "display": "Nomad",
+   "users": [
+    "u_30b4181075c9"
+   ],
+   "share": 0.02025370429591728
+  },
+  "p15": {
+   "weights": "ada2aeb72d3c41f48092876056098481432e9b282e5b359647aaf9992c326ff7",
+   "display": "凤凰-2626",
+   "users": [
+    "u_e441bd45e1d9"
+   ],
+   "share": 0.02025370429591728
+  },
+  "p17": {
+   "weights": "10fb8c1f55d7dfaf8c195a80ca5d721bb201e8af371ebbbf567867ff048ad290",
+   "display": "怜-Toki-",
+   "users": [
+    "u_84915c463afd"
+   ],
+   "share": 0.019187719859290055
+  },
+  "p19": {
+   "weights": "d10f636c91a2dc1e53e95a07be707d6ec538b5c9304217c53ec99425f47a2b90",
+   "display": "glm-flash",
+   "users": [
+    "u_d0680514ca1b"
+   ],
+   "share": 0.01908112141562733
+  },
+  "p21": {
+   "weights": "cf51159549fcfed0cf3ab025061d13e30c2dfa68d2c58c60b148e79f95477304",
+   "display": "大杂烩-02",
+   "users": [
+    "u_85320cb18b85"
+   ],
+   "share": 0.01812173542266283
+  },
+  "p23": {
+   "weights": "756d777a2571fee9cf3b23dffd58a5d709573c32192a899388def1dbc347c1ce",
+   "display": "腾蛇-7681",
+   "users": [
+    "u_b0a99a116283"
+   ],
+   "share": 0.017055750986035605
+  },
+  "p25": {
+   "weights": "c2ab9a2960a0bfb02ade0cab7f0cb6f529acb307b072794d5325c34784dd3c65",
+   "display": "面包猪",
+   "users": [
+    "u_b69c01e12fe0"
+   ],
+   "share": 0.017055750986035605
+  },
+  "p27": {
+   "weights": "e87e9bcff736e75915004d53402f75a5e478af7d0cbdd3da556c07ffcfcc52f8",
+   "display": "Deepseek胡",
+   "users": [
+    "u_ab1518b5e67e"
+   ],
+   "share": 0.01598976654940838
+  },
+  "p29": {
+   "weights": "1589ed01f153ecae51050a3275f086653babb645f9b3b559100cd56d9d100a70",
+   "display": "斗牌传说C",
+   "users": [
+    "u_8e699c5aef75"
+   ],
+   "share": 0.01598976654940838
+  }
+ },
+ "split_of": "1ca759719b0027bf"
+}

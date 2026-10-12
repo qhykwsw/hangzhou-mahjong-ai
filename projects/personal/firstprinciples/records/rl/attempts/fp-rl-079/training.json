@@ -1,0 +1,22 @@
+{
+  "status": {
+    "state": "failed",
+    "started": 1790643926.714671,
+    "deadline": 1790816726.714671,
+    "smoke": false,
+    "limits": {
+      "gpu_limit_bytes": 11111409254,
+      "ram_limit_bytes": 30307590144,
+      "cpu_capacity": 16
+    },
+    "reason": "process_limit",
+    "error": "训练进程组有 17 个进程，超过执行参数允许的 15 个，已强制结束",
+    "ram_peak_bytes": 2196746240,
+    "processes_peak": 17,
+    "finished": 1790643929.784923
+  },
+  "ok": false,
+  "actor": null,
+  "local_actor": null,
+  "snapshots": []
+}

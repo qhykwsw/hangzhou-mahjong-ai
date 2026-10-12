@@ -1,0 +1,22 @@
+{
+  "status": {
+    "state": "failed",
+    "started": 1791412579.4714413,
+    "deadline": 1791585379.4714413,
+    "smoke": false,
+    "limits": {
+      "gpu_limit_bytes": 11111409254,
+      "ram_limit_bytes": 30307907174,
+      "cpu_capacity": 16
+    },
+    "reason": "ram_limit",
+    "error": "训练进程组内存 28.3 GB 超过上限 28.2 GB，已强制结束",
+    "ram_peak_bytes": 30421508096,
+    "processes_peak": 20,
+    "finished": 1791418982.7926857
+  },
+  "ok": false,
+  "actor": null,
+  "local_actor": null,
+  "snapshots": []
+}

@@ -1,0 +1,24 @@
+{
+  "status": {
+    "state": "failed",
+    "started": 1790384550.6169765,
+    "deadline": 1790398950.6169765,
+    "smoke": false,
+    "limits": {
+      "gpu_limit_bytes": 7726851686,
+      "ram_limit_bytes": 30306643968,
+      "cpu_capacity": 20
+    },
+    "reason": "gpu_memory",
+    "error": "Traceback (most recent call last):\n  File \"/home/user/code/leihuo_majiang/.local/guided-code/6bf640418ce8884fa1faf5072b2c0f7001cdaf5add78fde25fbff196bc666e4c/projects/personal/selfplay/guided/trial.py\", line 382, in train\n    result = recipe.train(ctx)\n             ^^^^^^^^^^^^^^^^^\n  File \"/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-022/recipe/__init__.py\", line 14, in train\n    return run(ctx)\n           ^^^^^^^^\n  File \"/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-022/recipe/loop.py\", line 178, in train\n    batch_source = (resident_rows(rows, ctx.device, ctx.resources[\"gpu_limit_bytes\"])\n                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-022/recipe/batch.py\", line 94, in resident_rows\n    return ResidentRows(rows, device)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-022/recipe/batch.py\", line 66, in __init__\n    self.fields = {\n                  ^\n  File \"/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-022/recipe/batch.py\", line 67, in <dictcomp>\n    key: torch.as_tensor(np.stack([np.asarray(r[key], dtype=dtype) for r in rows]), device=device)\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\ntorch.OutOfMemoryError: CUDA out of memory. Tried to allocate 2.30 GiB. GPU 0 has a total capacity of 11.99 GiB of which 2.12 GiB is free. Including non-PyTorch memory, this process has 17179869184.00 GiB memory in use. 7.20 GiB allowed; Of the allocated memory 750.82 MiB is allocated by PyTorch, with 20.75 MiB allocated in private pools (e.g., CUDA Graphs), and 5.05 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)\n",
+    "finished": 1790390827.8176918,
+    "gpu_peak_allocated_bytes": 5674680320,
+    "gpu_peak_reserved_bytes": 7715422208,
+    "ram_peak_bytes": 16057950208,
+    "processes_peak": 18
+  },
+  "ok": false,
+  "actor": null,
+  "local_actor": null,
+  "snapshots": []
+}

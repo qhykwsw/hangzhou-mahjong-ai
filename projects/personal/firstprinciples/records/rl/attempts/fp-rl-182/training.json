@@ -1,0 +1,24 @@
+{
+  "status": {
+    "state": "failed",
+    "started": 1791192871.173046,
+    "deadline": 1791365671.173046,
+    "smoke": false,
+    "limits": {
+      "gpu_limit_bytes": 21893192089,
+      "ram_limit_bytes": 35360586956,
+      "cpu_capacity": 20
+    },
+    "reason": "recipe_error",
+    "error": "Traceback (most recent call last):\n  File \"/home/user/code/leihuo_majiang/.local/guided-code/8d91f7c0e4e2aa69c65ec9877ab93fdae926723c04a7a0dc7ee7eb70983373d8/projects/personal/selfplay/guided/trial.py\", line 444, in train\n    result = recipe.train(ctx)\n             ^^^^^^^^^^^^^^^^^\n  File \"/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-182/recipe/__init__.py\", line 14, in train\n    return run(ctx)\n           ^^^^^^^^\n  File \"/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-182/recipe/loop.py\", line 359, in train\n    openings = [ctx.starts(name) for name in cfg.get(\"starts\", [])]\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-182/recipe/loop.py\", line 359, in <listcomp>\n    openings = [ctx.starts(name) for name in cfg.get(\"starts\", [])]\n                ^^^^^^^^^^^^^^^^\n  File \"/home/user/code/leihuo_majiang/.local/guided-code/8d91f7c0e4e2aa69c65ec9877ab93fdae926723c04a7a0dc7ee7eb70983373d8/projects/personal/selfplay/guided/trial.py\", line 213, in starts\n    return load(Path(self.plan[\"recipe\"]) / \"starts\" / f\"{name}.json.gz\")\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/code/leihuo_majiang/.local/guided-code/8d91f7c0e4e2aa69c65ec9877ab93fdae926723c04a7a0dc7ee7eb70983373d8/projects/personal/selfplay/guided/starts.py\", line 65, in load\n    with gzip.open(path, \"rt\", encoding=\"utf-8\") as stream:\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/miniconda3/envs/py311_cu130/lib/python3.11/gzip.py\", line 58, in open\n    binary_file = GzipFile(filename, gz_mode, compresslevel)\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/miniconda3/envs/py311_cu130/lib/python3.11/gzip.py\", line 174, in __init__\n    fileobj = self.myfileobj = builtins.open(filename, mode or 'rb')\n                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nFileNotFoundError: [Errno 2] No such file or directory: '/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-182/recipe/starts/kong5k.json.gz'\n",
+    "finished": 1791192873.5711544,
+    "gpu_peak_allocated_bytes": 246717440,
+    "gpu_peak_reserved_bytes": 251658240,
+    "ram_peak_bytes": 965505024,
+    "processes_peak": 1
+  },
+  "ok": false,
+  "actor": null,
+  "local_actor": null,
+  "snapshots": []
+}

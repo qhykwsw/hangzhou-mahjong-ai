@@ -1,0 +1,75 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/user/code/leihuo_majiang/.local/guided-code/6bf640418ce8884fa1faf5072b2c0f7001cdaf5add78fde25fbff196bc666e4c/projects/personal/selfplay/guided/trial.py", line 662, in <module>
+    main()
+  File "/home/user/code/leihuo_majiang/.local/guided-code/6bf640418ce8884fa1faf5072b2c0f7001cdaf5add78fde25fbff196bc666e4c/projects/personal/selfplay/guided/trial.py", line 652, in main
+    train(root, smoke=args.command == "smoke")
+  File "/home/user/code/leihuo_majiang/.local/guided-code/6bf640418ce8884fa1faf5072b2c0f7001cdaf5add78fde25fbff196bc666e4c/projects/personal/selfplay/guided/trial.py", line 382, in train
+    result = recipe.train(ctx)
+             ^^^^^^^^^^^^^^^^^
+  File "/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-003/recipe/__init__.py", line 14, in train
+    return run(ctx)
+           ^^^^^^^^
+  File "/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-003/recipe/loop.py", line 140, in train
+    weights, stats = advantages(
+                     ^^^^^^^^^^^
+  File "/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-003/recipe/targets.py", line 48, in advantages
+    value[pred_idx] = fit_predict(
+                      ^^^^^^^^^^^^
+  File "/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-003/recipe/critic.py", line 49, in fit_predict
+    steps(batch, goal)
+  File "/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-003/recipe/critic_steps.py", line 45, in __call__
+    self._step(static, target)
+  File "/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-003/recipe/critic_steps.py", line 23, in _step
+    pred = self.model(batch)
+           ^^^^^^^^^^^^^^^^^
+  File "/home/user/miniconda3/envs/py311_cu130/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/miniconda3/envs/py311_cu130/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-003/recipe/critic.py", line 20, in forward
+    state, _ = self.encoder(*actor_args(mb))
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/miniconda3/envs/py311_cu130/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/miniconda3/envs/py311_cu130/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/code/leihuo_majiang/.local/guided-code/6bf640418ce8884fa1faf5072b2c0f7001cdaf5add78fde25fbff196bc666e4c/projects/personal/selfplay/guided/networks.py", line 133, in forward
+    encoded = self.norm(self.transformer(tokens, src_key_padding_mask=padding))
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/miniconda3/envs/py311_cu130/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/miniconda3/envs/py311_cu130/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/miniconda3/envs/py311_cu130/lib/python3.11/site-packages/torch/nn/modules/transformer.py", line 540, in forward
+    output = mod(
+             ^^^^
+  File "/home/user/miniconda3/envs/py311_cu130/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/miniconda3/envs/py311_cu130/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/code/leihuo_majiang/.local/guided-code/6bf640418ce8884fa1faf5072b2c0f7001cdaf5add78fde25fbff196bc666e4c/projects/personal/selfplay/guided/networks.py", line 32, in forward
+    x = self.norm1(src)
+        ^^^^^^^^^^^^^^^
+  File "/home/user/miniconda3/envs/py311_cu130/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/miniconda3/envs/py311_cu130/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/miniconda3/envs/py311_cu130/lib/python3.11/site-packages/torch/nn/modules/normalization.py", line 229, in forward
+    return F.layer_norm(
+           ^^^^^^^^^^^^^
+  File "/home/user/miniconda3/envs/py311_cu130/lib/python3.11/site-packages/torch/nn/functional.py", line 2935, in layer_norm
+    return torch.layer_norm(
+           ^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 22.00 MiB. GPU 0 has a total capacity of 11.99 GiB of which 30.43 MiB is free. 7.20 GiB allowed; Of the allocated memory 4.65 GiB is allocated by PyTorch, with 20.75 MiB allocated in private pools (e.g., CUDA Graphs), and 2.53 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)

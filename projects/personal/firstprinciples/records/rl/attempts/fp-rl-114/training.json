@@ -1,0 +1,24 @@
+{
+  "status": {
+    "state": "complete",
+    "started": 1790810757.7757623,
+    "deadline": 1790983557.7757623,
+    "smoke": false,
+    "finished": 1790819727.2730806,
+    "training_seconds": 8969.497318267822,
+    "overrun_seconds": 0.0,
+    "hands": 660000,
+    "labeled_hands": 660000,
+    "weights_sha256": "dc0ea108e0fc9d4d5d4e4e1facfdda3d43d7c6fb0541ac8a771182edf8e92af4",
+    "ended_early": {
+      "by": "maintainer",
+      "reason": "user: imitation stops at ~3M hands (10-01)",
+      "step": 11,
+      "imitation_hands": 3160000
+    }
+  },
+  "ok": true,
+  "actor": "/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-114/actor",
+  "local_actor": null,
+  "snapshots": []
+}

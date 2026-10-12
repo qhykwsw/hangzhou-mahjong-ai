@@ -1,0 +1,61 @@
+{
+  "at": 1790753823.6913228,
+  "members": {
+    "fp68-classic": {
+      "package_path": "/Users/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/training-rules/fp68-classic/package-1f73fa27d3c2d2c0",
+      "package_hash": "1f73fa27d3c2d2c0a44375e939555780b151ae8471891701d388acaf6d806975",
+      "description": "经典版：规则线 fp-rule-068 原样（竞速估值、吃碰期权、形状修正、可胡窗口校准、钓翻倍）。",
+      "score": 5.73,
+      "se": 0.63,
+      "games": 8192
+    },
+    "fp68-flat": {
+      "package_path": "/Users/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/training-rules/fp68-flat/package-f6df0c05a2f29d22",
+      "package_hash": "f6df0c05a2f29d225a9f2b55874e3e2e1cfd604477f026bc9ad72442525607b9",
+      "description": "平打：带白板的听牌不计「摸到后换打成爆头」（竞速的白板升级与可胡窗口的财飘期权都关掉），其余与 fp-rule-068 相同。",
+      "score": 2.25,
+      "se": 0.58,
+      "games": 8192
+    },
+    "fp68-kong-eager": {
+      "package_path": "/Users/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/training-rules/fp68-kong-eager/package-bf2aa611be7ce741",
+      "package_hash": "bf2aa611be7ce741d31590a924a90360204f695f42dc39cf68c3f5b3eef526cf",
+      "description": "爱杠：能杠就杠，只有已经听牌而杠完不再听牌时才不杠；能胡时先找保持必胜的翻倍；其余与 fp-rule-068 相同。",
+      "score": 4.77,
+      "se": 0.62,
+      "games": 8192
+    },
+    "fp68-peng-speed": {
+      "package_path": "/Users/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/training-rules/fp68-peng-speed/package-8970aecc9dfc18d7",
+      "package_hash": "8970aecc9dfc18d7c7cda9d8c8d86a22816721443133995e0b472e1bdb01fed5",
+      "description": "猛碰：能让向听减少、或向听不变而进张增加的碰一律碰，其余按 fp-rule-068 的估值。",
+      "score": 4.6,
+      "se": 0.61,
+      "games": 8192
+    },
+    "fp68-chi-speed": {
+      "package_path": "/Users/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/training-rules/fp68-chi-speed/package-dd864df09aa74a2b",
+      "package_hash": "dd864df09aa74a2bedb5b811eac84f4048d81e04b0c9bcbe562df11d88d5f2f2",
+      "description": "爱吃：能让向听减少的吃一律吃，其余按 fp-rule-068 的估值。",
+      "score": 5.33,
+      "se": 0.63,
+      "games": 8192
+    },
+    "fp68-closed-early": {
+      "package_path": "/Users/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/training-rules/fp68-closed-early/package-1ec8e25c9b56ec72",
+      "package_hash": "1ec8e25c9b56ec724806e9370f4c064dc400d5202d62fba1e1032fa7ead0ebcf",
+      "description": "早期门清：离听牌四步及以上时不吃不碰，接近听牌后按 fp-rule-068 的估值。",
+      "score": 5.27,
+      "se": 0.63,
+      "games": 8192
+    },
+    "fp68-patient-big": {
+      "package_path": "/Users/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/training-rules/fp68-patient-big/package-7cbec61a611489d4",
+      "package_hash": "7cbec61a611489d4f93a21150add9688d9d434b9c05e1b9838a15683e568f76b",
+      "description": "慢打大牌：把对手的胡牌速度估得更慢（每圈 Q 0.12，听牌期 0.08→0.26），更愿意为爆头、翻倍和更好的听牌多等；其余与 fp-rule-068 相同。",
+      "score": 3.7,
+      "se": 0.65,
+      "games": 8192
+    }
+  }
+}

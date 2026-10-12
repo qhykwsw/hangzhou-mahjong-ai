@@ -1,0 +1,54 @@
+{
+  "code": "/home/user/code/leihuo_majiang/.local/guided-code/76324e652f48eb9801694d61777610dea2c327a2f649087f3128d200b9eed3ce",
+  "source_id": "76324e652f48eb9801694d61777610dea2c327a2f649087f3128d200b9eed3ce",
+  "meta": {
+    "format": "guided-actor-v1",
+    "encoding": "guided-current-hand-v1",
+    "config": {
+      "dim": 128,
+      "layers": 4,
+      "heads": 4,
+      "lookahead": true,
+      "belief_head": "v2",
+      "suit_embedding": "shared",
+      "outcome_head": {
+        "bins": [
+          -512.0,
+          -256.0,
+          -128.0,
+          -64.0,
+          -32.0,
+          -16.0,
+          -8.0,
+          -4.0,
+          -2.0,
+          -1.0,
+          0.0,
+          10.0,
+          20.0,
+          24.0,
+          40.0,
+          48.0,
+          80.0,
+          96.0,
+          160.0,
+          192.0,
+          320.0,
+          384.0,
+          640.0,
+          768.0
+        ]
+      }
+    },
+    "weights_sha256": "b3e398e8a49320e3c1063af2a775186b391514cf3a33239ffce60cdb29a2b53b",
+    "source_checkpoint_sha256": "51fee9f00a23301de91360d11b9190401019e0e18116f6e2627adf3e5a1c5ccc",
+    "backend": "pytorch",
+    "actions": 231
+  },
+  "checkpoint": null,
+  "name": "rl-244-outcome",
+  "weights": "b3e398e8a49320e3c1063af2a775186b391514cf3a33239ffce60cdb29a2b53b",
+  "start_actor": "/home/user/code/leihuo_majiang/.local/firstprinciples/rl/start/actor",
+  "host": "4090",
+  "size": "small"
+}

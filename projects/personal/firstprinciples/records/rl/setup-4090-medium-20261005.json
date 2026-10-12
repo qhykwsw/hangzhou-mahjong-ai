@@ -1,0 +1,24 @@
+{
+  "code": "/home/user/code/leihuo_majiang/.local/guided-code/8d91f7c0e4e2aa69c65ec9877ab93fdae926723c04a7a0dc7ee7eb70983373d8",
+  "source_id": "8d91f7c0e4e2aa69c65ec9877ab93fdae926723c04a7a0dc7ee7eb70983373d8",
+  "meta": {
+    "format": "guided-actor-v1",
+    "encoding": "guided-current-hand-v1",
+    "config": {
+      "dim": 256,
+      "layers": 6,
+      "heads": 8,
+      "lookahead": true
+    },
+    "weights_sha256": "7ada1cceeffe36fe4e1112b0010960eae7275226170db2848accc78d5d6d6280",
+    "source_checkpoint_sha256": "bf270ddb7956b467991fca1d52bb15348b4ca54ffdb5d161bc16705d59b491d7",
+    "backend": "pytorch",
+    "actions": 231
+  },
+  "checkpoint": null,
+  "name": "random-medium-256x6",
+  "weights": "7ada1cceeffe36fe4e1112b0010960eae7275226170db2848accc78d5d6d6280",
+  "start_actor": "/home/user/code/leihuo_majiang/.local/firstprinciples/rl/start/actor",
+  "host": "4090",
+  "size": "medium"
+}

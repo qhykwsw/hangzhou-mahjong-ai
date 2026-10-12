@@ -1,0 +1,21 @@
+{
+  "name": "kept10k",
+  "kinds": {
+    "kept-fourth": 10003
+  },
+  "hands": 63977,
+  "policy": "fp-rule-128",
+  "package_hash": "3650cd8b0627dd270435a0d3322ecc490b6a47fdba6a07361ce0bf36862c3f2d",
+  "pool": "c9e98aa5df7b4d5e",
+  "runtime": "e4efef433b2f00e4695213f3b811742e07a72315425d6c0aee71e02753e1650a",
+  "seed": 1293823852816473673,
+  "seconds": 3626,
+  "with_hu": 1022,
+  "baotou": 0,
+  "whites": {
+    "1": 7847,
+    "2": 1969,
+    "3": 185,
+    "4": 2
+  }
+}

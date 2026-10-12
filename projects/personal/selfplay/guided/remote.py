@@ -2,6 +2,11 @@
 
 Commands use argv through Python, never interpolated shell commands. SSH uses
 existing host keys. Only explicitly enumerated source/artifact files transfer.
+
+How to reach each host is machine-specific and stays out of Git: it is read from
+the repository's `.local/training-hosts.json`, laid out like
+`training-hosts.example.json` beside this file (which stands in, with
+placeholder addresses, when there is none).
 """
 
 import base64
@@ -12,15 +17,19 @@ from pathlib import Path
 import subprocess
 import tarfile
 
-ROOT = "/home/user/code/leihuo_majiang"
-PYTHON = "/home/user/miniconda3/envs/py311_cu130/bin/python"
-PROFILES = {
-    "4090": dict(ssh="user@gpu-4090", distro="Ubuntu-20.04", user="user", root=ROOT, python=PYTHON),
-    "4070": dict(ssh="user@gpu-4070", distro="Ubuntu-20.04", user="user", root=ROOT, python=PYTHON),
-    "5070ti": dict(ssh="user@gpu-5070ti", distro="Ubuntu", user="user",
-                   root="/home/user/code/leihuo_majiang",
-                   python="/home/user/code/leihuo_majiang/.venv/bin/python"),
-}
+CONFIG = Path(__file__).resolve().parents[4] / ".local/training-hosts.json"
+EXAMPLE = Path(__file__).with_name("training-hosts.example.json")
+
+
+def _load_profiles():
+    config = json.loads((CONFIG if CONFIG.is_file() else EXAMPLE).read_text())
+    defaults = {"root": config["root"], "python": config["python"]}
+    return config["root"], config["python"], {
+        name: {**defaults, **profile} for name, profile in config["hosts"].items()
+    }
+
+
+ROOT, PYTHON, PROFILES = _load_profiles()
 HOSTS = {name: profile["ssh"] for name, profile in PROFILES.items()}
 
 

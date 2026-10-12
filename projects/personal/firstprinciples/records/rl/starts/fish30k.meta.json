@@ -1,0 +1,21 @@
+{
+  "name": "fish30k",
+  "kinds": {
+    "fish-window": 30001
+  },
+  "hands": 24862,
+  "policy": "fp-rule-128",
+  "package_hash": "3650cd8b0627dd270435a0d3322ecc490b6a47fdba6a07361ce0bf36862c3f2d",
+  "pool": "c9e98aa5df7b4d5e",
+  "runtime": "e4efef433b2f00e4695213f3b811742e07a72315425d6c0aee71e02753e1650a",
+  "seed": 1360777168804687982,
+  "seconds": 1328,
+  "with_hu": 0,
+  "baotou": 10764,
+  "whites": {
+    "1": 17141,
+    "2": 10709,
+    "3": 2067,
+    "4": 84
+  }
+}

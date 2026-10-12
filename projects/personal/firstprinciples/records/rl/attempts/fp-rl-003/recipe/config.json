@@ -1,0 +1,14 @@
+{
+  "rows": 600000,
+  "smoke_rows": 3000,
+  "step_kl": 0.03,
+  "kl_rows": 20000,
+  "microbatch": 256,
+  "critic_batch": 256,
+  "critic_learning_rate": 0.0003,
+  "resident_rows": true,
+  "gradient_graphs": true,
+  "natural_iterations": 10,
+  "natural_damping": 0.3,
+  "natural_perturbation": 0.001
+}

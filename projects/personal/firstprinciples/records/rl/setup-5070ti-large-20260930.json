@@ -1,0 +1,24 @@
+{
+  "code": "/home/user/code/leihuo_majiang/.local/guided-code/554953980d332157e93bfd3a85e3d05d29bcd0b162c30c7d1dff1a7565fa0c89",
+  "source_id": "554953980d332157e93bfd3a85e3d05d29bcd0b162c30c7d1dff1a7565fa0c89",
+  "meta": {
+    "format": "guided-actor-v1",
+    "encoding": "guided-current-hand-v1",
+    "config": {
+      "dim": 384,
+      "layers": 8,
+      "heads": 8,
+      "lookahead": true
+    },
+    "weights_sha256": "f663bb8ec2391f7787de54c38b5709afa103543845a26e4eb6a9d8234ec52fbf",
+    "source_checkpoint_sha256": "f663bb8ec2391f7787de54c38b5709afa103543845a26e4eb6a9d8234ec52fbf",
+    "backend": "pytorch",
+    "actions": 231
+  },
+  "checkpoint": null,
+  "name": "imitation-piao-1h",
+  "weights": "f663bb8ec2391f7787de54c38b5709afa103543845a26e4eb6a9d8234ec52fbf",
+  "start_actor": "/home/user/code/leihuo_majiang/.local/firstprinciples/rl/start/actor",
+  "host": "5070ti",
+  "size": "large"
+}

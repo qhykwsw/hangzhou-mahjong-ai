@@ -1,0 +1,24 @@
+{
+  "status": {
+    "state": "failed",
+    "started": 1791376049.1646671,
+    "deadline": 1791548849.1646671,
+    "smoke": false,
+    "limits": {
+      "gpu_limit_bytes": 7726851686,
+      "ram_limit_bytes": 30306956083,
+      "cpu_capacity": 20
+    },
+    "reason": "recipe_error",
+    "error": "Traceback (most recent call last):\n  File \"/home/user/code/leihuo_majiang/.local/guided-code/2eba0a1908b9e989c84c78c8106be354aa728b0f2570e680d656ed6691c3c37e/projects/personal/selfplay/guided/trial.py\", line 553, in train\n    result = recipe.train(ctx)\n             ^^^^^^^^^^^^^^^^^\n  File \"/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-228/recipe/__init__.py\", line 14, in train\n    return run(ctx)\n           ^^^^^^^^\n  File \"/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-228/recipe/loop.py\", line 551, in train\n    rows = rollout(False)\n           ^^^^^^^^^^^^^^\n  File \"/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-228/recipe/loop.py\", line 473, in rollout\n    got, _, _ = ctx.collect(\n                ^^^^^^^^^^^^\n  File \"/home/user/code/leihuo_majiang/.local/guided-code/2eba0a1908b9e989c84c78c8106be354aa728b0f2570e680d656ed6691c3c37e/projects/personal/selfplay/guided/trial.py\", line 298, in collect\n    raise ValueError(f\"unknown opponents: {sorted(unknown)}\")\nValueError: unknown opponents: ['fp-rl-226']\n",
+    "finished": 1791376052.210609,
+    "gpu_peak_allocated_bytes": 261939712,
+    "gpu_peak_reserved_bytes": 278921216,
+    "ram_peak_bytes": 1026129920,
+    "processes_peak": 1
+  },
+  "ok": false,
+  "actor": null,
+  "local_actor": null,
+  "snapshots": []
+}

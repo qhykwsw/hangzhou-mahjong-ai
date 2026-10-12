@@ -1,0 +1,24 @@
+{
+  "status": {
+    "state": "failed",
+    "started": 1791160445.8712032,
+    "deadline": 1791333245.8712032,
+    "smoke": false,
+    "limits": {
+      "gpu_limit_bytes": 21893192089,
+      "ram_limit_bytes": 47042652160,
+      "cpu_capacity": 20
+    },
+    "reason": "recipe_error",
+    "error": "Traceback (most recent call last):\n  File \"/home/user/code/leihuo_majiang/.local/guided-code/8d91f7c0e4e2aa69c65ec9877ab93fdae926723c04a7a0dc7ee7eb70983373d8/projects/personal/selfplay/guided/trial.py\", line 443, in train\n    ctx = Context(plan, root, deadline, smoke, limits)\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/code/leihuo_majiang/.local/guided-code/8d91f7c0e4e2aa69c65ec9877ab93fdae926723c04a7a0dc7ee7eb70983373d8/projects/personal/selfplay/guided/trial.py\", line 142, in __init__\n    self._opponent_models = {\n                            ^\n  File \"/home/user/code/leihuo_majiang/.local/guided-code/8d91f7c0e4e2aa69c65ec9877ab93fdae926723c04a7a0dc7ee7eb70983373d8/projects/personal/selfplay/guided/trial.py\", line 143, in <dictcomp>\n    k: prepare_frozen(load_actor(v[\"path\"], \"cuda\")[0].eval(), \"cuda\")\n                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/code/leihuo_majiang/.local/guided-code/8d91f7c0e4e2aa69c65ec9877ab93fdae926723c04a7a0dc7ee7eb70983373d8/projects/personal/selfplay/guided/deployment.py\", line 60, in load_actor\n    metadata = json.loads((source / \"meta.json\").read_text())\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/miniconda3/envs/py311_cu130/lib/python3.11/json/__init__.py\", line 346, in loads\n    return _default_decoder.decode(s)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/miniconda3/envs/py311_cu130/lib/python3.11/json/decoder.py\", line 337, in decode\n    obj, end = self.raw_decode(s, idx=_w(s, 0).end())\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/miniconda3/envs/py311_cu130/lib/python3.11/json/decoder.py\", line 355, in raw_decode\n    raise JSONDecodeError(\"Expecting value\", s, err.value) from None\njson.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)\n",
+    "finished": 1791160446.9554305,
+    "gpu_peak_allocated_bytes": 144757248,
+    "gpu_peak_reserved_bytes": 180355072,
+    "ram_peak_bytes": 761188352,
+    "processes_peak": 1
+  },
+  "ok": false,
+  "actor": null,
+  "local_actor": null,
+  "snapshots": []
+}

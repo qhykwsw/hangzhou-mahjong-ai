@@ -1,0 +1,327 @@
+{
+ "built": "2026-10-05",
+ "check": "每个代理只学该玩家最近一周的对局；验证一致率中位数 0.91",
+ "games": 11936,
+ "proxy_run": "/Users/user/code/leihuo_majiang/.local/proxy-v3-20261005/out",
+ "proxy_config": {
+  "dim": 128,
+  "layers": 4,
+  "heads": 4
+ },
+ "name": "海选 v3 训练一半（可训练调参）",
+ "members": {
+  "v01": {
+   "weights": "3df37a8593cbdd59afa1ae0547f20a055ea52daafeb564dd9c4f006c7d78974b",
+   "display": "ccc",
+   "users": [
+    "u_53bd76525450"
+   ],
+   "share": 0.006666666666666667
+  },
+  "v03": {
+   "weights": "315044a4af4242de097765e15ae5891371a9e4a6ad4ae0e3ad3d71a995c3b346",
+   "display": "晴总总，该请桂语山房了",
+   "users": [
+    "u_2c0b3562603c"
+   ],
+   "share": 0.006666666666666667
+  },
+  "v05": {
+   "weights": "15a00c688227e7c730d23dfd9a5473fb268517ef0780384578ecc9f17af6edfb",
+   "display": "今晚打老虎",
+   "users": [
+    "u_fa36b33933d9"
+   ],
+   "share": 0.006666666666666667
+  },
+  "v07": {
+   "weights": "3502b7ad51912ea91fe340770a5580f1a7ca1c6774f9197d077b2f615e5ab27e",
+   "display": "歪比巴卜肉蛋葱鸡",
+   "users": [
+    "u_81f1a9a75d38"
+   ],
+   "share": 0.006666666666666667
+  },
+  "v09": {
+   "weights": "5e36afa9cade906b8e47a3a2888fa756153ca41c320875d6b9ecd8a63dea1cc4",
+   "display": "腾蛇-7681",
+   "users": [
+    "u_b0a99a116283"
+   ],
+   "share": 0.006666666666666667
+  },
+  "v11": {
+   "weights": "8cf15cfc5e7fb53d15307de4efd15e994fe515d7929bd93d1bed599058561776",
+   "display": "Astra-0",
+   "users": [
+    "u_a24596248186"
+   ],
+   "share": 0.006666666666666667
+  },
+  "v13": {
+   "weights": "4603be3f9ba76ce8c739bc8d7f54ea864f431476f40da3fe20868d503704a7b3",
+   "display": "走马",
+   "users": [
+    "u_259672aad365"
+   ],
+   "share": 0.006666666666666667
+  },
+  "v15": {
+   "weights": "474516f8ff8171ddb55616152a7628e7dd93040bc41d824bb0eeccb1f7f41088",
+   "display": "大杂烩-03",
+   "users": [
+    "u_85320cb18b85"
+   ],
+   "share": 0.006666666666666667
+  },
+  "v17": {
+   "weights": "93d40d54c10dcbbc23090074760094d92fb15d373dbc03d54d130b2081360f46",
+   "display": "面包猪",
+   "users": [
+    "u_b69c01e12fe0"
+   ],
+   "share": 0.006666666666666667
+  },
+  "v19": {
+   "weights": "0c6ac8f662462cb087c7c873ad6b26f90a893964e6216cdd3dcbd2f57254d469",
+   "display": "我胡汉三又回来了",
+   "users": [
+    "u_45e50813baa4"
+   ],
+   "share": 0.006666666666666667
+  },
+  "v21": {
+   "weights": "4855cdbce9324a64fe73514a490952ce2e576548edc5bff91df4f9341a68b69e",
+   "display": "貔貅-0278",
+   "users": [
+    "u_fb3ad8f6a547"
+   ],
+   "share": 0.006666666666666667
+  },
+  "v23": {
+   "weights": "75187a86b79945583db23ca9cd390c95ba99a1d4302d999f823c68e7c20da034",
+   "display": "鲲鹏一6383",
+   "users": [
+    "u_79e1693ed1b6"
+   ],
+   "share": 0.006666666666666667
+  },
+  "v25": {
+   "weights": "2c68d224f904b53e59069f105447a8ae5b3ee1cee39ab86d21ce8f53ddf892ae",
+   "display": "吃五角教主",
+   "users": [
+    "u_7a3fba48d70b"
+   ],
+   "share": 0.006666666666666667
+  },
+  "v27": {
+   "weights": "638d5cabc97407cbb8f34cf11d1bb855938a4b350986212d8ae0259f07d5e83b",
+   "display": "放假了偷偷练",
+   "users": [
+    "u_20c984b9fe14"
+   ],
+   "share": 0.006666666666666667
+  },
+  "v29": {
+   "weights": "ac3d1a8d24c6bcf31b09cdd7feb7fde1b6ce7f0dbc272dbf38e294e3df522a2c",
+   "display": "Deepseek胡",
+   "users": [
+    "u_ab1518b5e67e"
+   ],
+   "share": 0.006666666666666667
+  },
+  "v31": {
+   "weights": "2178e4c14de3790a8381e2ef8b2d9c71e30be2513b32d10bbcb82570735844ae",
+   "display": "朱雀-9527",
+   "users": [
+    "u_c9316831d8ba"
+   ],
+   "share": 0.006666666666666667
+  },
+  "v33": {
+   "weights": "ab8bcb3c192b1b61410acbecdd8c0ce8a3d53228211f4705dfa7f188359fa1db",
+   "display": "吃白饭的蓝色大肥鱼",
+   "users": [
+    "u_f81e88e19899"
+   ],
+   "share": 0.006666666666666667
+  },
+  "v35": {
+   "weights": "04a685b66ce884df2ec82dd8ea74a7b2a348b2dc7530dc14daa1af933020bbfa",
+   "display": "小虾米-8121",
+   "users": [
+    "u_601219e89dc2"
+   ],
+   "share": 0.006666666666666667
+  },
+  "v37": {
+   "weights": "44e6bf5750ac3af42e26b4a3376f1f97d3d2edb69f5c6afae1e425376292eee6",
+   "display": "斗牌传说C",
+   "users": [
+    "u_8e699c5aef75"
+   ],
+   "share": 0.006666666666666667
+  },
+  "v39": {
+   "weights": "ebda7e0b5ac19a49686adc417059d412348389b16e0015de3b462e759a0646dc",
+   "display": "菜菜子",
+   "users": [
+    "u_a58e8f3712ba"
+   ],
+   "share": 0.006666666666666667
+  },
+  "v41": {
+   "weights": "f49e74e09fc74365cf4a8cc16c29918c84b35fb48183bcdfd940c5fe8a76d14e",
+   "display": "Kimi-K4.1",
+   "users": [
+    "u_f8e7b3c45337"
+   ],
+   "share": 0.006666666666666667
+  },
+  "v43": {
+   "weights": "4d65ab6a14b7280f7b82bb5714bfbd19e6d5e7ff10788712c1092bdedaa2abdc",
+   "display": "IA控超手人龄麻年02",
+   "users": [
+    "u_d37bb54255c7"
+   ],
+   "share": 0.006666666666666667
+  },
+  "v45": {
+   "weights": "bbac8f9e7e0f18cbb2c4311fee6f502d1db166582aa5fde119b8f294fab301be",
+   "display": "白虎-0211",
+   "users": [
+    "u_45bdbad221c9"
+   ],
+   "share": 0.006666666666666667
+  },
+  "v47": {
+   "weights": "43904ef14e67b43f22c59bf68ee50ce852b823b5185df8dc9b8f9dcd589c88d5",
+   "display": "弱bot，排到我你就偷着乐吧，哈",
+   "users": [
+    "u_8027a5433ce7"
+   ],
+   "share": 0.006666666666666667
+  },
+  "v49": {
+   "weights": "45f9e944f11d42ce34f238ad40cff233ecd73b8a887c20e3d5372b7c4712e752",
+   "display": "小雀幸",
+   "users": [
+    "u_f4912683ff9b"
+   ],
+   "share": 0.006666666666666667
+  },
+  "v51": {
+   "weights": "396f2c816dc7d0a0c4a0ba83bf8ab3a07cceea9c4cc7eb319d2b29a07a377fe5",
+   "display": "花",
+   "users": [
+    "u_cda8a7e91619"
+   ],
+   "share": 0.006666666666666667
+  },
+  "v53": {
+   "weights": "a1b7f4df1def5f9bad25c6149337976b864c6890815e42084529a24eb2101b50",
+   "display": "鲲鹏-7543",
+   "users": [
+    "u_2426e09d254e"
+   ],
+   "share": 0.006666666666666667
+  },
+  "v55": {
+   "weights": "aa79763a1fb1f14f9e6dbfca9fe67ece0b332225f6ca6c3f5f98b1f024b8b308",
+   "display": "依旧进不了前16",
+   "users": [
+    "u_2ad9f6a1ad0b"
+   ],
+   "share": 0.006666666666666667
+  },
+  "v57": {
+   "weights": "dbbcb7d42e5470ff7ea4ea7b426450669fc602dd483237e8edc0d13424da4166",
+   "display": "麒麟-6059",
+   "users": [
+    "u_5b254bad6a90"
+   ],
+   "share": 0.006666666666666667
+  },
+  "v59": {
+   "weights": "b801086d5ec148e9699b6a0e6da21d433f0ea921df34ae23f3840925966ef9fd",
+   "display": "chan",
+   "users": [
+    "u_094f873d7cb4"
+   ],
+   "share": 0.006666666666666667
+  },
+  "v61": {
+   "weights": "30692687f0f581aadb7b917ed5e9a21346e4f401f8879ea83662fa5de2775dda",
+   "display": "不是青龙",
+   "users": [
+    "u_3a780ad7fd77"
+   ],
+   "share": 0.006666666666666667
+  },
+  "v63": {
+   "weights": "5d0c0fc94914d69693b66458728d70621dba185f349ff34550bdc724b59cd35d",
+   "display": "中国人能飞",
+   "users": [
+    "u_13495c3d79c8"
+   ],
+   "share": 0.006666666666666667
+  },
+  "tailst": {
+   "weights": "371ef195ba0496ec4ba647df53783f4b6e17eeba2ca4e8a22fe68b845ffa0b0a",
+   "display": "长尾较强（训练）",
+   "users": [
+    "u_bfda416fa5a3",
+    "u_bedd97d5fcac",
+    "u_cce31ff05bd1",
+    "u_bfb2a71dc57a",
+    "u_760ef8cdc11c",
+    "u_05dd493f7a17",
+    "u_b98f4f1a9e7f",
+    "u_13987cb06454",
+    "u_c6db05eb9278",
+    "u_8a108434228e",
+    "u_29d0fdb3529a",
+    "u_6b8041a1ed33",
+    "u_1d44393f388b",
+    "u_81051e5455c7",
+    "u_ee82443e6685",
+    "u_be02a17f0ad0",
+    "u_4f13a7e0a8b4",
+    "u_ab123cde4abd",
+    "u_f66d5ed282e0"
+   ],
+   "share": 0.145
+  },
+  "tailwt": {
+   "weights": "93d5c13a793ab212a41736f54f4d6c0c7551966cfd1b46a655c7f04fdfc51e6a",
+   "display": "长尾较弱（训练）",
+   "users": [
+    "u_3acab8be3a23",
+    "u_4d6a9ef1df1f",
+    "u_fd06550b5fb3",
+    "u_f3cce83ebb08",
+    "u_c44f2cfb5e9b",
+    "u_0925ca0a575a",
+    "u_928fa42cbb06",
+    "u_6f5eb42066fd",
+    "u_1a6d368e2313",
+    "u_3b3e36106834",
+    "u_579186180cbb",
+    "u_72b3963fbbc6",
+    "u_ae78a91ae172",
+    "u_fe477d16a658",
+    "u_6cf752fe480c",
+    "u_e388ed9040c9",
+    "u_ae4902037590",
+    "u_2b1ceaac078a",
+    "u_26782064dbc5"
+   ],
+   "share": 0.145
+  }
+ },
+ "split_of": [
+  "e6abaee4dd79f3b5",
+  "3553933871a9e4a1"
+ ],
+ "weights": "按约 150 人参赛：63 个常客各 1/150，其余 87 人由四个长尾代理均分"
+}

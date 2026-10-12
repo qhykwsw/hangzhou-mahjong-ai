@@ -1,0 +1,24 @@
+{
+  "status": {
+    "state": "failed",
+    "started": 1791475522.27027,
+    "deadline": 1791648322.27027,
+    "smoke": false,
+    "limits": {
+      "gpu_limit_bytes": 11111409254,
+      "ram_limit_bytes": 30307909632,
+      "cpu_capacity": 16
+    },
+    "reason": "recipe_error",
+    "error": "Traceback (most recent call last):\n  File \"/home/user/code/leihuo_majiang/.local/guided-code/2eba0a1908b9e989c84c78c8106be354aa728b0f2570e680d656ed6691c3c37e/projects/personal/selfplay/guided/trial.py\", line 552, in train\n    ctx = Context(plan, root, deadline, smoke, limits)\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/code/leihuo_majiang/.local/guided-code/2eba0a1908b9e989c84c78c8106be354aa728b0f2570e680d656ed6691c3c37e/projects/personal/selfplay/guided/trial.py\", line 193, in __init__\n    actor, meta = load_actor(v[\"path\"], \"cuda\")\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/code/leihuo_majiang/.local/guided-code/2eba0a1908b9e989c84c78c8106be354aa728b0f2570e680d656ed6691c3c37e/projects/personal/selfplay/guided/deployment.py\", line 77, in load_actor\n    config = _actor_config(metadata[\"config\"])\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/code/leihuo_majiang/.local/guided-code/2eba0a1908b9e989c84c78c8106be354aa728b0f2570e680d656ed6691c3c37e/projects/personal/selfplay/guided/deployment.py\", line 45, in _actor_config\n    return result | actor_options(config)\n                    ^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/code/leihuo_majiang/.local/guided-code/2eba0a1908b9e989c84c78c8106be354aa728b0f2570e680d656ed6691c3c37e/projects/personal/selfplay/guided/networks.py\", line 293, in actor_options\n    raise ValueError(\"belief_head must be true or false\")\nValueError: belief_head must be true or false\n",
+    "finished": 1791475523.3395882,
+    "gpu_peak_allocated_bytes": 144757248,
+    "gpu_peak_reserved_bytes": 184549376,
+    "ram_peak_bytes": 691552256,
+    "processes_peak": 1
+  },
+  "ok": false,
+  "actor": null,
+  "local_actor": null,
+  "snapshots": []
+}

@@ -1,0 +1,16 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/user/code/leihuo_majiang/.local/guided-code/0f941704a957f5c1339ab421cf4a140e09a228cfa0c901e67864ab04e8f9196c/projects/personal/selfplay/guided/trial.py", line 739, in <module>
+    main()
+  File "/home/user/code/leihuo_majiang/.local/guided-code/0f941704a957f5c1339ab421cf4a140e09a228cfa0c901e67864ab04e8f9196c/projects/personal/selfplay/guided/trial.py", line 729, in main
+    train(root, smoke=args.command == "smoke")
+  File "/home/user/code/leihuo_majiang/.local/guided-code/0f941704a957f5c1339ab421cf4a140e09a228cfa0c901e67864ab04e8f9196c/projects/personal/selfplay/guided/trial.py", line 458, in train
+    result = recipe.train(ctx)
+             ^^^^^^^^^^^^^^^^^
+  File "/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-204/recipe/__init__.py", line 14, in train
+    return run(ctx)
+           ^^^^^^^^
+  File "/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-204/recipe/loop.py", line 617, in train
+    ctx.log(step=step, rows=count, **stats, collect_seconds=collected, step_seconds=last,
+TypeError: __main__.Context.log() got multiple values for keyword argument 'rows'

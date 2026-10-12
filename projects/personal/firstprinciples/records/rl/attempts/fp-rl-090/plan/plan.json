@@ -1,0 +1,518 @@
+{
+  "source_id": "554953980d332157e93bfd3a85e3d05d29bcd0b162c30c7d1dff1a7565fa0c89",
+  "recipe": "/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-090/recipe",
+  "bundle": "/home/user/code/leihuo_majiang/.local/guided-teachers/b492a752d115c52c2c9607aa98ec6cd949846a0644d7741dda658f0d753b2199/manifest.json",
+  "start_actor": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/0336a2833e7f0377caf253e8e27d44f6c8c7ad1fb83d1026454150f6b22e7654",
+  "budget_seconds": 172800,
+  "hand_budget": 3000000,
+  "label_hand_budget": null,
+  "smoke_seconds": 90,
+  "seed": 775225859,
+  "line": "rl",
+  "limits": {
+    "gpu_memory_fraction": 0.6,
+    "ram_fraction": 0.6,
+    "cpu_capacity": 20
+  },
+  "execution": {
+    "workers": 16,
+    "tables": 32,
+    "gather_seconds": 0.002,
+    "inference_history_band": 64,
+    "fine_graph_batches": true
+  },
+  "snapshot_seconds": [],
+  "opponents": {
+    "fp-style-race-classic": {
+      "family": "code",
+      "version": "fp-style-race-classic",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/personal/firstprinciples/.local/pool-implementations/fp-style-race-classic/package-1ca3050dd3aff737",
+      "package_hash": "1ca3050dd3aff737bd399ae1ee59ad413abb731faaed556eb159ce57792c6a38",
+      "python_path": "/home/user/miniconda3/envs/py311_cu130/bin/python",
+      "runtime_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/runtimes/4d1bc2c3c3d590b9d62f1020f184a1bb6e897047bf18763d1ed3f8a2c460705c",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6,
+      "isolation": "none"
+    },
+    "fp-style-kong-eager": {
+      "family": "code",
+      "version": "fp-style-kong-eager",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/personal/firstprinciples/.local/pool-implementations/fp-style-kong-eager/package-34c8a89a09a35493",
+      "package_hash": "34c8a89a09a354935d615b56d27c831709ad08c0ceb9343bafd977dfdf4575dd",
+      "python_path": "/home/user/miniconda3/envs/py311_cu130/bin/python",
+      "runtime_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/runtimes/4d1bc2c3c3d590b9d62f1020f184a1bb6e897047bf18763d1ed3f8a2c460705c",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6,
+      "isolation": "none"
+    },
+    "fp-style-peng-speed": {
+      "family": "code",
+      "version": "fp-style-peng-speed",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/personal/firstprinciples/.local/pool-implementations/fp-style-peng-speed/package-4cd12bb216d68a02",
+      "package_hash": "4cd12bb216d68a027d98254fd4abc338e0730cb0c18d60f03bbb2a4fb2434ef2",
+      "python_path": "/home/user/miniconda3/envs/py311_cu130/bin/python",
+      "runtime_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/runtimes/4d1bc2c3c3d590b9d62f1020f184a1bb6e897047bf18763d1ed3f8a2c460705c",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6,
+      "isolation": "none"
+    },
+    "fp-style-flat-race": {
+      "family": "code",
+      "version": "fp-style-flat-race",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/personal/firstprinciples/.local/pool-implementations/fp-style-flat-race/package-66bca3e25c7fb16c",
+      "package_hash": "66bca3e25c7fb16c20f39797ef87ea7ef35f9e0cbeeeedb94c5207040a67b1f2",
+      "python_path": "/home/user/miniconda3/envs/py311_cu130/bin/python",
+      "runtime_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/runtimes/4d1bc2c3c3d590b9d62f1020f184a1bb6e897047bf18763d1ed3f8a2c460705c",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6,
+      "isolation": "none"
+    },
+    "fp-style-patient-big": {
+      "family": "code",
+      "version": "fp-style-patient-big",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/personal/firstprinciples/.local/pool-implementations/fp-style-patient-big/package-b4f7aa1cbbeeb52c",
+      "package_hash": "b4f7aa1cbbeeb52cbc6e2a49aea51777e81dd7ec6de62d083bd669152851918d",
+      "python_path": "/home/user/miniconda3/envs/py311_cu130/bin/python",
+      "runtime_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/runtimes/4d1bc2c3c3d590b9d62f1020f184a1bb6e897047bf18763d1ed3f8a2c460705c",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6,
+      "isolation": "none"
+    },
+    "fp-style-chi-speed": {
+      "family": "code",
+      "version": "fp-style-chi-speed",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/personal/firstprinciples/.local/pool-implementations/fp-style-chi-speed/package-1a146ac473c4c2ec",
+      "package_hash": "1a146ac473c4c2ec9c5d3a9664a3999e78be0cf16312fca623df0ef310c923c4",
+      "python_path": "/home/user/miniconda3/envs/py311_cu130/bin/python",
+      "runtime_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/runtimes/4d1bc2c3c3d590b9d62f1020f184a1bb6e897047bf18763d1ed3f8a2c460705c",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6,
+      "isolation": "none"
+    },
+    "fp-style-closed-early": {
+      "family": "code",
+      "version": "fp-style-closed-early",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/personal/firstprinciples/.local/pool-implementations/fp-style-closed-early/package-7e3f5be9255cd5ca",
+      "package_hash": "7e3f5be9255cd5ca7256fb18015618c692728f5975ccee7dfc0b8f6805387902",
+      "python_path": "/home/user/miniconda3/envs/py311_cu130/bin/python",
+      "runtime_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/runtimes/4d1bc2c3c3d590b9d62f1020f184a1bb6e897047bf18763d1ed3f8a2c460705c",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6,
+      "isolation": "none"
+    }
+  },
+  "catalog": {
+    "fp-rl-start-ff6d052a": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/c77b8310ec9be52ea892b47d474f2198f12bc897da774d88b2eabb3a921d6b7c"
+    },
+    "fp-rl-000": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/d40835559f0f5714dfad660acd9046eed2739f68d01bc4540d04526f07cdc7aa"
+    },
+    "fp-rl-008": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/8c14e8afc0b85ad9910bcc720824ccb7dc629e882e0d6076bf1820cc62e0e4e1"
+    },
+    "fp-rl-010": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/56f32650f0bf8e1de46a0264a317519f211ee7ec9273bbc4b47d81d2b61e54f4"
+    },
+    "fp-rl-025": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/047bd447f2b1e466da6318a4a221ff787dcbe1df7d83b1a7807f284ee04d1b89"
+    },
+    "fp-rl-014": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/fc76bfe4cbcbd8168536b5a398edafab6d64509b14a09ee2143809fb397e1d02"
+    },
+    "fp-rl-024": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/b99be3a80d53bd07e75660a5121b8b11c15671173ec3981ab393bdf6e5b673a5"
+    },
+    "fp-rl-035": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/91d8369efd2cc996f6f6917294e039db630ba8bc67e060390c597e35f49b52bd"
+    },
+    "fp-rl-030": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/7b7d5693a618806f60b18ff82b684fd424f4045680d0673d9e5b8a801b522119"
+    },
+    "fp-rl-051": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/7500ab82d99db61d1e1c9fa546c277be75266681acd452a9af7947d3f0fcf8e6"
+    },
+    "fp-rl-059": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/893d33352d914cb27c6cb4a3c348e8d6e0d5941f383b16e5f591ef968a028f76"
+    },
+    "fp-rule-009": {
+      "family": "code",
+      "version": "fp-rule-009",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/personal/firstprinciples/.local/attempts/fp-rule-009/package",
+      "package_hash": "1b3c2d79bcec97acca1825566f3d5620dd6faa9610cf492cdfc7d22c9e9d7daf",
+      "python_path": "/home/user/miniconda3/envs/py311_cu130/bin/python",
+      "runtime_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/runtimes/4d1bc2c3c3d590b9d62f1020f184a1bb6e897047bf18763d1ed3f8a2c460705c",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6,
+      "isolation": "none"
+    },
+    "fp-rule-022": {
+      "family": "code",
+      "version": "fp-rule-022",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/personal/firstprinciples/.local/attempts/fp-rule-022/package",
+      "package_hash": "a0a95ac06e1b858bab50662b933b8abd104276711be3286625fe88a679624aa5",
+      "python_path": "/home/user/miniconda3/envs/py311_cu130/bin/python",
+      "runtime_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/runtimes/4d1bc2c3c3d590b9d62f1020f184a1bb6e897047bf18763d1ed3f8a2c460705c",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6,
+      "isolation": "none"
+    },
+    "fp-rule-015": {
+      "family": "code",
+      "version": "fp-rule-015",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/personal/firstprinciples/.local/attempts/fp-rule-015/package",
+      "package_hash": "0bca3d1ab1b374191c4d111ce86254133c30b95beba54f45cdd5fae2f83fc5fa",
+      "python_path": "/home/user/miniconda3/envs/py311_cu130/bin/python",
+      "runtime_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/runtimes/4d1bc2c3c3d590b9d62f1020f184a1bb6e897047bf18763d1ed3f8a2c460705c",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6,
+      "isolation": "none"
+    },
+    "fp-rule-017": {
+      "family": "code",
+      "version": "fp-rule-017",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/personal/firstprinciples/.local/attempts/fp-rule-017/package",
+      "package_hash": "9b898f66bd345857a125d3bc1db2edd2f98ed62b195575a51d2c966ed86af45c",
+      "python_path": "/home/user/miniconda3/envs/py311_cu130/bin/python",
+      "runtime_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/runtimes/4d1bc2c3c3d590b9d62f1020f184a1bb6e897047bf18763d1ed3f8a2c460705c",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6,
+      "isolation": "none"
+    },
+    "fp-rule-033": {
+      "family": "code",
+      "version": "fp-rule-033",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/personal/firstprinciples/.local/attempts/fp-rule-033/package",
+      "package_hash": "9c2860b6c862a36de21f848c4d950f8b3eff64d56461a447b4ac03deed68a770",
+      "python_path": "/home/user/miniconda3/envs/py311_cu130/bin/python",
+      "runtime_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/runtimes/4d1bc2c3c3d590b9d62f1020f184a1bb6e897047bf18763d1ed3f8a2c460705c",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6,
+      "isolation": "none"
+    },
+    "fp-rule-037": {
+      "family": "code",
+      "version": "fp-rule-037",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/personal/firstprinciples/.local/attempts/fp-rule-037/package",
+      "package_hash": "5ed850706c5024808272d6506f9aa0a8272d8fc653a8c3368b6623bacdb83e05",
+      "python_path": "/home/user/miniconda3/envs/py311_cu130/bin/python",
+      "runtime_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/runtimes/4d1bc2c3c3d590b9d62f1020f184a1bb6e897047bf18763d1ed3f8a2c460705c",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6,
+      "isolation": "none"
+    },
+    "fp-rule-044": {
+      "family": "code",
+      "version": "fp-rule-044",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/personal/firstprinciples/.local/attempts/fp-rule-044/package",
+      "package_hash": "66ca365752f6646d8825b84e79d5300fa7290e89c9dbc1f7f9d89d164f103e81",
+      "python_path": "/home/user/miniconda3/envs/py311_cu130/bin/python",
+      "runtime_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/runtimes/4d1bc2c3c3d590b9d62f1020f184a1bb6e897047bf18763d1ed3f8a2c460705c",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6,
+      "isolation": "none"
+    },
+    "fp-rule-045": {
+      "family": "code",
+      "version": "fp-rule-045",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/personal/firstprinciples/.local/attempts/fp-rule-045/package",
+      "package_hash": "73afc76aa0efd96c31c45dd7feb6801de46459d695c251439d2719870a138348",
+      "python_path": "/home/user/miniconda3/envs/py311_cu130/bin/python",
+      "runtime_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/runtimes/4d1bc2c3c3d590b9d62f1020f184a1bb6e897047bf18763d1ed3f8a2c460705c",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6,
+      "isolation": "none"
+    },
+    "fp-rule-046": {
+      "family": "code",
+      "version": "fp-rule-046",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/personal/firstprinciples/.local/attempts/fp-rule-046/package",
+      "package_hash": "f508cdee04890de09ce744002741d09867a1dcca508aee67640aaf9972bd1ac8",
+      "python_path": "/home/user/miniconda3/envs/py311_cu130/bin/python",
+      "runtime_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/runtimes/4d1bc2c3c3d590b9d62f1020f184a1bb6e897047bf18763d1ed3f8a2c460705c",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6,
+      "isolation": "none"
+    },
+    "fp-rule-047": {
+      "family": "code",
+      "version": "fp-rule-047",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/personal/firstprinciples/.local/attempts/fp-rule-047/package",
+      "package_hash": "00ae23005ac7ab8ee5250aad2ef1f1dc4d1c5fb8ec26944e5b0c048af1a683e5",
+      "python_path": "/home/user/miniconda3/envs/py311_cu130/bin/python",
+      "runtime_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/runtimes/4d1bc2c3c3d590b9d62f1020f184a1bb6e897047bf18763d1ed3f8a2c460705c",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6,
+      "isolation": "none"
+    },
+    "fp-rule-050": {
+      "family": "code",
+      "version": "fp-rule-050",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/personal/firstprinciples/.local/attempts/fp-rule-050/package",
+      "package_hash": "1ee196574bda11acdf3f2077b5a9c486c01fe0e1dffb1f5ead904e9dd8b7bcf5",
+      "python_path": "/home/user/miniconda3/envs/py311_cu130/bin/python",
+      "runtime_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/runtimes/4d1bc2c3c3d590b9d62f1020f184a1bb6e897047bf18763d1ed3f8a2c460705c",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6,
+      "isolation": "none"
+    },
+    "fp-rule-056": {
+      "family": "code",
+      "version": "fp-rule-056",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/personal/firstprinciples/.local/attempts/fp-rule-056/package",
+      "package_hash": "f8496454276294cf983b34e06893eb929bf707bf2cf83a1e73d9baeb58af93f9",
+      "python_path": "/home/user/miniconda3/envs/py311_cu130/bin/python",
+      "runtime_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/runtimes/4d1bc2c3c3d590b9d62f1020f184a1bb6e897047bf18763d1ed3f8a2c460705c",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6,
+      "isolation": "none"
+    },
+    "fp-rl-067": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/9e832fc41ba386befdbecd64ba66ea5299045475f383190fdc6399c32df43782"
+    },
+    "fp-rule-057": {
+      "family": "code",
+      "version": "fp-rule-057",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/personal/firstprinciples/.local/attempts/fp-rule-057/package",
+      "package_hash": "15555d3ff591aea3c2a8f63aaa7ae54b9747a7b9ccbb09ac4cffac3f1af8a66f",
+      "python_path": "/home/user/miniconda3/envs/py311_cu130/bin/python",
+      "runtime_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/runtimes/4d1bc2c3c3d590b9d62f1020f184a1bb6e897047bf18763d1ed3f8a2c460705c",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6,
+      "isolation": "none"
+    },
+    "fp-rl-073": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/b83594f34da00791b30b42ae694ea7000c0ec9dc337b969b92b268ea2589fd90"
+    },
+    "fp-rule-061": {
+      "family": "code",
+      "version": "fp-rule-061",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/personal/firstprinciples/.local/attempts/fp-rule-061/package",
+      "package_hash": "ae71ffed92afb888825249a50d1b4166bdfd14e1bfbd12c5bdf5a35f41ea2768",
+      "python_path": "/home/user/miniconda3/envs/py311_cu130/bin/python",
+      "runtime_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/runtimes/4d1bc2c3c3d590b9d62f1020f184a1bb6e897047bf18763d1ed3f8a2c460705c",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6,
+      "isolation": "none"
+    },
+    "fp-rl-078": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/fd728c8db74c8073d03a650a53af4d3e5d7f05c445200cd8c3db00e8034b3e97"
+    },
+    "fp-rule-062": {
+      "family": "code",
+      "version": "fp-rule-062",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/personal/firstprinciples/.local/attempts/fp-rule-062/package",
+      "package_hash": "dbdcf241f5a9e713ba1c6f0677aa82c64a8d614e8d29a14a46886156b08da4fb",
+      "python_path": "/home/user/miniconda3/envs/py311_cu130/bin/python",
+      "runtime_path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/runtimes/4d1bc2c3c3d590b9d62f1020f184a1bb6e897047bf18763d1ed3f8a2c460705c",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6,
+      "isolation": "none"
+    },
+    "proxy-p01": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/8762c310f24b0d3b9aa624b29553d88aacbce04f5f05ab6d7a9285aeeadb34b1"
+    },
+    "proxy-p02": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/cb90e35981300ff50ffa21c9ef3ef49dd48fe27ccb403cc94b8ec34369c37fa6"
+    },
+    "proxy-p03": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/28cb8b0cc4baa3b681a5c376f2b3e142f20cad8edffbe6978d46646979a6c720"
+    },
+    "proxy-p04": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/8b139eee54fc760a809b54e53abfa0290c5e3ce63dd664808cadd3eb56b5ba2a"
+    },
+    "proxy-p05": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/3b62127b7c16f763782d0b1e76c22de43973d322cbc63e472d0dd664bb3c0f90"
+    },
+    "proxy-p06": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/8083ec7fc3392bb320c8c2bf999ab5c10cdd89a0e2453686730e13f5e8949712"
+    },
+    "proxy-p07": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/d9115e879f9644b58da6cb415a33032e3c4781387cf0421f96c796dd586f77c6"
+    },
+    "proxy-p08": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/a131136ad868f3e5c6277f029e6ad12dee5ef4659bcb5baa2bb987c0fcf89a67"
+    },
+    "proxy-p09": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/0c0e2ca9fe39317f8da3f37a2b2e90974880dd8b24c73f5aafaf67f7ce2d5113"
+    },
+    "proxy-p10": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/364e971cd834d2557412b3b11bc37ed47b0a2aa09fa9aa5b695aab3cac987d35"
+    },
+    "proxy-p11": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/d683076125d64787b51cb413f4274b05914e0a4fe04ce2012b2fe9ba779ff136"
+    },
+    "proxy-p12": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/1c802790365bf95c1a0a8caf3aa9bcbe5033a26b77d9c41114d15ac1f0442745"
+    },
+    "proxy-p13": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/0f94a8fdc2a0f4c03dea5453d27dc62bfc5a07ee715ff06c578871e487ad9ec6"
+    },
+    "proxy-p14": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/32c8fa3796ee0b4dbdde38f86466fdf0a3cb1f22ce5e7bfa70614638d9b902fe"
+    },
+    "proxy-p15": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/6e3bccdf0105449086eec2894d4ad73b4baa703455d20f34c69afb19280037e2"
+    },
+    "proxy-p16": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/aa85d33655a13d95acca66637988d6af0fd8b762ad22bbbf3e0ba6befb5b9504"
+    },
+    "proxy-p17": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/0e232735500a504042c01c29b63b2e37d17f2a56185a6958d15d219d1deb8068"
+    },
+    "proxy-p18": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/2f8c29114935c49b2f49358475696a274b7bc8cadd5c7b2dcc44cf4701164f68"
+    },
+    "proxy-p19": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/8d7df8959f20b55d144f86857f6753733ca709d3872f60bdf1c1a980439f131c"
+    },
+    "proxy-p20": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/4c86a7b71710a4e026c8d96ad7778e8672dcc7a052fe49f093c794ef8122a1d9"
+    },
+    "proxy-p21": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/133a524a5d6c4dbab9a2944cf245fa028224ce52fb2d9fd7ec0b97823f9c461f"
+    },
+    "proxy-p22": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/9650f395a766f0bf863fc4311bf462af1c8484926de33b0255276bf38d3f5b28"
+    },
+    "proxy-p23": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/065c7c66ae1610418ca5423a68df270f7cf193ed1c7b7a335c9e53b8dfcf5899"
+    },
+    "proxy-p24": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/e7ecb3ce8f18b8830268fe0b7ee8cd46f92935fc8d6cd41bef588b36676dd90b"
+    },
+    "proxy-p25": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/9d3a368272802b5232bbb6a7c77af790441fad99b59a3702e5fd8f380ad0638b"
+    },
+    "proxy-p26": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/049120be326188c0c8367f6df964a7bd099a29ebf575d1901faaf309825b5ac9"
+    },
+    "proxy-p27": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/ef953d7f0503fb2365a1fe432b2af1ed3ec5f2d3067d9439c65fac174b71f91d"
+    },
+    "proxy-p28": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/cdd4efe5d9d562c0324cd32a6185be24682f9e00867435f841de4854696f0b3b"
+    },
+    "proxy-p29": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/8b6097a80244c67ece779b437bffccca514b8e39d211e900f41737b8e8422b70"
+    },
+    "proxy-p30": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/36238fcd74fa534d890679b915586db88cb8a43b0d9143f46b1aabe99ac2653d"
+    },
+    "proxy-tail": {
+      "family": "model",
+      "path": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/models/a4a028051c5e03264eca636d150b430ee464c98dc3988c266b9aa5c0f6a411d2"
+    }
+  },
+  "runtime": "/home/user/code/leihuo_majiang/.local/research-hosts/leihuo_majiang/projects/agent-research/.local/research/runtimes/4d1bc2c3c3d590b9d62f1020f184a1bb6e897047bf18763d1ed3f8a2c460705c"
+}

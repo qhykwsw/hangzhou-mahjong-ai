@@ -1,0 +1,17 @@
+{
+  "rows": 600000,
+  "smoke_rows": 3000,
+  "step_kl": 0.03,
+  "kl_rows": 20000,
+  "microbatch": 256,
+  "critic_batch": 256,
+  "critic_learning_rate": 0.0003,
+  "resident_rows": true,
+  "gradient_graphs": true,
+  "distill_steps": 10,
+  "distill_learning_rate": 0.0002,
+  "distill_epochs": 4,
+  "teacher": "fp-rule-025",
+  "replay_batches": 1,
+  "replay_epochs": 2
+}

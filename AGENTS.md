@@ -21,9 +21,9 @@
 ## 开发约束
 
 - 迭代 Agent 只改本线的 `rule/` 或 `rl/recipe/`；harness、对手池与主机由维护者修改。评估条件与计分不能为了候选表现而改变。
-- 每次尝试的代码快照、模型与评估记录冻结在迭代线的 `.local/`；对手池成员在冻结的运行时上运行，仓库源码的改动不影响已有成绩。本项目不迁移旧协议，不保留旧路径兼容层。
+- 每次尝试的代码快照、模型与评估记录冻结在迭代线的 `.local/`，收线时的脱敏快照在 `projects/personal/firstprinciples/records/`（只读存档，不随 `.local/` 更新）；对手池成员在冻结的运行时上运行，仓库源码的改动不影响已有成绩。本项目不迁移旧协议，不保留旧路径兼容层。
 - 策略训练只接收合法观察和清理后的结算。假想隐藏状态可由公开信息与独立随机流生成；宿主真实隐藏牌、环境随机材料、凭据与外部反馈不进入候选。RL 训练器（`guided/`）是显式例外：价值网络与信念头的训练标签在训练进程内读取隐藏状态，见 [ADR-0009](docs/adr/0009-independent-selfplay-trainer-for-personal-project.md)；策略网络可在训练进程内经 oracle guiding 读取隐藏状态，读取强度在训练中衰减到零，导出时剥离，发布包与所有推理不读取，见 [ADR-0018](docs/adr/0018-oracle-guided-policy-training.md)；平台牌谱在引擎里重放成决策方的合法观察后可用于模仿，见 [ADR-0015](docs/adr/0015-platform-replays-as-training-data.md)。
-- 模型库与运行时库在 `projects/agent-research/.local/research/models` 与 `runtimes`：这是已退役的自动研究留下的路径，对手池与各项记录按它引用，不移动；同目录下旧研究的数据只作归档（[ADR-0019](docs/adr/0019-retire-automated-research.md)）。模型、运行数据和本机编译产物不提交 Git。凭据目录权限 `0700`、文件 `0600`，日志和报告不写令牌。
+- 模型库与运行时库在 `projects/agent-research/.local/research/models` 与 `runtimes`：这是已退役的自动研究留下的路径，对手池与各项记录按它引用，不移动；同目录下旧研究的数据只作归档（[ADR-0019](docs/adr/0019-retire-automated-research.md)）。模型、运行数据和本机编译产物不提交 Git（`records/` 快照除外）；本机相关的连接信息（如训练主机的 `.local/training-hosts.json`）也不提交。凭据目录权限 `0700`、文件 `0600`，日志和报告不写令牌。
 - 规则与策略 SDK 不依赖网页或调度状态。
 
 ## 验证与文档

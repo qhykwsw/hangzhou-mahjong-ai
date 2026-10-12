@@ -1,0 +1,21 @@
+{
+  "name": "kong5k",
+  "kinds": {
+    "kong-window": 5005
+  },
+  "hands": 27271,
+  "policy": "fp-rule-128",
+  "package_hash": "3650cd8b0627dd270435a0d3322ecc490b6a47fdba6a07361ce0bf36862c3f2d",
+  "pool": "c9e98aa5df7b4d5e",
+  "runtime": "e4efef433b2f00e4695213f3b811742e07a72315425d6c0aee71e02753e1650a",
+  "seed": 3553996415331853842,
+  "seconds": 1603,
+  "with_hu": 520,
+  "baotou": 0,
+  "whites": {
+    "2": 994,
+    "1": 3937,
+    "3": 73,
+    "4": 1
+  }
+}

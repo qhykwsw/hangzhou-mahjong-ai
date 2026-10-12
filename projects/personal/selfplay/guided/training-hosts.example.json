@@ -1,0 +1,15 @@
+{
+  "root": "/home/user/code/leihuo_majiang",
+  "python": "/home/user/miniconda3/envs/py311_cu130/bin/python",
+  "hosts": {
+    "4090": {"ssh": "user@gpu-4090", "distro": "Ubuntu-20.04", "user": "user"},
+    "4070": {"ssh": "user@gpu-4070", "distro": "Ubuntu-20.04", "user": "user"},
+    "5070ti": {
+      "ssh": "user@gpu-5070ti",
+      "distro": "Ubuntu",
+      "user": "user",
+      "root": "/home/user/code/leihuo_majiang",
+      "python": "/home/user/code/leihuo_majiang/.venv/bin/python"
+    }
+  }
+}

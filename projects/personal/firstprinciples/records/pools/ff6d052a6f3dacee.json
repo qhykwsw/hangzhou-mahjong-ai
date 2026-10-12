@@ -1,0 +1,442 @@
+{
+  "members": {
+    "fp-style-race-classic": {
+      "family": "code",
+      "version": "fp-style-race-classic",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/Users/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/pool-members/fp-style-race-classic/package-1c7a1dd229fc6d45",
+      "package_hash": "1c7a1dd229fc6d456e0bd114361076ada4b8cc5ac48c612475ae2c74479ac550",
+      "python_path": "/Users/user/code/leihuo_majiang/.venv/bin/python",
+      "runtime_path": "/Users/user/code/leihuo_majiang/projects/agent-research/.local/research/runtimes/e4efef433b2f00e4695213f3b811742e07a72315425d6c0aee71e02753e1650a",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6
+    },
+    "fp-style-kong-eager": {
+      "family": "code",
+      "version": "fp-style-kong-eager",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/Users/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/pool-members/fp-style-kong-eager/package-a277d4d343ff26bb",
+      "package_hash": "a277d4d343ff26bbe78f5401d556281b2f537325b0562a38b542c37649b0b38e",
+      "python_path": "/Users/user/code/leihuo_majiang/.venv/bin/python",
+      "runtime_path": "/Users/user/code/leihuo_majiang/projects/agent-research/.local/research/runtimes/e4efef433b2f00e4695213f3b811742e07a72315425d6c0aee71e02753e1650a",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6
+    },
+    "fp-style-peng-speed": {
+      "family": "code",
+      "version": "fp-style-peng-speed",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/Users/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/pool-members/fp-style-peng-speed/package-92efde06440ff28f",
+      "package_hash": "92efde06440ff28fef10e986ece1f87ae2843e3d75edd30701aba0b895def0d8",
+      "python_path": "/Users/user/code/leihuo_majiang/.venv/bin/python",
+      "runtime_path": "/Users/user/code/leihuo_majiang/projects/agent-research/.local/research/runtimes/e4efef433b2f00e4695213f3b811742e07a72315425d6c0aee71e02753e1650a",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6
+    },
+    "fp-style-flat-race": {
+      "family": "code",
+      "version": "fp-style-flat-race",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/Users/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/pool-members/fp-style-flat-race/package-7ebcf4f6733b19ca",
+      "package_hash": "7ebcf4f6733b19ca8261afa2ac867ec15e0ef5d99fe473c70ddb6619b9e96eca",
+      "python_path": "/Users/user/code/leihuo_majiang/.venv/bin/python",
+      "runtime_path": "/Users/user/code/leihuo_majiang/projects/agent-research/.local/research/runtimes/e4efef433b2f00e4695213f3b811742e07a72315425d6c0aee71e02753e1650a",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6
+    },
+    "fp-style-patient-big": {
+      "family": "code",
+      "version": "fp-style-patient-big",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/Users/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/pool-members/fp-style-patient-big/package-7fa79050281db4aa",
+      "package_hash": "7fa79050281db4aa01d688152c2502d995bfb46f8e3c20bf4d4d63b2255297f3",
+      "python_path": "/Users/user/code/leihuo_majiang/.venv/bin/python",
+      "runtime_path": "/Users/user/code/leihuo_majiang/projects/agent-research/.local/research/runtimes/e4efef433b2f00e4695213f3b811742e07a72315425d6c0aee71e02753e1650a",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6
+    },
+    "fp-style-chi-speed": {
+      "family": "code",
+      "version": "fp-style-chi-speed",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/Users/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/pool-members/fp-style-chi-speed/package-6c770c2a62982930",
+      "package_hash": "6c770c2a6298293077d955f36b3fdf3135365e0fbe625a21b02e3376c2698ac3",
+      "python_path": "/Users/user/code/leihuo_majiang/.venv/bin/python",
+      "runtime_path": "/Users/user/code/leihuo_majiang/projects/agent-research/.local/research/runtimes/e4efef433b2f00e4695213f3b811742e07a72315425d6c0aee71e02753e1650a",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6
+    },
+    "fp-style-closed-early": {
+      "family": "code",
+      "version": "fp-style-closed-early",
+      "parameters": {},
+      "model_path": null,
+      "program": null,
+      "package_path": "/Users/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/pool-members/fp-style-closed-early/package-e1a31b25e1b8d33c",
+      "package_hash": "e1a31b25e1b8d33c1e5bf3dc4d19df3490a2d4373d0ffa0ea4a5710c236c5af1",
+      "python_path": "/Users/user/code/leihuo_majiang/.venv/bin/python",
+      "runtime_path": "/Users/user/code/leihuo_majiang/projects/agent-research/.local/research/runtimes/e4efef433b2f00e4695213f3b811742e07a72315425d6c0aee71e02753e1650a",
+      "action_seconds": 2.0,
+      "response_seconds": 0.6
+    }
+  },
+  "runtime_path": "/Users/user/code/leihuo_majiang/projects/agent-research/.local/research/runtimes/e4efef433b2f00e4695213f3b811742e07a72315425d6c0aee71e02753e1650a",
+  "config": {
+    "rounds": 16,
+    "games_per_round": 1,
+    "stage": "qualifier",
+    "base_score": 1
+  },
+  "resources": {
+    "memory_mb": 4096,
+    "threads": 1,
+    "device": "cpu"
+  },
+  "timeouts": {
+    "discard": 2.0,
+    "response": 0.6
+  },
+  "id": "ff6d052a6f3dacee",
+  "dev_seed": 18405372931946163438,
+  "implementations": {
+    "fp-style-race-classic": {
+      "package_path": "/Users/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/pool-implementations/fp-style-race-classic/package-1ca3050dd3aff737",
+      "package_hash": "1ca3050dd3aff737bd399ae1ee59ad413abb731faaed556eb159ce57792c6a38",
+      "seed": 3467340584278019786,
+      "hands": 16384,
+      "decisions": 175713,
+      "time_ratio": 0.1205493961582262,
+      "at": 1790591166.854825
+    },
+    "fp-style-kong-eager": {
+      "package_path": "/Users/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/pool-implementations/fp-style-kong-eager/package-34c8a89a09a35493",
+      "package_hash": "34c8a89a09a354935d615b56d27c831709ad08c0ceb9343bafd977dfdf4575dd",
+      "seed": 1875950533838200764,
+      "hands": 16384,
+      "decisions": 175838,
+      "time_ratio": 0.1323259100807923,
+      "at": 1790591333.0841632
+    },
+    "fp-style-peng-speed": {
+      "package_path": "/Users/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/pool-implementations/fp-style-peng-speed/package-4cd12bb216d68a02",
+      "package_hash": "4cd12bb216d68a027d98254fd4abc338e0730cb0c18d60f03bbb2a4fb2434ef2",
+      "seed": 576070605639498294,
+      "hands": 16384,
+      "decisions": 175269,
+      "time_ratio": 0.13101915099017084,
+      "at": 1790591449.603085
+    },
+    "fp-style-flat-race": {
+      "package_path": "/Users/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/pool-implementations/fp-style-flat-race/package-66bca3e25c7fb16c",
+      "package_hash": "66bca3e25c7fb16c20f39797ef87ea7ef35f9e0cbeeeedb94c5207040a67b1f2",
+      "seed": 4384110293740683086,
+      "hands": 16384,
+      "decisions": 174978,
+      "time_ratio": 0.05839273758875971,
+      "at": 1790595748.867203
+    },
+    "fp-style-patient-big": {
+      "package_path": "/Users/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/pool-implementations/fp-style-patient-big/package-b4f7aa1cbbeeb52c",
+      "package_hash": "b4f7aa1cbbeeb52cbc6e2a49aea51777e81dd7ec6de62d083bd669152851918d",
+      "seed": 1273784116757228641,
+      "hands": 16384,
+      "decisions": 175935,
+      "time_ratio": 0.043559126429994696,
+      "at": 1790595859.504669
+    },
+    "fp-style-chi-speed": {
+      "package_path": "/Users/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/pool-implementations/fp-style-chi-speed/package-1a146ac473c4c2ec",
+      "package_hash": "1a146ac473c4c2ec9c5d3a9664a3999e78be0cf16312fca623df0ef310c923c4",
+      "seed": 3077986003864018876,
+      "hands": 16384,
+      "decisions": 175159,
+      "time_ratio": 0.04407880966942069,
+      "at": 1790595950.162946
+    },
+    "fp-style-closed-early": {
+      "package_path": "/Users/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/pool-implementations/fp-style-closed-early/package-7e3f5be9255cd5ca",
+      "package_hash": "7e3f5be9255cd5ca7256fb18015618c692728f5975ccee7dfc0b8f6805387902",
+      "seed": 1629993656986290831,
+      "hands": 16384,
+      "decisions": 178355,
+      "time_ratio": 0.0427079055472301,
+      "at": 1790596029.634882
+    }
+  },
+  "runtime_upgrades": [
+    {
+      "from": "/Users/user/code/leihuo_majiang/projects/agent-research/.local/research/runtimes/2c5250df879720cfe1d40c4d825121a9e7d693f5c93fe7b9cf34044ad685f873",
+      "to": "/Users/user/code/leihuo_majiang/projects/agent-research/.local/research/runtimes/c59c26cc8b341142afd8b7c9acd9e5f5e3369734e8e866ebddbdc9359abc8900",
+      "at": 1790590979.09041,
+      "replayed": {
+        "version": "fp-rule-045",
+        "blocks": 64,
+        "games": 256
+      }
+    },
+    {
+      "from": "/Users/user/code/leihuo_majiang/projects/agent-research/.local/research/runtimes/c59c26cc8b341142afd8b7c9acd9e5f5e3369734e8e866ebddbdc9359abc8900",
+      "to": "/Users/user/code/leihuo_majiang/projects/agent-research/.local/research/runtimes/75eed749b8f495004299b83846e0a6e414f1ee7f265b487616a26390abc68294",
+      "at": 1790595659.299708,
+      "replayed": {
+        "version": "fp-rule-046",
+        "blocks": 64,
+        "games": 256
+      },
+      "changed_race_lines": 21,
+      "rechecked": {
+        "fp-style-chi-speed": {
+          "seed": 1914429512265894396,
+          "hands": 16384,
+          "decisions": 174860
+        },
+        "fp-style-closed-early": {
+          "seed": 3637276316124310374,
+          "hands": 16384,
+          "decisions": 177256
+        },
+        "fp-style-flat-race": {
+          "seed": 1518123261388472441,
+          "hands": 16384,
+          "decisions": 174756
+        },
+        "fp-style-kong-eager": {
+          "seed": 3785172451048325526,
+          "hands": 16384,
+          "decisions": 176139
+        },
+        "fp-style-patient-big": {
+          "seed": 666748951643151215,
+          "hands": 16384,
+          "decisions": 175933
+        },
+        "fp-style-peng-speed": {
+          "seed": 1823286038384048242,
+          "hands": 16384,
+          "decisions": 175693
+        },
+        "fp-style-race-classic": {
+          "seed": 3144293041924821397,
+          "hands": 16384,
+          "decisions": 176697
+        }
+      }
+    },
+    {
+      "from": "/Users/user/code/leihuo_majiang/projects/agent-research/.local/research/runtimes/75eed749b8f495004299b83846e0a6e414f1ee7f265b487616a26390abc68294",
+      "to": "/Users/user/code/leihuo_majiang/projects/agent-research/.local/research/runtimes/b14a7dc15a8ab0dfdd1577cccf9791cd17633f15405085a136778d44e41c6419",
+      "at": 1790597076.300998,
+      "replayed": {
+        "version": "fp-rule-046",
+        "blocks": 64,
+        "games": 256
+      },
+      "changed_race_lines": 35,
+      "rechecked": {
+        "fp-style-chi-speed": {
+          "seed": 4523870177233240281,
+          "hands": 16384,
+          "decisions": 174592
+        },
+        "fp-style-closed-early": {
+          "seed": 1934475208791859724,
+          "hands": 16384,
+          "decisions": 177871
+        },
+        "fp-style-flat-race": {
+          "seed": 1295862020084046971,
+          "hands": 16384,
+          "decisions": 174439
+        },
+        "fp-style-kong-eager": {
+          "seed": 2640310289688961970,
+          "hands": 16384,
+          "decisions": 176053
+        },
+        "fp-style-patient-big": {
+          "seed": 1416866129428023547,
+          "hands": 16384,
+          "decisions": 175556
+        },
+        "fp-style-peng-speed": {
+          "seed": 2473145090432657179,
+          "hands": 16384,
+          "decisions": 175370
+        },
+        "fp-style-race-classic": {
+          "seed": 966599227954440174,
+          "hands": 16384,
+          "decisions": 175584
+        }
+      }
+    },
+    {
+      "from": "/Users/user/code/leihuo_majiang/projects/agent-research/.local/research/runtimes/b14a7dc15a8ab0dfdd1577cccf9791cd17633f15405085a136778d44e41c6419",
+      "to": "/Users/user/code/leihuo_majiang/projects/agent-research/.local/research/runtimes/dc7c6d128559469e80d586befc70d3a4cae149fb0b070b4002c3a1a0fe447e6c",
+      "at": 1790599571.124272,
+      "replayed": {
+        "version": "fp-rule-046",
+        "blocks": 64,
+        "games": 256
+      },
+      "changed_race_lines": 0,
+      "rechecked": {}
+    },
+    {
+      "from": "/Users/user/code/leihuo_majiang/projects/agent-research/.local/research/runtimes/dc7c6d128559469e80d586befc70d3a4cae149fb0b070b4002c3a1a0fe447e6c",
+      "to": "/Users/user/code/leihuo_majiang/projects/agent-research/.local/research/runtimes/4d1bc2c3c3d590b9d62f1020f184a1bb6e897047bf18763d1ed3f8a2c460705c",
+      "at": 1790612887.900892,
+      "replayed": {
+        "version": "fp-rule-047",
+        "blocks": 64,
+        "games": 256
+      },
+      "changed_race_lines": 3,
+      "rechecked": {
+        "fp-style-chi-speed": {
+          "seed": 2228081742283332452,
+          "hands": 16384,
+          "decisions": 174985
+        },
+        "fp-style-closed-early": {
+          "seed": 2400159305664905669,
+          "hands": 16384,
+          "decisions": 177679
+        },
+        "fp-style-flat-race": {
+          "seed": 3621914053441652587,
+          "hands": 16384,
+          "decisions": 176207
+        },
+        "fp-style-kong-eager": {
+          "seed": 4488983318274983629,
+          "hands": 16384,
+          "decisions": 174776
+        },
+        "fp-style-patient-big": {
+          "seed": 720931793619394457,
+          "hands": 16384,
+          "decisions": 175437
+        },
+        "fp-style-peng-speed": {
+          "seed": 424518349513034068,
+          "hands": 16384,
+          "decisions": 174467
+        },
+        "fp-style-race-classic": {
+          "seed": 3042886326035181002,
+          "hands": 16384,
+          "decisions": 174991
+        }
+      }
+    },
+    {
+      "from": "/Users/user/code/leihuo_majiang/projects/agent-research/.local/research/runtimes/4d1bc2c3c3d590b9d62f1020f184a1bb6e897047bf18763d1ed3f8a2c460705c",
+      "to": "/Users/user/code/leihuo_majiang/projects/agent-research/.local/research/runtimes/4d03d69f690c4cfb1bb0c0d1a3cb17422fe19d23d104fa60ef9d61e1b891c859",
+      "at": 1790753750.8809159,
+      "replayed": {
+        "version": "fp-rule-068",
+        "blocks": 64,
+        "games": 256
+      },
+      "changed_race_lines": 5,
+      "rechecked": {
+        "fp-style-chi-speed": {
+          "seed": 4606417948335240743,
+          "hands": 16384,
+          "decisions": 174655
+        },
+        "fp-style-closed-early": {
+          "seed": 1998781243755136546,
+          "hands": 16384,
+          "decisions": 178101
+        },
+        "fp-style-flat-race": {
+          "seed": 3893227264958651635,
+          "hands": 16384,
+          "decisions": 175003
+        },
+        "fp-style-kong-eager": {
+          "seed": 3005201197812739118,
+          "hands": 16384,
+          "decisions": 174801
+        },
+        "fp-style-patient-big": {
+          "seed": 462276367794471955,
+          "hands": 16384,
+          "decisions": 176410
+        },
+        "fp-style-peng-speed": {
+          "seed": 3006372737587439020,
+          "hands": 16384,
+          "decisions": 175175
+        },
+        "fp-style-race-classic": {
+          "seed": 3521508203898582949,
+          "hands": 16384,
+          "decisions": 175184
+        }
+      }
+    },
+    {
+      "from": "/Users/user/code/leihuo_majiang/projects/agent-research/.local/research/runtimes/4d03d69f690c4cfb1bb0c0d1a3cb17422fe19d23d104fa60ef9d61e1b891c859",
+      "to": "/Users/user/code/leihuo_majiang/projects/agent-research/.local/research/runtimes/e4efef433b2f00e4695213f3b811742e07a72315425d6c0aee71e02753e1650a",
+      "at": 1790757677.385097,
+      "replayed": {
+        "version": "fp-rule-068",
+        "blocks": 64,
+        "games": 256
+      },
+      "changed_race_lines": 54,
+      "rechecked": {
+        "fp-style-chi-speed": {
+          "seed": 1869912488078319340,
+          "hands": 16384,
+          "decisions": 175366
+        },
+        "fp-style-closed-early": {
+          "seed": 3977614091006555906,
+          "hands": 16384,
+          "decisions": 178323
+        },
+        "fp-style-flat-race": {
+          "seed": 1970721342510049926,
+          "hands": 16384,
+          "decisions": 175467
+        },
+        "fp-style-kong-eager": {
+          "seed": 2397699343692771965,
+          "hands": 16384,
+          "decisions": 174237
+        },
+        "fp-style-patient-big": {
+          "seed": 4480880991473601371,
+          "hands": 16384,
+          "decisions": 177050
+        },
+        "fp-style-peng-speed": {
+          "seed": 1891680318385538160,
+          "hands": 16384,
+          "decisions": 175347
+        },
+        "fp-style-race-classic": {
+          "seed": 823700971776354730,
+          "hands": 16384,
+          "decisions": 176234
+        }
+      }
+    }
+  ]
+}

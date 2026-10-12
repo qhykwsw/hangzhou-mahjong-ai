@@ -1,0 +1,69 @@
+/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-084/recipe/loop.py:137: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
+Consider using tensor.detach() first. (Triggered internally at /pytorch/torch/csrc/autograd/generated/python_variable_methods.cpp:836.)
+  total_ce += float(loss) * len(idx)
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/user/code/leihuo_majiang/.local/guided-code/094b64f336e97fe679f545b7bfc556c9ea73234fa9a9331e1c56fbd7881421e5/projects/personal/selfplay/guided/trial.py", line 673, in <module>
+    main()
+  File "/home/user/code/leihuo_majiang/.local/guided-code/094b64f336e97fe679f545b7bfc556c9ea73234fa9a9331e1c56fbd7881421e5/projects/personal/selfplay/guided/trial.py", line 663, in main
+    train(root, smoke=args.command == "smoke")
+  File "/home/user/code/leihuo_majiang/.local/guided-code/094b64f336e97fe679f545b7bfc556c9ea73234fa9a9331e1c56fbd7881421e5/projects/personal/selfplay/guided/trial.py", line 393, in train
+    result = recipe.train(ctx)
+             ^^^^^^^^^^^^^^^^^
+  File "/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-084/recipe/__init__.py", line 14, in train
+    return run(ctx)
+           ^^^^^^^^
+  File "/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-084/recipe/loop.py", line 238, in train
+    params, grad = gradient(
+                   ^^^^^^^^^
+  File "/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-084/recipe/loop.py", line 46, in gradient
+    return resident_gradient(actor, rows, weights, size, device, batch_source=batch_source)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-084/recipe/actor_gradient.py", line 102, in gradient
+    runner.add(indices)
+  File "/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-084/recipe/actor_gradient.py", line 79, in add
+    index, active, positions, graph = self.entry((len(indices), width))
+                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-084/recipe/actor_gradient.py", line 65, in entry
+    self.backward(index, active, positions)
+  File "/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-084/recipe/actor_gradient.py", line 37, in backward
+    logits = self.actor(fields["planes"], fields["scalars"], events)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/miniconda3/envs/py311_cu130/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/miniconda3/envs/py311_cu130/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/code/leihuo_majiang/.local/guided-code/094b64f336e97fe679f545b7bfc556c9ea73234fa9a9331e1c56fbd7881421e5/projects/personal/selfplay/guided/networks.py", line 149, in forward
+    state, tiles = self.encoder(planes, scalars, events)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/miniconda3/envs/py311_cu130/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/miniconda3/envs/py311_cu130/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/code/leihuo_majiang/.local/guided-code/094b64f336e97fe679f545b7bfc556c9ea73234fa9a9331e1c56fbd7881421e5/projects/personal/selfplay/guided/networks.py", line 133, in forward
+    encoded = self.norm(self.transformer(tokens, src_key_padding_mask=padding))
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/miniconda3/envs/py311_cu130/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/miniconda3/envs/py311_cu130/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/miniconda3/envs/py311_cu130/lib/python3.11/site-packages/torch/nn/modules/transformer.py", line 540, in forward
+    output = mod(
+             ^^^^
+  File "/home/user/miniconda3/envs/py311_cu130/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/miniconda3/envs/py311_cu130/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/code/leihuo_majiang/.local/guided-code/094b64f336e97fe679f545b7bfc556c9ea73234fa9a9331e1c56fbd7881421e5/projects/personal/selfplay/guided/networks.py", line 47, in forward
+    x = F.scaled_dot_product_attention(query, key, value, attn_mask=mask)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 20.00 MiB. GPU 0 has a total capacity of 11.99 GiB of which 3.46 GiB is free. Including non-PyTorch memory, this process has 17179869184.00 GiB memory in use. Process 139876 has 17179869184.00 GiB memory in use. 7.20 GiB allowed; Of the allocated memory 4.92 GiB is allocated by PyTorch, with 118.70 MiB allocated in private pools (e.g., CUDA Graphs), and 2.27 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)

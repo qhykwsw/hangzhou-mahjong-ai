@@ -1,0 +1,44 @@
+{
+  "rows": 600000,
+  "smoke_rows": 3000,
+  "step_kl": 0.015,
+  "kl_rows": 20000,
+  "microbatch": 256,
+  "critic_batch": 256,
+  "critic_learning_rate": 0.0003,
+  "resident_rows": true,
+  "gradient_graphs": true,
+  "distill_steps": 0,
+  "distill_learning_rate": 0.0002,
+  "distill_epochs": 4,
+  "teacher": "fp-rule-062",
+  "chunks_per_step": 3,
+  "playout_baseline": true,
+  "tail_average": 0.5,
+  "pg_top_layers": 0,
+  "sample_temperature": 1.0,
+  "starts": [
+    "kept10k",
+    "kong5k",
+    "fish30k"
+  ],
+  "starts_share": 0.25,
+  "stable_wall": true,
+  "luck": true,
+  "starts_reshuffle": true,
+  "vine": true,
+  "deviation_boost": 6,
+  "lineage_seats": {
+    "pool_weight": 4,
+    "versions": [
+      "fp-rl-184",
+      "fp-rule-131"
+    ]
+  },
+  "regret": {
+    "floor": 0.5,
+    "flat": 1.5,
+    "smooth": 0.5,
+    "slots": 120
+  }
+}

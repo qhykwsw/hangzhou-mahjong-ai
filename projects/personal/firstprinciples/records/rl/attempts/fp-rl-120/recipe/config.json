@@ -1,0 +1,96 @@
+{
+  "segments": [
+    {
+      "phase": "imitation",
+      "hands": 2500000
+    },
+    {
+      "phase": "imitation",
+      "hands": 2500000
+    },
+    {
+      "phase": "pg",
+      "hands": 10000000
+    },
+    {
+      "phase": "pg",
+      "hands": 10000000
+    },
+    {
+      "phase": "pg",
+      "hands": 10000000
+    },
+    {
+      "phase": "pg",
+      "hands": 10000000
+    },
+    {
+      "phase": "pg",
+      "hands": 10000000
+    },
+    {
+      "phase": "pg",
+      "hands": 10000000
+    },
+    {
+      "phase": "pg",
+      "hands": 10000000
+    },
+    {
+      "phase": "pg",
+      "hands": 10000000
+    },
+    {
+      "phase": "pg",
+      "hands": 10000000
+    },
+    {
+      "phase": "pg",
+      "hands": 10000000
+    }
+  ],
+  "teacher": "fp-rl-098",
+  "rows": 600000,
+  "smoke_rows": 3000,
+  "microbatch": 256,
+  "resident_rows": true,
+  "gradient_graphs": true,
+  "bc_fraction": 0.2,
+  "distill_learning_rate": 0.0001,
+  "distill_epochs": 4,
+  "warmup_updates": 1000,
+  "chunks_start": 3,
+  "chunks_end": 8,
+  "step_kl": 0.015,
+  "kl_hold_hands": 60000000,
+  "step_kl_end": 0.0075,
+  "kl_rows": 20000,
+  "tail_average": 0.5,
+  "opponents": [
+    "fp68-classic",
+    "fp68-flat",
+    "fp68-kong-eager",
+    "fp68-peng-speed",
+    "fp68-chi-speed",
+    "fp68-closed-early",
+    "fp68-patient-big"
+  ],
+  "pg_top_layers_schedule": [
+    [
+      0,
+      1
+    ],
+    [
+      20000000,
+      2
+    ],
+    [
+      40000000,
+      4
+    ],
+    [
+      60000000,
+      0
+    ]
+  ]
+}

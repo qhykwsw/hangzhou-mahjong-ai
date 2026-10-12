@@ -1,0 +1,41 @@
+{
+  "rows": 600000,
+  "smoke_rows": 3000,
+  "step_kl": 0.015,
+  "kl_rows": 20000,
+  "microbatch": 256,
+  "critic_batch": 256,
+  "critic_learning_rate": 0.0003,
+  "resident_rows": true,
+  "gradient_graphs": true,
+  "distill_steps": 0,
+  "distill_learning_rate": 0.0002,
+  "distill_epochs": 4,
+  "teacher": "fp-rule-062",
+  "chunks_per_step": 3,
+  "playout_baseline": true,
+  "tail_average": 0.5,
+  "pg_top_layers": 0,
+  "sample_temperature": 1.0,
+  "starts": [
+    "kong30k",
+    "kept10k",
+    "fish30k"
+  ],
+  "search": {
+    "kinds": [
+      "kong",
+      "fish"
+    ],
+    "worlds": 8,
+    "max_windows": 1,
+    "deal_value": 0.0
+  },
+  "expert": {
+    "windows": 1500,
+    "anchor_rows": 100000,
+    "z": 2.0,
+    "epochs": 2,
+    "learning_rate": 0.0001
+  }
+}

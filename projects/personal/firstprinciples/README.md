@@ -82,3 +82,5 @@ cd projects/personal/firstprinciples
 ## 运行数据
 
 都在本项目 `.local/`：`pool.json`（现役对手池）、`pools/<池 id>.json`（每个对手池的存档，换池后网页按它画各代的参照线）、`seal.json`、`attempts.jsonl`（每次尝试一条记录）、`rebase/<池 id>-unrecorded/`（只供网页展示、不记入记录的换池重算）、`running/`（在途尝试的状态）、`reported.json`（已汇报给用户的记录，按「编号@完成时间」登记）、`hosts.json`（主机开关）、`notes/<线>.md`（迭代笔记）、冻结的尝试快照与任务目录。网页（`mahjong start`）只读展示。
+
+两条线 2026-10-11 收线时的脱敏快照在 [`records/`](records/README.md)：笔记、尝试总表、每次尝试的代码与方案、计划和训练指标，以及对手池与其他评估记录。它是只读存档，不随 `.local/` 更新。

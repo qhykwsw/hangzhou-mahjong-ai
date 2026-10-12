@@ -1,0 +1,10 @@
+{
+  "status": {
+    "state": "failed",
+    "error": "process exited without status\n\n"
+  },
+  "ok": false,
+  "actor": null,
+  "local_actor": null,
+  "snapshots": []
+}

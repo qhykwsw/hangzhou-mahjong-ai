@@ -1,0 +1,24 @@
+{
+  "status": {
+    "state": "failed",
+    "started": 1791292026.1939788,
+    "deadline": 1791464826.1939788,
+    "smoke": false,
+    "limits": {
+      "gpu_limit_bytes": 11111409254,
+      "ram_limit_bytes": 30307907174,
+      "cpu_capacity": 16
+    },
+    "reason": "recipe_error",
+    "error": "Traceback (most recent call last):\n  File \"/home/user/code/leihuo_majiang/.local/guided-code/0f941704a957f5c1339ab421cf4a140e09a228cfa0c901e67864ab04e8f9196c/projects/personal/selfplay/guided/trial.py\", line 458, in train\n    result = recipe.train(ctx)\n             ^^^^^^^^^^^^^^^^^\n  File \"/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-204/recipe/__init__.py\", line 14, in train\n    return run(ctx)\n           ^^^^^^^^\n  File \"/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-204/recipe/loop.py\", line 617, in train\n    ctx.log(step=step, rows=count, **stats, collect_seconds=collected, step_seconds=last,\nTypeError: __main__.Context.log() got multiple values for keyword argument 'rows'\n",
+    "finished": 1791292525.6211233,
+    "gpu_peak_allocated_bytes": 4453194752,
+    "gpu_peak_reserved_bytes": 5721030656,
+    "ram_peak_bytes": 14070984704,
+    "processes_peak": 14
+  },
+  "ok": false,
+  "actor": null,
+  "local_actor": null,
+  "snapshots": []
+}

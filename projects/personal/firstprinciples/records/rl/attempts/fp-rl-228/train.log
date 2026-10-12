@@ -1,0 +1,22 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/user/code/leihuo_majiang/.local/guided-code/2eba0a1908b9e989c84c78c8106be354aa728b0f2570e680d656ed6691c3c37e/projects/personal/selfplay/guided/trial.py", line 834, in <module>
+    main()
+  File "/home/user/code/leihuo_majiang/.local/guided-code/2eba0a1908b9e989c84c78c8106be354aa728b0f2570e680d656ed6691c3c37e/projects/personal/selfplay/guided/trial.py", line 824, in main
+    train(root, smoke=args.command == "smoke")
+  File "/home/user/code/leihuo_majiang/.local/guided-code/2eba0a1908b9e989c84c78c8106be354aa728b0f2570e680d656ed6691c3c37e/projects/personal/selfplay/guided/trial.py", line 553, in train
+    result = recipe.train(ctx)
+             ^^^^^^^^^^^^^^^^^
+  File "/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-228/recipe/__init__.py", line 14, in train
+    return run(ctx)
+           ^^^^^^^^
+  File "/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-228/recipe/loop.py", line 551, in train
+    rows = rollout(False)
+           ^^^^^^^^^^^^^^
+  File "/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-228/recipe/loop.py", line 473, in rollout
+    got, _, _ = ctx.collect(
+                ^^^^^^^^^^^^
+  File "/home/user/code/leihuo_majiang/.local/guided-code/2eba0a1908b9e989c84c78c8106be354aa728b0f2570e680d656ed6691c3c37e/projects/personal/selfplay/guided/trial.py", line 298, in collect
+    raise ValueError(f"unknown opponents: {sorted(unknown)}")
+ValueError: unknown opponents: ['fp-rl-226']

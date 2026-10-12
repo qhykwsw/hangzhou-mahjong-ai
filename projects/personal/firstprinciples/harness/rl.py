@@ -72,7 +72,7 @@ HAND_ALLOWANCE = 25_000
 RL = E.LOCAL / "rl"
 BUNDLE = "/.local/guided-teachers/b492a752d115c52c2c9607aa98ec6cd949846a0644d7741dda658f0d753b2199/manifest.json"
 REMOTE = "/.local/firstprinciples/rl"
-# What each host keeps for itself: the 4070 is an office desktop (GPU memory,
+# What each host keeps for itself: the 4070 is a desktop in daily use (GPU memory,
 # RAM and cores for it), the 4090 only needs room for its own desktop.
 LIMITS = {
     "4070": {"gpu_memory_fraction": 0.6, "ram_fraction": 0.6, "cpu_capacity": 20},

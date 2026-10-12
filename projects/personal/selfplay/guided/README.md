@@ -11,13 +11,13 @@ RL 线的训练框架：以冻结的规则版本为教师，Actor 先纯模仿�
 | 角色 | 主机 | 用途 |
 | --- | --- | --- |
 | Mac | 本机 | 控制面：冻结源码与教师、写运行计划、启动远端任务、汇总报告；评估中的模型座位用 MLX／MPS 推理，不训练 |
-| 4090 | `gpu-4090-wsl` | 第一性原理 RL 线的大规格（384/8/8）尝试位；此前也做模仿阶段与规模试验 |
-| 4070 | `gpu-4070-wsl` | 用户的办公机，显卡同时负责桌面显示；正式内网比赛在这里推理。第一性原理 RL 线的小规格（128/4/4）尝试位（训练与评估都在本机），对局进程与显存留出余量给桌面（[ADR-0016](../../../../docs/adr/0016-maintainer-iteration-lines.md)）。不跑显存压力探针 |
-| 5070 Ti | `gpu-5070ti-wsl` | 第一性原理 RL 线的大规格（384/8/8）尝试位（训练与评估都在本机）；用户借用的机器，开放时段由维护者用 `harness.line hosts` 设定；为桌面保留 CPU、显存和内存余量 |
+| 4090 | Windows + WSL | 第一性原理 RL 线的大规格（384/8/8）尝试位；此前也做模仿阶段与规模试验 |
+| 4070 | Windows + WSL | 用户的办公机，显卡同时负责桌面显示；正式内网比赛在这里推理。第一性原理 RL 线的小规格（128/4/4）尝试位（训练与评估都在本机），对局进程与显存留出余量给桌面（[ADR-0016](../../../../docs/adr/0016-maintainer-iteration-lines.md)）。不跑显存压力探针 |
+| 5070 Ti | Windows + WSL | 第一性原理 RL 线的大规格（384/8/8）尝试位（训练与评估都在本机）；用户借用的机器，开放时段由维护者用 `harness.line hosts` 设定；为桌面保留 CPU、显存和内存余量 |
 
-- 连接由 [`remote.py`](remote.py) 的 `PROFILES` 定义：经 Windows 宿主 SSH，再按主机的分发名与用户进入 WSL；命令按 argv 传递，不拼接 shell。长任务用 `remote.command(..., background_log=...)` 启动，进程脱离 wsl.exe 会话。
+- 连接方式因机器而异，不进 Git：写在仓库的 `.local/training-hosts.json`（格式同 [`training-hosts.example.json`](training-hosts.example.json)，没有它时用示例里的占位地址），由 [`remote.py`](remote.py) 读成 `PROFILES`：经 Windows 宿主 SSH，再按主机的分发名与用户进入 WSL；命令按 argv 传递，不拼接 shell。长任务用 `remote.command(..., background_log=...)` 启动，进程脱离 wsl.exe 会话。
 - 4070 与 4090 的项目路径都是 `~/code/leihuo_majiang`，解释器 `~/softwares/miniconda3/envs/py311_cu130/bin/python` 自带 CUDA torch，不要重装 CUDA 环境。统一版本的 numpy 放在 `.local/guided-deps/numpy-2.1.2`，`remote.command` 会自动加进 `PYTHONPATH`，不改共享 Conda 环境。
-- 5070 Ti 经 `ssh user@gpu-5070ti` 进入 `Ubuntu` 分发，用户为 `user`；项目在 `/home/user/code/leihuo_majiang`，独立解释器为项目内 `.venv/bin/python`（Python 3.12、torch 2.10.0/cu130、numpy 2.1.2）。调用方用 `remote.root(host)`、`remote.python(host)` 取路径。
+- 5070 Ti 进入 `Ubuntu` 分发，项目在 `~/code/leihuo_majiang`，独立解释器为项目内 `.venv/bin/python`（Python 3.12、torch 2.10.0/cu130、numpy 2.1.2）。调用方用 `remote.root(host)`、`remote.python(host)` 取路径。
 - 训练与推理测试串行执行，不在满负载训练时测部署时延。
 
 ## 实验如何冻结与运行

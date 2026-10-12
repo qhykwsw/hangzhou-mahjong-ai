@@ -1,0 +1,26 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/user/code/leihuo_majiang/.local/guided-code/554953980d332157e93bfd3a85e3d05d29bcd0b162c30c7d1dff1a7565fa0c89/projects/personal/selfplay/guided/trial.py", line 687, in <module>
+    main()
+  File "/home/user/code/leihuo_majiang/.local/guided-code/554953980d332157e93bfd3a85e3d05d29bcd0b162c30c7d1dff1a7565fa0c89/projects/personal/selfplay/guided/trial.py", line 677, in main
+    train(root, smoke=args.command == "smoke")
+  File "/home/user/code/leihuo_majiang/.local/guided-code/554953980d332157e93bfd3a85e3d05d29bcd0b162c30c7d1dff1a7565fa0c89/projects/personal/selfplay/guided/trial.py", line 406, in train
+    result = recipe.train(ctx)
+             ^^^^^^^^^^^^^^^^^
+  File "/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-094/recipe/__init__.py", line 14, in train
+    return run(ctx)
+           ^^^^^^^^
+  File "/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-094/recipe/loop.py", line 238, in train
+    batch_source = (resident_rows(rows, ctx.device, ctx.resources["gpu_limit_bytes"],
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-094/recipe/batch.py", line 107, in resident_rows
+    return store(rows, device)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-094/recipe/batch.py", line 63, in __init__
+    self.fields = {
+                  ^
+  File "/home/user/code/leihuo_majiang/projects/personal/firstprinciples/.local/rl/attempts/fp-rl-094/recipe/batch.py", line 64, in <dictcomp>
+    key: torch.as_tensor(np.stack([np.asarray(r[key], dtype=dtype) for r in rows]), device=device)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 2.35 GiB. GPU 0 has a total capacity of 11.99 GiB of which 2.56 GiB is free. Process 262294 has 17179869184.00 GiB memory in use. Including non-PyTorch memory, this process has 17179869184.00 GiB memory in use. 7.20 GiB allowed; Of the allocated memory 1.13 GiB is allocated by PyTorch, with 162.69 MiB allocated in private pools (e.g., CUDA Graphs), and 4.85 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)

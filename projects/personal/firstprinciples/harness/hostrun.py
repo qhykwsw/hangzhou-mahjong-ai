@@ -23,7 +23,7 @@ the command starts. Its output stays in the host's copy until fetched; run.log
 holds its stdout and stderr.
 
 The host is lent for the rule line's work (harness.line hosts lend <host> --line rule):
-use at most 16 worker processes, the 4070 is also an office desktop.
+use at most 16 worker processes, the 4070 is also a desktop in daily use.
 """
 import argparse
 import json
